@@ -8,6 +8,7 @@ const TEST_DIR = "test";
 // Task Contract(HYK)의 구조화 테스트 케이스 필수 입력 토큰.
 const REQUIRED = [
   "# 제목",
+  "## 소제목",
   "### 셋",
   "- 사과",
   "- [ ]",
