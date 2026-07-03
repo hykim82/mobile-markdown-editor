@@ -30,3 +30,14 @@
 차분·미니멀·또박또박·한 손·거슬림 없는.
 
 <!-- Claude Code 사용 시: CLAUDE.md 에서 "@AGENTS.md" 한 줄로 이 파일을 import 한다. -->
+
+## 하네스 운영 (harness-init, 2026-07-03 적용)
+
+이 프로젝트는 위의 자체 규칙(스펙=진실의 원천, 빌드 루프, 완료 판정, 확정 게이트)을
+그대로 유지한다. 하네스는 아래 운영 층만 추가하며, 위 규칙을 재정의하지 않는다.
+
+- 작업 전 Task Contract 작성: 각 작업은 loop / non-loop / none 중 하나로 분류.
+- 역할: Orchestrator / Coder / Verifier(loop 전용) / Reviewer / Human.
+- 기록: Linear = 코드 작업 로그. AI는 In Review까지, Done은 Human(한용).
+- 완료 판정·스펙 드리프트·빌드 루프는 위의 기존 규칙을 그대로 따른다(중복 정의 안 함).
+- loop profile(LOOP.md·verify.sh 등)은 명시 승인 시에만 설치.
