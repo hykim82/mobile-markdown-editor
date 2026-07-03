@@ -1,0 +1,19 @@
+{
+  "color.bg":           { "light":"#FAFAF8", "dark":"#16181C" },
+  "color.bg.elevated":  { "light":"#FFFFFF", "dark":"#1E2127" },
+  "color.text.primary": { "light":"#1A1A1A", "dark":"#E6E6E3" },
+  "color.text.muted":   { "light":"#6B6B6B", "dark":"#9A9A97" },
+  "color.accent":       { "light":"#3B6FE0", "dark":"#5B8DEF" },
+  "color.border":       { "light":"#ECECEA", "dark":"#2A2D33" },
+  "color.state.error":  { "light":"#D14343", "dark":"#E06C6C" },
+  "color.state.success":{ "light":"#2E7D52", "dark":"#5FB389" },
+  "color.accent.hover": { "light":"#2F5BC0", "dark":"#7AA2F2" },
+  "color.disabled":     { "light":"#C4C4C2", "dark":"#3A3D44" },
+  "color.focus.ring":   { "light":"#3B6FE0", "dark":"#7AA2F2" },
+  "font.family":"system-ui, -apple-system, 'Pretendard', sans-serif",
+  "font.size.title":"22px", "font.size.body":"17px", "font.size.caption":"13px",
+  "font.weight.regular":400, "font.weight.semibold":600, "line.height.body":1.6,
+  "space.xs":"4px","space.sm":"8px","space.md":"16px","space.lg":"24px","space.xl":"32px",
+  "radius.sm":"8px","radius.md":"12px",
+  "motion.duration.fast":"120ms","motion.duration.base":"200ms","motion.easing.standard":"cubic-bezier(0.2,0,0,1)"
+}

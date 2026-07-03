@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>에디터 — 로파이</title>
+<style>
+  :root{
+    --bg:#FAFAF8; --elevated:#FFFFFF; --text:#1A1A1A; --muted:#6B6B6B;
+    --accent:#3B6FE0; --border:#ECECEA; --toast:#2A2D33;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{font-family:system-ui,-apple-system,'Pretendard',sans-serif;background:#ddd;
+    display:flex;justify-content:center;padding:16px}
+  .phone{width:360px;height:720px;background:var(--bg);border-radius:24px;overflow:hidden;
+    position:relative;display:flex;flex-direction:column;border:1px solid var(--border)}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:16px;
+    border-bottom:1px solid var(--border)}
+  .back{color:var(--muted);font-size:17px}
+  .saved{color:var(--muted);font-size:13px}
+  .copy{background:var(--accent);color:#fff;border:none;border-radius:8px;
+    min-height:44px;padding:0 16px;font-size:15px;font-weight:600}
+  .editor{flex:1;padding:16px;font-size:17px;line-height:1.6;color:var(--text);
+    caret-color:var(--accent);white-space:pre-wrap}
+  .caret{border-left:2px solid var(--accent);animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  /* 단축키바: 자판 위 엄지존 */
+  .shortcutbar{display:flex;gap:8px;padding:8px 12px;background:var(--bg);
+    border-top:1px solid var(--border);overflow-x:auto}
+  .chip{background:var(--elevated);border:1px solid var(--border);border-radius:8px;
+    min-height:44px;min-width:44px;display:flex;align-items:center;justify-content:center;
+    padding:0 12px;font-size:15px;color:var(--text)}
+  .keyboard{height:200px;background:#C9CDD2;border-top:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center;color:#555;font-size:13px}
+  /* 복사 완료 토스트 */
+  .toast{position:absolute;left:16px;right:16px;bottom:24px;background:var(--toast);
+    color:#F5F5F2;border-radius:12px;padding:14px 16px;font-size:15px;text-align:center}
+</style></head>
+<body>
+  <div class="phone">
+    <div class="topbar">
+      <span class="back">‹ 목록</span>
+      <span class="saved">저장됨</span>
+      <button class="copy">노션 복사</button>
+    </div>
+    <div class="editor"># 지하철 할일
+- [ ] 보고서 초안
+- [ ] **회신** 확인<span class="caret">&nbsp;</span></div>
+
+    <!-- 단축키바(자음더블) — 자판 바로 위 엄지존 -->
+    <div class="shortcutbar">
+      <div class="chip">ㅎㅎ #</div>
+      <div class="chip">ㅁㅁ -</div>
+      <div class="chip">ㅂㅂ **</div>
+      <div class="chip">ㅈㅈ - [ ]</div>
+      <div class="chip">ㅅㅅ ~~</div>
+    </div>
+    <div class="keyboard">[ 시스템 키보드 ]</div>
+
+    <!-- 복사 1탭 후 상태: 하단 토스트 2초 -->
+    <div class="toast">노션에 복사됐어요 ✓</div>
+  </div>
+</body></html>

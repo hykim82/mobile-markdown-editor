@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>메모 목록(홈) — 로파이</title>
+<style>
+  :root{
+    --bg:#FAFAF8; --elevated:#FFFFFF; --text:#1A1A1A; --muted:#6B6B6B;
+    --accent:#3B6FE0; --border:#ECECEA;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{font-family:system-ui,-apple-system,'Pretendard',sans-serif;background:#ddd;
+    display:flex;justify-content:center;padding:16px}
+  .phone{width:360px;height:720px;background:var(--bg);border-radius:24px;overflow:hidden;
+    position:relative;display:flex;flex-direction:column;border:1px solid var(--border)}
+  .topbar{padding:24px 16px 16px;font-size:22px;font-weight:600;color:var(--text)}
+  .list{flex:1;overflow-y:auto;padding:0 16px}
+  .card{background:var(--elevated);border:1px solid var(--border);border-radius:12px;
+    padding:16px;margin-bottom:8px}
+  .title{font-size:17px;color:var(--text);margin-bottom:4px}
+  .meta{font-size:13px;color:var(--muted)}
+  .fab{position:absolute;right:24px;bottom:24px;width:56px;height:56px;border-radius:28px;
+    background:var(--accent);color:#fff;border:none;font-size:28px}
+  /* 빈 상태 카피: "아직 메모가 없어요. +로 시작" */
+</style></head>
+<body>
+  <div class="phone">
+    <div class="topbar">메모</div>
+    <div class="list">
+      <div class="card"><div class="title"># 지하철 할일</div><div class="meta">방금</div></div>
+      <div class="card"><div class="title">- 장보기 목록</div><div class="meta">오후 2:14</div></div>
+      <div class="card"><div class="title">회의 메모</div><div class="meta">어제</div></div>
+    </div>
+    <button class="fab">+</button>
+  </div>
+</body></html>
