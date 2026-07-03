@@ -10,6 +10,10 @@ test('"### 셋" → heading level 3 "셋"', () => {
   assert.deepEqual(parse("### 셋"), { type: "heading", level: 3, text: "셋" });
 });
 
+test('"## 소제목" → heading level 2 "소제목"', () => {
+  assert.deepEqual(parse("## 소제목"), { type: "heading", level: 2, text: "소제목" });
+});
+
 test('"- 사과" → bullet "사과"', () => {
   assert.deepEqual(parse("- 사과"), { type: "bullet", text: "사과" });
 });
