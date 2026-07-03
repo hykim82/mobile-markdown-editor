@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1783059541945,
+  "projectRoot": "C:\\Users\\Administrator\\Documents\\모바일마크다운에디터",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "spec"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "spec": {
+      "path": "spec",
+      "purpose": "Test specifications",
+      "fileCount": 3,
+      "lastAccessed": 1783059541926,
+      "keyFiles": [
+        "design-tokens.json",
+        "GLOSSARY.md",
+        "PRD.md"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
