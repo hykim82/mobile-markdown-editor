@@ -4,11 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "dev": "node src/editor/dev-server.mjs"
+  },
+  "dependencies": {
+    "lexical": "0.51.0",
+    "@lexical/markdown": "0.51.0",
+    "@lexical/rich-text": "0.51.0",
+    "@lexical/list": "0.51.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "esbuild": "0.27.0",
     "eslint": "10.7.0",
+    "jsdom": "27.0.0",
     "prettier": "3.9.5"
   }
 }
