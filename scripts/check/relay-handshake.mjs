@@ -7,6 +7,7 @@ import {
   recordRejectStreakFromResultText,
   isReviewFamilyRole,
   REJECT_STREAK_REASON_CODE,
+  maskQuotedMarkerRegions,
 } from "./reject-streak.mjs";
 import {
   archiveRoundEnvelope,
@@ -31,104 +32,18 @@ export { TIME_AUTHORITY_STATE, MAX_FUTURE_SKEW_MS };
 // 없으므로 조용히 하나를 고르지 않고 판정 불가로 멈춘다(2026-07-31 거짓
 // 기록 사고). TASK_ID_RE(과거: 첫 매치 채택)와 DONE_RE(과거: 마지막 매치
 // 채택)가 서로 반대 방향을 조용히 골랐던 것이 이 수리의 대상이다.
-// ---- HYK-449: 「인용된 표지」는 표지가 아니다 -----------------------------
-//
-// 2026-09-06 실사고: 검토자가 러너 영수증 **원문**을 코드블록(```)에 그대로
-// 붙였고, 그 안의 `head_commit:` 줄이 칼럼 0 이라 이 파일이 **표지로 세었다**.
-// 두 줄의 값은 완전히 동일했는데도 "어느 것이 최종인지 결정할 수 없다"로
-// 거부됐고, 첫 관측이 이미 고정된 뒤라 고칠 수도 없어 라운드 하나가 양방향
-// 교착에 빠졌다(HYK-449 등재문).
-//
-// ★수리의 단위는 **원소가 아니라 범주**다 -- HYK-442 1R 이 정확히 그 실수로
-// 반려됐다(백틱 «하나만» 벗겼다가 같은 보고서의 홑따옴표 인용에 다시 뚫렸다).
-// 그래서 여기서는 「무엇을 벗길까」가 아니라 **「이 문서가 «주장하는» 텍스트는
-// 무엇인가」**를 정의한다:
-//
-//   ★판별식 -- 표지는 **문서 자신이 말하는 줄**일 때만 표지다. 문서가
-//   「보여주기만 하는」 영역과 「꺼 둔」 영역의 글자는 표지가 아니다.
-//     ⑴ **펜스 코드블록**(보여주는 영역) -- ``` 와 ~~~ **둘 다**, 3개 이상
-//        **임의 길이**, CommonMark 대로 최대 3칸 들여쓴 펜스까지, 정보
-//        문자열(```text 등) 유무 무관. 닫는 펜스는 **같은 문자로 여는 펜스
-//        이상 길이**여야 한다(그래서 ````` 블록 안의 ``` 는 닫지 못한다).
-//     ⑵ **HTML 주석**(꺼 둔 영역) `<!-- … -->` -- 이 저장소의 결과 파일이
-//        실제로 쓰는 형태다(라운드 보존 블록의 `<!-- envelope-archive: … -->`).
-//
-// ⛔여기 **넣지 않은 것**과 그 근거(추측이 아니라 시험으로 고정했다 --
-//   hyk449-quoted-marker-count.test.mjs 의 「범주 밖」 시험군):
-//     - 인용 블록(`> `) · 들여쓴 코드블록(4칸) · 인라인 코드(`…`)는 그 줄이
-//       애초에 **칼럼 0 이 아니다**. 이 파일의 표지 정규식은 전부 `^` 앵커라
-//       원래 매치하지 못한다 -- 「범주에서 빠뜨린 자리」가 **아니라 이미 닫혀
-//       있는 자리**다.
-// ⛔**`>>> BLOCKED:` / `NEEDS_INPUT:` 축에는 이 마스킹을 적용하지 않는다.**
-//   그 축의 「어디에 있든 센다」는 **의도된 fail-closed 설계**이고(HYK-333 ·
-//   HYK-442), 거기에 인용 제외를 넣는 것은 안전 성질을 약화시키는 회귀다.
-//
-// ⚠️마스킹은 **길이를 보존**한다(개행만 남기고 나머지 글자를 공백으로 바꾼다)
-//   -- 호출자가 매치의 `.index` 로 **원문**을 자르기 때문이다(judgedRegion).
-//   그래서 마스킹된 사본에서 얻은 오프셋이 원문에서 그대로 유효하다.
-// ⚠️닫히지 않은 펜스/주석은 **문서 끝까지** 마스킹한다 -- 그 방향은
-//   fail-closed 다(표지가 「사라져」 missing/pending 으로 떨어지지, 없는 표지가
-//   생기지 않는다).
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
-
-function blankKeepingNewlines(text) {
-  return text.replace(/[^\n]/g, " ");
-}
-
-function maskFencedBlocks(content) {
-  let fence = null;
-  return content
-    .split("\n")
-    .map((line) => {
-      if (fence === null) {
-        const opened = FENCE_OPEN_RE.exec(line);
-        if (!opened) return line;
-        fence = { char: opened[1][0], len: opened[1].length };
-        return blankKeepingNewlines(line);
-      }
-      // ⚠️`\r` 를 반드시 허용해야 한다: 이 저장소의 결과 파일은 실제로
-      // **CRLF** 다(Windows 좌석). 줄을 `\n` 으로 가르면 각 줄 끝에 `\r` 가
-      // 남는데, 그것을 허용하지 않으면 **닫는 펜스를 영영 못 알아본다** --
-      // 그러면 첫 펜스가 문서 끝까지 인용으로 삼켜 «표지가 사라진» 것처럼
-      // 되고 라운드가 PENDING 으로 막힌다(HYK-449 1R 에서 내 결과 파일이
-      // 실제로 그렇게 막혔다). 다른 축들이 CRLF 에서 멀쩡한 이유는 그쪽
-      // 정규식이 `m` 플래그를 써 `$` 가 `\r` 앞에서도 맞기 때문이고, 여기는
-      // 줄 단위로 직접 대조하므로 그 도움을 받지 못한다.
-      const closer = new RegExp(
-        `^ {0,3}\\${fence.char}{${fence.len},}[ \t\r]*$`,
-      );
-      if (closer.test(line)) fence = null;
-      return blankKeepingNewlines(line);
-    })
-    .join("\n");
-}
-
-function maskHtmlComments(content) {
-  let out = content;
-  let from = 0;
-  for (;;) {
-    const start = out.indexOf("<!--", from);
-    if (start === -1) return out;
-    const closeAt = out.indexOf("-->", start + 4);
-    const end = closeAt === -1 ? out.length : closeAt + 3;
-    out =
-      out.slice(0, start) +
-      blankKeepingNewlines(out.slice(start, end)) +
-      out.slice(end);
-    from = end;
-  }
-}
-
-// 표지를 세는 축들이 보는 「문서 자신이 말한 것」. ⛔BLOCKED 축은 이것을
-// 쓰지 않는다(위 주석). 내보내는 이유는 시험이 판별식 자체를 직접 재기
-// 위해서다 -- 축마다 각자 복사본을 만들면 조용히 어긋난다(이 파일이
-// DONE_RE/TASK_ID_RE_G 를 내보내는 것과 같은 재사용 규율).
-export function maskQuotedMarkerRegions(content) {
-  return maskHtmlComments(maskFencedBlocks(content));
-}
+// ---- HYK-449 / HYK-450: 「인용된 표지」는 표지가 아니다 ------------------
+// 판별식 본체는 ./reject-streak.mjs 로 옮겼다(HYK-450 -- 그 파일 머리에
+// «왜 하필 거기인가»가 실측과 함께 있다: 제3의 모듈로 빼면 격리 픽스처
+// 9곳의 손으로 적은 복사 목록에서 빠져 80건이 죽는다). ⛔여기서 다시
+// 정의하지 마라 -- 복제본이 이 결함의 원인이다.
+// ⛔이 마스킹은 «정지 표지 2종» 축에는 적용되지 않는다(그 축의 「어디에 있든
+// 센다」는 의도된 fail-closed 다) -- 그 축의 인용 처리는 아래
+// countNearMissMarkerShapes 의 «명시적 인용 선언»(HYK-450 ①)이 맡는다.
+// 기존 호출자(hyk449 시험 등)가 이 파일에서 가져다 쓰던 이름을 그대로 둔다.
+export { maskQuotedMarkerRegions };
 
 const TASK_ID_RE = /^task_id:\s*(\S+)/im;
-const TASK_ID_RE_G = /^task_id:\s*(\S+)/gim;
 // HYK-180 사이클1: the anchored TASK_ID_RE only matches a standalone
 // `task_id: <id>` line at column 0. When it fails to match, this
 // unanchored variant tells apart two very different failure shapes: no
@@ -138,6 +53,74 @@ const TASK_ID_RE_G = /^task_id:\s*(\S+)/gim;
 // amount of waiting fixes). Never used to accept a match; only to produce
 // a distinct diagnosis for the latter case.
 const TASK_ID_ANYWHERE_RE = /task_id:\s*(\S+)/i;
+// HYK-468 2R: header-task-id-shared.mjs의 STRUCTURAL_LINE_RE/
+// hasStructuralPredecessor와 **로직 동일** (이 파일도 admission-
+// completion-adapter.mjs/dispatch-gate-decision.mjs와 같은 이유로 로컬
+// 복제다 -- 이 파일 자신의 헤더가 이미 설명하듯 hyk186-time-authority-
+// mutation.test.mjs 등 다수의 mutation 시험이 이 파일을 고정 sidecar
+// 목록으로 격리 clone하므로, 새 정적 import를 추가하면 그 시험들 전부가
+// 깨진다, 실측 확인 없이도 이 파일 자신의 기존 주석이 이미 그 위험을
+// 경고한다). 네 곳(이 함수 + admission-completion-adapter.mjs 로컬 사본 +
+// dispatch-gate-decision.mjs 로컬 사본 + header-task-id-shared.mjs
+// 정본)이 갈라지면 회귀이므로 고칠 때는 반드시 서로 대조하라.
+//
+// ⚠️1R 초안(첫 빈 줄 이전만 보는 "헤더 블록" 한정)은 실제로 회귀였다 --
+// nc-relay-handshake.test.mjs의 NC-2(HYK-183): 결과 파일이 옛 라운드의
+// task_id:+>>> DONE: 블록을 그대로 두고 빈 줄 뒤에 새 라운드 블록을
+// «추가»한 경우(산문 없음, 진짜 사고), 헤더 블록만 보면 새 블록이
+// 통째로 시야 밖으로 나가 조용히 옛(스테일) 값으로 확정돼 버렸다(전체
+// 러너 실측: NC-2 RED). 빈 줄 위치만으로는 "진짜 축적된 두 번째 선언"과
+// "산문으로 소개된 인용"을 가를 수 없다 -- 둘 다 두 번째 등장 앞에 빈
+// 줄이 있다.
+//
+// 실제로 가르는 것은 그 바로 «앞» 줄이다: NC-2는 두 번째 task_id: 앞의
+// 가장 가까운 비어있지 않은 줄이 `>>> DONE: ...`(구조적 표지)이고,
+// 검토자의 반려 재현은 그 앞이 순수 산문("예를 들어 다음과 같은 줄이
+// 주입된다:")이다. 그래서 어떤 열0 `task_id:` 줄이든, 그 바로 앞(빈 줄은
+// 건너뛰고) 줄이 구조적(`key:` 형태 또는 `>>>`)이거나 파일 맨 앞이면
+// «진짜»로 세고, 산문이 선행하면 «인용/예시»로 보아 세지 않는다.
+// 마스킹(펜스/HTML 주석 «안»)은 이 검사 «이전»에 이미 공백으로 지워지므로
+// (blankKeepingNewlines) 펜스 안 인용은 이 축에 도달하지도 않는다 --
+// 별도로 다룰 필요 없다.
+// HYK-468 3R (P1-2, 검토자 반려 재수리): 2R은 여기에 `|^<!--`를 정본에
+// 없는 «대안 하나»로 더 얹었다(envelope-archive.mjs가 붙이는 한 줄짜리
+// `<!-- envelope-archive: ... -->` 헤더를 실선언 바로 앞에서 구조적으로
+// 보이게 하려던 의도) -- 그런데 정본 header-task-id-shared.mjs 헤더가
+// 이미 설명하듯, 올바른 축은 "`<!--`로 시작하면 무조건 구조적"이 아니라
+// «주석 자체를 마스킹으로 지우고 남는가»다: maskQuotedMarkerRegions
+// (위 import, HYK-449)가 정상 한 줄 주석이든 hyk396-dispatch-
+// stamp.test.mjs (o)가 합성한 «일부러 깨진» 다줄 주석(닫는 `-->`가
+// 다음 줄로 밀려난 모양)이든 이 검사 «이전»에 이미 처리한다 -- 정상
+// 주석은 통째로 공백이 되어 빈 줄과 똑같이 건너뛰므로(아래
+// hasStructuralPredecessor가 그 앞줄까지 마저 보아 «파일 맨 앞»이면
+// 구조적으로 확정한다) 실선언은 여전히 산다. 깨진 다줄 주석은 닫히지
+// 않은 채 문서 끝까지 마스킹되어(reject-streak.mjs의 FENCE_OPEN_RE와
+// 같은 fail-closed 방향) 그 안에 있던 무엇이든 이 축에 도달하지 않고,
+// classifyArchivedDispatchId 같은 손상 전담 검사가 여전히 REJECT를
+// 낸다. `|^<!--`를 STRUCTURAL_LINE_RE에 직접 넣으면 이 구분이 사라져
+// «깨진» 다줄 주석까지 무조건 구조적으로 보여, 그 검사가 지키려는 축을
+// 가려버린다(검토자 실측 지적, P1-2 표적 2) -- 그래서 정본과 바이트
+// 동일하게 되돌린다(scripts/check/hyk468-3r-copy-drift.test.mjs가 이
+// 동일성을 기계로 단정).
+// HYK-468 4R (P1, 검토자 반려 재수리): the loop below used to inline this
+// regex at its match call site instead of naming it -- exactly why the
+// drift test's hand-picked comparison list never had a slot for it, and
+// why it was free to drift to `\s*` (matches NBSP/U+3000/EM-space/VT/FF,
+// none of which the canonical `[ \t]` character class accepts) without
+// anything noticing (검토자 REVIEW-r28.md 반려 표적). Named to match
+// header-task-id-shared.mjs's exported RULE_CONSTANTS.TASK_ID_LINE_RE
+// byte-for-byte, so hyk468-3r-copy-drift.test.mjs's generic by-name
+// enumeration actually has something to find here.
+const TASK_ID_LINE_RE = /^task_id:[ \t]*(\S+)/i;
+const STRUCTURAL_LINE_RE = /^[A-Za-z_][\w-]*:|^>>>/;
+
+function hasStructuralPredecessor(lines, idx) {
+  for (let i = idx - 1; i >= 0; i--) {
+    if (lines[i].trim() === "") continue;
+    return STRUCTURAL_LINE_RE.test(lines[i]);
+  }
+  return true;
+}
 // HYK-353 2R §1 (P1-2): exported so finalize-done.mjs can resolve the exact
 // same `dropped_at:` raw text this file itself uses when it composes the
 // (taskId, droppedAt) key it hands to first-observation.mjs's
@@ -302,6 +285,67 @@ function lineStartOffset(scan, matchIndex) {
   return 0;
 }
 
+// ---- HYK-450 ①: 「문서가 «주장»한 표지」와 「문서가 «인용»한 표지」 -------
+//
+// 실물: HYK-449 워커의 결과 파일이 이 축을 **설명하다가** 소비를 거부당했다.
+// 그 파일 92행은 표지 모양을 백틱으로 감싸 문장 첫머리에 두었는데, 이 축의
+// 근접-미스 규칙(표지 모양 «앞»에 글자/숫자가 없으면 시도로 센다)에서
+// 백틱은 글자도 숫자도 아니므로 «시도»로 세어졌다. 즉 ★이 축을 정직하게
+// 설명하는 보고서는 그 사실만으로 소비 불능이 된다.
+//
+// ⛔단순 완화(«이 축에도 인용 마스킹을 켠다»)는 하지 않는다. 「어디에 있든
+// 센다」가 이 축의 안전 성질 그 자체이고, 인용 여부를 «문장부호로 추정»하는
+// 축은 HYK-442 가 1R·2R·4R 세 번 반려로 «수렴하지 않는다»를 증명했다(그
+// 판단의 원문은 위 PROSE_CHAR_RE 머리 주석에 그대로 있다).
+//
+// ⇒ ★그래서 이 라운드는 추정하지 않는다 -- **선언을 받는다.** 작성자가
+//   «여기부터 여기까지는 인용이다»라고 명시적으로 선언한 구간 안에서만,
+//   그리고 **깨진 표지 흔적(근접-미스)에 한해서만** 면제한다. 선언 형식은
+//   자기 이름을 스스로 말하는 한 쌍의 HTML 주석이다(begin/end).
+//
+// ★이 설계가 fail-closed 를 «어떻게» 보존하는가 (셋 다 시험으로 고정):
+//   ⑴ **선언은 «진짜 정지»를 숨길 수 없다.** 엄격 채택 경로(BLOCKED_RE)는
+//      한 글자도 바뀌지 않았다 -- 형식이 온전한 정지 표지는 선언 구간
+//      «안»에 있어도 여전히 그대로 채택된다. 그래서 「인용인 척 감싸서 정지
+//      신호를 지우기」가 원리적으로 불가능하다.
+//   ⑵ **선언이 없으면 동작이 예전과 같다.** 면제는 오직 «작성자가 직접 쓴
+//      선언»에만 붙는다 -- 우연히 생길 수 없는 문자열이고, 표지를 쓰려다
+//      형식을 틀린 워커의 파일에는 존재하지 않는다.
+//   ⑶ **선언이 조금이라도 깨져 있으면 면제는 «전부» 사라진다**(짝 없는
+//      begin/end · 중첩). 「반쯤 열린 선언」이 파일 뒷부분을 통째로 면제하는
+//      길을 막는다 -- 방향이 언제나 «더 세는» 쪽이다.
+//
+// ⚠️정직 한계: ⑵의 「우연히 생길 수 없다」는 «작성자가 스스로 자기 정지
+// 신호를 감추려 드는 경우»까지 막지 못한다. 다만 그 사람은 애초에 표지를
+// «안 쓰면» 그만이므로 이 선언이 새로 여는 문은 없다 -- 이 축의 위협 모형은
+// HYK-333 의 «규칙을 지켰는데 조용히 유실됨»이지 «작성자의 고의 은폐»가
+// 아니다.
+const QUOTE_REGION_BEGIN_RE =
+  /^[ \t]*<!--[ \t]*quoted-stop-marker:[ \t]*begin[ \t]*-->[ \t\r]*$/;
+const QUOTE_REGION_END_RE =
+  /^[ \t]*<!--[ \t]*quoted-stop-marker:[ \t]*end[ \t]*-->[ \t\r]*$/;
+
+// 선언된 인용 구간의 [시작, 끝) 오프셋 목록. ⛔선언 구조가 깨져 있으면
+// `null`을 낸다 -- 호출자는 그것을 「면제 0」으로 다룬다(위 ⑶).
+function declaredQuotationRegions(scan) {
+  const regions = [];
+  let openAt = null;
+  let offset = 0;
+  for (const line of scan.split("\n")) {
+    const lineEnd = offset + line.length;
+    if (QUOTE_REGION_BEGIN_RE.test(line)) {
+      if (openAt !== null) return null;
+      openAt = lineEnd;
+    } else if (QUOTE_REGION_END_RE.test(line)) {
+      if (openAt === null) return null;
+      regions.push([openAt, offset]);
+      openAt = null;
+    }
+    offset = lineEnd + 1;
+  }
+  return openAt === null ? regions : null;
+}
+
 // 근접-미스 «시도»의 개수. 두 표지 모양 모두 «그 매치가 시작한 줄»을 기준으로
 // 판정한다:
 //   ⓐ 화살표 모양(BLOCKED_ANYWHERE_RE) -- 매치 시작 위치와 그 줄의 머리
@@ -320,12 +364,21 @@ function countNearMissMarkerShapes(resultContent) {
   // 계수 전용 스캔이라 오프셋 보존이 필요 없다 -- 보이지 않는 형식 문자를
   // 먼저 지운다(줄 구조는 그대로: `\n`은 \p{Cf}가 아니다).
   const scan = resultContent.replace(INVISIBLE_FORMAT_CHAR_RE, "");
+  // HYK-450 ①: «작성자가 선언한» 인용 구간만 면제한다(위 설계 주석).
+  // 선언이 없거나 깨져 있으면 예전과 «완전히 같은» 계수가 나온다.
+  const regions = declaredQuotationRegions(scan);
+  const isDeclaredQuotation = (index) =>
+    regions !== null &&
+    regions.some(([from, to]) => index >= from && index < to);
   let count = 0;
   for (const m of scan.matchAll(BLOCKED_ANYWHERE_RE)) {
+    if (isDeclaredQuotation(m.index)) continue;
     const lineStart = lineStartOffset(scan, m.index);
     if (!PROSE_CHAR_RE.test(scan.slice(lineStart, m.index))) count += 1;
   }
-  count += [...scan.matchAll(BLOCKED_BARE_COLUMN0_RE)].length;
+  for (const m of scan.matchAll(BLOCKED_BARE_COLUMN0_RE)) {
+    if (!isDeclaredQuotation(m.index)) count += 1;
+  }
   return count;
 }
 // HYK-325 §2-3 (승격: HYK-418 §2-1): the non-column-0 meta line finalize-
@@ -452,7 +505,20 @@ function isInsideGitWorktree(dir) {
 export function resolveResultTaskId(resultContent) {
   // HYK-449: 인용된(코드블록·HTML 주석) 줄은 이 문서가 «말한» 것이 아니다.
   const scan = maskQuotedMarkerRegions(resultContent);
-  const resultIdMatches = [...scan.matchAll(TASK_ID_RE_G)];
+  // HYK-468 2R (검토자 P1 반려, 정당함): 마스킹은 펜스/HTML 주석 «안»만
+  // 가린다 -- 코드펜스 «없이» 본문에 그대로 인용한 예시(예: "예를 들어
+  // 다음과 같은 줄이 주입된다: task_id: HYK-...")는 마스킹을 안 받고
+  // 열 0에 그대로 남아 진짜 선언과 충돌해 AMBIGUOUS로 거부됐다(실사고
+  // 재현). 구조적 선행 맥락 검사(위 hasStructuralPredecessor)로 이 축을
+  // 닫는다 -- 자세한 이유는 그 함수 정의 위 주석 참조.
+  const lines = scan.replace(/\r\n/g, "\n").split("\n");
+  const resultIdMatches = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(TASK_ID_LINE_RE);
+    if (!m) continue;
+    if (!hasStructuralPredecessor(lines, i)) continue;
+    resultIdMatches.push(m);
+  }
   if (resultIdMatches.length > 1) {
     return {
       ok: false,
@@ -523,7 +589,11 @@ export const RESULT_BLOCK_STATE = Object.freeze({
   NONE: "NONE",
 });
 
-function resolveResultBlockedState(resultContent) {
+// HYK-450 ①: 내보낸다 -- 시험이 이 축의 판정을 «생산 코드 그대로» 재기
+// 위해서다(축마다 시험이 자기 복사본을 만들면 조용히 어긋난다 -- 이 파일이
+// DONE_RE/countVerdictLines 를 내보내는 것과 같은 재사용 규율).
+// ⛔판정 로직은 이 export 로 한 글자도 바뀌지 않는다.
+export function resolveResultBlockedState(resultContent) {
   const matches = [...resultContent.matchAll(BLOCKED_RE)];
   if (matches.length > 1) {
     return {
@@ -1523,7 +1593,11 @@ function resolveMatchedTaskId(taskContent, resultContent) {
 // HYK-383 2R §2 (검토 1R P2 실측): ⛔`i` 플래그 없음 -- 정확히 소문자
 // `head_commit:`만 표지로 인정한다. 1R은 `gim`(대문자 `HEAD_COMMIT:`도
 // 수락)이었고, 검토자가 직접 probe해 실측했다 -- 신원을 좁힌다.
-const HEAD_COMMIT_RE_G = /^head_commit:[ \t]*([0-9a-fA-F]{40})[ \t]*$/gm;
+// HYK-479 §B-B: exported so dispatch-gate-decision.mjs's checklist-example
+// test can import this PRODUCTION regex directly (재구현 금지 -- 이 파일
+// 밖에서 같은 모양을 다시 짜면 이 정규식이 드리프트해도 그 시험은
+// 깨지지 않는다).
+export const HEAD_COMMIT_RE_G = /^head_commit:[ \t]*([0-9a-fA-F]{40})[ \t]*$/gm;
 // resolveResultTaskId의 TASK_ID_ANYWHERE_RE와 동일한 역할 -- 매치 채택에는
 // 절대 쓰지 않고, "표지 자체가 아예 없다"와 "표지를 쓰려는 흔적은 있는데
 // 줄 시작이 아니거나 값이 40자 hex가 아니거나 대소문자가 다르다"를 가르는
@@ -1675,12 +1749,29 @@ export function resolveHeadCommitBinding({
 // 읽는다.
 export const RUNNER_RECEIPT_FILENAME = "runner-receipt.json";
 
+// HYK-477 §2-4: MEASUREMENT_UNAVAILABLE은 RED/STALE/INVALID와 다른 사실을
+// 가리킨다 -- "러너가 정말로 실패했다"가 아니라 "강제 종료(OOM/signal)로
+// node --test가 애초에 완료 결과를 낸 적이 없다"는 뜻이다(HYK-467 규율:
+// 측정 실패 ≠ 결과 없음/시험 실패). 다섯 코드는 전부 서로 다르다(아래
+// (rr-codes-distinct) 시험이 그대로 이 사실을 지킨다).
 export const RUNNER_RECEIPT_REJECT_REASON = Object.freeze({
   MISSING: "RUNNER_RECEIPT_MISSING",
   RED: "RUNNER_RECEIPT_RED",
   STALE: "RUNNER_RECEIPT_STALE",
   INVALID: "RUNNER_RECEIPT_INVALID",
+  MEASUREMENT_UNAVAILABLE: "RUNNER_RECEIPT_MEASUREMENT_UNAVAILABLE",
 });
+
+// HYK-477 §2-4: runner-receipt-writer.mjs(생산자)의 RUNNER_STATUS.
+// MEASUREMENT_UNAVAILABLE_OOM과 같은 문자열 리터럴이다. 이 파일은 그
+// 모듈을 import하지 않는다(위 §2-3 헤더 "⛔zero-import 유지" 원칙 --
+// 정적 import 하나가 고정 sidecar 목록을 쓰는 다수의 mutation 시험 전부에
+// 파급된다) -- 그래서 여기서도 리터럴로 따로 든다. 두 자리가 갈라지면 이
+// 비교가 조용히 항상 false가 되어 이 축이 죽는다; 드리프트는 아래 이
+// 파일 자신의 mutation 시험이 이 리터럴 자체를 대상으로 잡는다(생산자
+// 쪽 시험이 잡을 수 있는 종류의 드리프트가 아니다 -- 두 문자열이 이
+// 파일과 그 파일에서 «각자» 정의된다는 것 자체가 이 드리프트의 근원).
+const MEASUREMENT_UNAVAILABLE_OOM_STATUS = "MEASUREMENT_UNAVAILABLE_OOM";
 
 // coder-task.md 1b_exec_line 그대로: `npm test; echo "exit=$?"`. 표지는
 // 콜론 뒤 인용이 표지로 오인된 과거 함정(HEAD_COMMIT_RE_G 주석 참조)을
@@ -1692,6 +1783,24 @@ export function resultClaimsRunnerResults(resultContent) {
     typeof resultContent === "string" &&
     RUNNER_EXIT_CLAIM_RE.test(resultContent)
   );
+}
+
+// HYK-485 §2-2: "「2회 연속 초록」을 요구하는 라운드"를 새 규약으로
+// 만들지 않고, 위 표준 관용구가 몇 번 나타나는지를 센다 -- coder-task.md
+// §5가 요구하는 "2회 연속 초록 · 분리 프로세스로"는 정확히 그 관용구를
+// 회차마다 반복해 남기는 방식이다(1b_exec_line 재확인). 0/1회는 이 축의
+// 영향 밖(과차단 금지) -- 0회는 resolveRunnerReceiptVerdict가 이미
+// skip하고, 1회는 그 축이 latest 영수증 하나로 이미 검증한다. 새 정규식이
+// 아니라 같은 RUNNER_EXIT_CLAIM_RE를 global로만 다시 쓴다.
+const RUNNER_EXIT_CLAIM_RE_GLOBAL = new RegExp(
+  RUNNER_EXIT_CLAIM_RE.source,
+  "gm",
+);
+
+export function countRunnerExitClaims(resultContent) {
+  if (typeof resultContent !== "string") return 0;
+  const matches = resultContent.match(RUNNER_EXIT_CLAIM_RE_GLOBAL);
+  return matches ? matches.length : 0;
 }
 
 function readRunnerReceiptFile(harnessDir) {
@@ -1754,6 +1863,21 @@ export function resolveRunnerReceiptVerdict({ resultContent, harnessDir }) {
       reason: `runner receipt gate (HYK-411): ${found.path} missing required fields (runner_exit: number, head_commit: string) -- fail-closed`,
     };
   }
+  // HYK-477 §2-4: runner_status는 schema v2부터 있는 필드다 -- v1 영수증
+  // (필드 자체가 undefined)은 이 비교가 항상 false가 되어 자연히 통과하고
+  // 아래 runner_exit 검사로 넘어간다(무회귀). 이 검사를 runner_exit 검사
+  // "앞"에 두는 순서가 핵심이다: classifySpawnOutcome은
+  // MEASUREMENT_UNAVAILABLE_OOM도 exitCode 1(0이 아님)로 남기므로, 순서가
+  // 바뀌면 이 값이 먼저 RED로 접혀 이 분기에 영영 도달하지 못한다 --
+  // §2-3이 분류기 안에서 고친 바로 그 왜곡이 소비 쪽에서 재발하는 것과
+  // 같은 형태다.
+  if (receipt.runner_status === MEASUREMENT_UNAVAILABLE_OOM_STATUS) {
+    return {
+      ok: false,
+      code: RUNNER_RECEIPT_REJECT_REASON.MEASUREMENT_UNAVAILABLE,
+      reason: `runner receipt gate (HYK-477): runner receipt at ${found.path} reports runner_status=${MEASUREMENT_UNAVAILABLE_OOM_STATUS} -- 측정 불능(measurement unavailable), NOT a test failure: the runner was forcibly killed (OOM/signal) before node --test produced a real result (HYK-467 규율) -- fail-closed all the same (소비는 여전히 거부한다), but reported with a distinct code/문장 so a reader cannot mistake this for "the tests failed"`,
+    };
+  }
   if (receipt.runner_exit !== 0) {
     return {
       ok: false,
@@ -1768,6 +1892,231 @@ export function resolveRunnerReceiptVerdict({ resultContent, harnessDir }) {
       reason: `runner receipt gate (HYK-411): runner receipt at ${found.path} head_commit '${receipt.head_commit}' does not match this worktree's actual HEAD '${actualHead.sha}' -- refusing to consume a stale/reused runner result (HYK-408 1R 실피해 재발 방지)`,
     };
   }
+  return { ok: true };
+}
+
+// HYK-485 §2-2: "2회 연속 초록"을 요구하는 라운드의 증거가 지금까지는
+// 구조적으로 1회분만 남았다(coder-task.md §1 실측, HYK-480 1R 실사고) --
+// 워커가 정직하게 러너를 두 번 돌리고 값도 정직하게 적었어도(finished_at
+// 14:16:27 -> 14:23:06, 둘 다 runner_exit 0), 배달 후 남은 기계 증거는
+// "2회차 영수증 하나"뿐이었다(1회차 영수증도, 러너 로그도, 사본도, reflog
+// 흔적도 0개). 앞 두 라운드가 회차별 사본을 남긴 것은 규율이 아니라
+// "워커 재량"이었다 -- 그래서 "2회 연속 초록" 계약의 증거가 "워커가
+// 똑똑했는지"에 달려 있었다.
+//
+// 이 축은 isolated-suite-runner.mjs가 이제 기계로 남기는
+// runner-receipt-run<N>.json(runner-receipt-writer.mjs의
+// allocateRunSlot/writeNumberedRunnerReceipt, HYK-485 §2-1)을 읽어 그
+// "워커 재량" 의존을 없앤다. resolveRunnerReceiptVerdict와 마찬가지로
+// zero-import(readFileSync + JSON.parse만 쓴다, 생산자 모듈을 전혀 모른다)
+// -- 위 §2-3 헤더의 근거와 동일.
+export const RUNNER_RECEIPT_RUN_PREFIX = "runner-receipt-run";
+const NUMBERED_RECEIPT_NAME_RE = /^runner-receipt-run(\d+)\.json$/;
+
+function listNumberedRunnerReceiptEntries(harnessDir) {
+  let names;
+  try {
+    names = readdirSync(harnessDir);
+  } catch {
+    return [];
+  }
+  return names
+    .map((name) => {
+      const m = NUMBERED_RECEIPT_NAME_RE.exec(name);
+      return m ? { name, n: Number(m[1]) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.n - b.n);
+}
+
+function readNumberedRunnerReceipt(harnessDir, name) {
+  const path = join(harnessDir, name);
+  let raw;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (err) {
+    return { path, err: `unreadable (${err.message})` };
+  }
+  // HYK-485 §2-2 2R (검토 P2-1, rounds/REVIEW-r1.md): allocateRunSlot이
+  // 배타 생성으로 남기는 빈("") 자리표시자 그대로다 -- 강제 종료(OOM)가
+  // 이 회차의 run을 `writeNumberedRunnerReceipt`가 덮어쓰기 «전»에
+  // 끊었다는, 이 코드가 스스로 만든 정직한 증거다(runner-receipt-
+  // writer.mjs:176 주석 "실제 내용은 run이 끝난 뒤 writeNumberedRunnerReceipt
+  // 가 덮어쓴다"). JSON.parse 실패와 같은 코드(INVALID)로 접으면 "파일이
+  // 깨졌다"와 "관측이 아예 없었다"를 같은 사실로 오인하게 된다 -- classify-
+  // SpawnOutcome 안에서 이미 한 번 고친 것과 같은 축의 왜곡(§2-3)이 소비
+  // 쪽에서 재발하는 것과 같은 모양이다.
+  if (raw === "") {
+    return { path, measurementUnavailable: true };
+  }
+  let receipt;
+  try {
+    receipt = JSON.parse(raw);
+  } catch (err) {
+    return { path, err: `not valid JSON (${err.message})` };
+  }
+  if (
+    typeof receipt !== "object" ||
+    receipt === null ||
+    typeof receipt.runner_exit !== "number" ||
+    typeof receipt.head_commit !== "string" ||
+    typeof receipt.finished_at !== "string"
+  ) {
+    return {
+      path,
+      err: "missing required fields (runner_exit: number, head_commit: string, finished_at: string)",
+    };
+  }
+  return { path, receipt };
+}
+
+// HYK-485 §2-2 2R (검토 P1-2, rounds/REVIEW-r1.md): 발동 조건이었던
+// claimCount(워커가 결과 파일에 칼럼 0 단독 'exit=<n>' 줄을 몇 번 적었는가)
+// 만으로는 이 라운드 자신의 결과 파일(coder-task.md §5의 실제 실행선)에서
+// «한 번도 발동하지 않는다» -- 옛 idiom(`npm test; echo "exit=$?"`)을
+// 요구하지 않는 실행선을 쓰는 라운드는 회차별 영수증을 실제로 2개 이상
+// 만들어도 그 사실이 결과 파일 산문에 반영되지 않기 때문이다. "기계
+// 산출물에 걸어라"는 권고대로, 이 라운드의 실제 HEAD와 head_commit이
+// 일치하는 회차별 영수증이 실물로 2개 이상 있으면 그 자체로도 발동한다
+// (OR로만 넓힌다 -- claimCount 축은 지우지 않는다: 지우면 옛 idiom을 실제로
+// 쓰는 라운드에서 "2회 주장 + 파일 미달"을 잡던 HYK-480 1R 재발 방지 탐지력
+// 이 사라진다). "이 라운드의 실제 HEAD와 일치"로 한정하는 이유는 회차
+// 번호가 브랜치 전체에서 재사용되지 않고 계속 누적되므로(coder-task.md §5
+// "run1~7 이미 쓰였다, 재사용 금지"), 단순히 "파일이 2개 이상 존재"만
+// 보면 러너와 무관한 미래 라운드에서도 이전 라운드가 남긴 낡은 영수증
+// 때문에 항상 참이 되어 매 라운드 이 축이 발동한다(검토 P2-3이 경고한
+// 과발동 그 자체) -- HEAD 일치로 한정하면 "이번 라운드가 실제로 만든
+// 회차"만 센다. 빈 자리표시자(0바이트, P2-1)는 head_commit을 읽을 수 없어
+// 이 카운트에 들지 않는다(발동 여부에만 영향 -- "안 한 것" 절에 명시).
+function countCurrentHeadNumberedReceipts(harnessDir, actualHeadSha) {
+  return listNumberedRunnerReceiptEntries(harnessDir).filter((e) => {
+    const r = readNumberedRunnerReceipt(harnessDir, e.name);
+    return (
+      !r.err &&
+      !r.measurementUnavailable &&
+      r.receipt.head_commit?.toLowerCase() === actualHeadSha
+    );
+  }).length;
+}
+
+// resolveConsecutiveRunnerReceiptsVerdict 자신의 분기 수를 줄이기 위해
+// (eslint complexity 게이트) 분리한 두 순회 -- 각각 "읽기 자체가 됐는가"와
+// "읽은 내용이 유효한가"라는 서로 다른 질문을 한다.
+function firstUnreadableReceiptVerdict(read) {
+  for (const r of read) {
+    if (r.measurementUnavailable) {
+      return {
+        ok: false,
+        code: RUNNER_RECEIPT_REJECT_REASON.MEASUREMENT_UNAVAILABLE,
+        reason: `consecutive runner receipt gate (HYK-485): ${r.path} is an empty placeholder (allocateRunSlot's own reservation, HYK-485 §2-1) with no receipt content written yet -- 측정 불능(measurement unavailable), NOT invalid: this run was forcibly killed before it ever produced a result (review P2-1)`,
+      };
+    }
+    if (r.err) {
+      return {
+        ok: false,
+        code: RUNNER_RECEIPT_REJECT_REASON.INVALID,
+        reason: `consecutive runner receipt gate (HYK-485): ${r.path} ${r.err} -- fail-closed`,
+      };
+    }
+  }
+  return null;
+}
+
+function firstInvalidReceiptVerdict(read, actualHeadSha) {
+  for (const { path, receipt } of read) {
+    if (receipt.runner_status === MEASUREMENT_UNAVAILABLE_OOM_STATUS) {
+      return {
+        ok: false,
+        code: RUNNER_RECEIPT_REJECT_REASON.MEASUREMENT_UNAVAILABLE,
+        reason: `consecutive runner receipt gate (HYK-485): ${path} reports runner_status=${MEASUREMENT_UNAVAILABLE_OOM_STATUS} -- 측정 불능(measurement unavailable), NOT a test failure: one of the two claimed runs was forcibly killed before producing a real result`,
+      };
+    }
+    if (receipt.runner_exit !== 0) {
+      return {
+        ok: false,
+        code: RUNNER_RECEIPT_REJECT_REASON.RED,
+        reason: `consecutive runner receipt gate (HYK-485): ${path} reports runner_exit=${receipt.runner_exit} (non-zero) -- refusing to consume a claimed 2-consecutive-green result when one of the two runs was not green`,
+      };
+    }
+    if (receipt.head_commit.toLowerCase() !== actualHeadSha) {
+      return {
+        ok: false,
+        code: RUNNER_RECEIPT_REJECT_REASON.STALE,
+        reason: `consecutive runner receipt gate (HYK-485): ${path} head_commit '${receipt.head_commit}' does not match this worktree's actual HEAD '${actualHeadSha}'`,
+      };
+    }
+  }
+  return null;
+}
+
+// §2-2 요구 3가지를 한 쌍(가장 최근 두 회차)에 대해 대조한다 -- (같은
+// harnessDir에 이전 라운드의 낡은 runner-receipt-run*.json이 남아 있는
+// 드문 경우까지 대비해 "가장 최근" 두 개만 본다, 오래된 파일이 섞여 들어와
+// 이 축을 오염시키지 않도록). ⓐ finished_at 서로 다름 ⓑ head_commit 실제
+// HEAD와 동일(둘 다) ⓒ fail 0(=runner_exit 0, 둘 다) -- 하나라도 어긋나면
+// 그 사유로 거부, 1개뿐이면 §2-2가 명시한 "측정 불능" 문장(다른 이유들과
+// 다른 code, RED/TESTS_FAILED로 접지 않는다, HYK-467 규율). 회차 번호가
+// 단조 증가만 한다는 전제(runner-receipt-writer.mjs의 allocateRunSlot,
+// HYK-485 §2-2 2R 수리 -- P2-2) 위에서, entries.slice(-2)(가장 큰 N 둘)를
+// 그대로 "가장 최근 두 회차"로 쓴다 -- 그 전제가 깨지면(빈 자리 재사용)
+// "가장 최근"이 조용히 낡은 회차로 바뀐다, 그래서 생산자 쪽에서 그 전제
+// 자체를 보장한다(재사용 금지).
+export function resolveConsecutiveRunnerReceiptsVerdict({
+  resultContent,
+  harnessDir,
+}) {
+  // HEAD is resolved unconditionally (not gated behind claimCount like
+  // resolveRunnerReceiptVerdict's sibling axis) because the receipts-leg
+  // below needs it just to COUNT matching evidence -- but a resolution
+  // failure must not itself reject a round that neither axis actually
+  // implicates (과차단 금지, 무회귀): treat "cannot resolve HEAD" as 0
+  // matching receipts for the skip decision, and only surface it as a
+  // real INVALID once we already know this round is NOT skipping.
+  const actualHead = readActualWorktreeHeadCommit(harnessDir);
+  const claimCount = countRunnerExitClaims(resultContent);
+  const matchingReceiptCount = actualHead.ok
+    ? countCurrentHeadNumberedReceipts(harnessDir, actualHead.sha)
+    : 0;
+  if (claimCount < 2 && matchingReceiptCount < 2) {
+    return { ok: true, skipped: true };
+  }
+
+  if (!actualHead.ok) {
+    return {
+      ok: false,
+      code: RUNNER_RECEIPT_REJECT_REASON.INVALID,
+      reason: `consecutive runner receipt gate (HYK-485): cannot resolve this worktree's actual HEAD to compare against the numbered receipts -- ${actualHead.reason}`,
+    };
+  }
+
+  const entries = listNumberedRunnerReceiptEntries(harnessDir);
+  if (entries.length < 2) {
+    return {
+      ok: false,
+      code: RUNNER_RECEIPT_REJECT_REASON.MEASUREMENT_UNAVAILABLE,
+      reason: `consecutive runner receipt gate (HYK-485): this round shows evidence of a 2-consecutive-green requirement (result content claims ${claimCount} separate runner executions and/or ${matchingReceiptCount} numbered receipt(s) match this worktree's actual HEAD) but only ${entries.length} numbered receipt(s) (${RUNNER_RECEIPT_RUN_PREFIX}<N>.json) exist under ${harnessDir} -- 측정 불능(measurement unavailable), NOT a test failure: this does not mean the tests failed, it means the machine cannot verify a second run actually happened (HYK-467 규율, HYK-480 1R 실사고 재발 방지) -- "2회 초록"으로 조용히 통과시키지 않는다`,
+    };
+  }
+
+  const lastTwo = entries.slice(-2);
+  const read = lastTwo.map((e) =>
+    readNumberedRunnerReceipt(harnessDir, e.name),
+  );
+  const unreadableVerdict = firstUnreadableReceiptVerdict(read);
+  if (unreadableVerdict) return unreadableVerdict;
+
+  const invalidVerdict = firstInvalidReceiptVerdict(read, actualHead.sha);
+  if (invalidVerdict) return invalidVerdict;
+
+  const [a, b] = read;
+  if (a.receipt.finished_at === b.receipt.finished_at) {
+    return {
+      ok: false,
+      code: RUNNER_RECEIPT_REJECT_REASON.INVALID,
+      reason: `consecutive runner receipt gate (HYK-485): ${a.path} and ${b.path} share the same finished_at ('${a.receipt.finished_at}') -- two receipts claiming to be from two separate runs cannot share a timestamp`,
+    };
+  }
+
   return { ok: true };
 }
 
@@ -2857,6 +3206,17 @@ export function checkRelayHandshake({
     harnessDir,
   });
   if (!runnerReceiptVerdict.ok) return runnerReceiptVerdict;
+
+  // HYK-485 §2-2: runnerReceiptVerdict와 같은 자리 원칙(§4 무회귀) -- 같은
+  // judgedRegion/harnessDir을 넘긴다. 0/1회 주장 라운드는 skip으로 빠져
+  // 나가 이 축이 존재하기 전과 완전히 동일하게 움직인다(과차단 금지).
+  const consecutiveRunnerReceiptsVerdict =
+    resolveConsecutiveRunnerReceiptsVerdict({
+      resultContent: judgedRegion,
+      harnessDir,
+    });
+  if (!consecutiveRunnerReceiptsVerdict.ok)
+    return consecutiveRunnerReceiptsVerdict;
 
   // HYK-387: headCommitVerdict와 같은 자리 원칙(§4 무회귀) -- REVIEW 한정
   // 아님(오늘의 실사고는 CODER 라운드였다, coder-task.md §1 원문).
