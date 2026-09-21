@@ -8,6 +8,7 @@ import { registerRichText } from "@lexical/rich-text";
 import tokens from "../../spec/design-tokens.json";
 import { PRODUCT_TRANSFORMERS, PRODUCT_NODES } from "./transformers.mjs";
 import { serializeEditorToMarkdown } from "./serialize.mjs";
+import { EDITOR_THEME } from "./theme.mjs";
 
 function applyDesignTokens() {
   const root = document.documentElement;
@@ -41,6 +42,7 @@ function mountEditor(container) {
       throw error;
     },
     nodes: PRODUCT_NODES,
+    theme: EDITOR_THEME,
   });
   editor.setRootElement(container);
   registerRichText(editor);

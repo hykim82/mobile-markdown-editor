@@ -7,6 +7,7 @@ import {
   PRODUCT_TRANSFORMERS,
   PRODUCT_NODES,
 } from "../../src/editor/transformers.mjs";
+import { EDITOR_THEME } from "../../src/editor/theme.mjs";
 import { makeEditableRoot } from "./jsdom-env.mjs";
 
 export function makeProductEditor() {
@@ -16,6 +17,7 @@ export function makeProductEditor() {
       throw error;
     },
     nodes: PRODUCT_NODES,
+    theme: EDITOR_THEME,
   });
   const root = makeEditableRoot();
   editor.setRootElement(root);
