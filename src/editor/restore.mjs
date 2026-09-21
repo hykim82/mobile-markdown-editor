@@ -7,19 +7,55 @@
 // $convertFromMarkdownString 을 안 쓴다 -- 그 시험은 이름이 코드에
 // "실행"되어 나타나기만 해도 걸리므로(줄 주석은 제외) 여기서 써도
 // 그대로 걸린다. 대신 이 파일이 serialize.mjs 의 역함수를 직접 짠다.
-// 이 파일이 되돌리는 인라인 마크(굵게/취소선) 문법은 serialize.mjs 가
-// 실제로 만들 수 있는 형태(제대로 짝 맞고 "**" 바깥·"~~" 안쪽으로
-// 중첩됨)만 가정한다 -- 임의의 외부 마크다운 붙여넣기 복원은 범위 밖.
+// ⛔정정(review.md §3-3 · HYK-304-storage-2): 예전 이 자리의 주석은
+// "serialize.mjs 가 실제로 만들 수 있는 형태(제대로 짝 맞은 "**"/"~~")만
+// 가정한다 -- 임의의 외부 마크다운 붙여넣기 복원은 범위 밖" 이라고 적혀
+// 있었다. 그 가정은 틀렸다: 붙여넣기 없이 "그냥 타이핑"만으로도
+// serialize.mjs 는 짝 없는 "**"/"~~" 를 그대로 원문에 내보낸다(등록
+// 순서가 안 맞는 마크다운 단축키 입력, 지우다 만 서식 등) -- 이 결함은
+// "범위 밖"이 아니라 "범위 안"이었다. 그래서 tokenizeInline 은 짝 없는
+// 마커(같은 마커가 홀수 번 나오는 경우의 마지막 등장)를 서식 토글이
+// 아니라 글자 그대로 보존한다(아래 tokenizeInline 주석 참고). 짝이 맞는
+// 인라인 마크는 여전히 serialize.mjs 와 같은 중첩 규칙("**" 바깥·"~~"
+// 안쪽)을 가정한다.
 import { $getRoot, $createParagraphNode, $createTextNode } from "lexical";
 import { $createHeadingNode } from "@lexical/rich-text";
 import { $createListNode, $createListItemNode } from "@lexical/list";
 import { parse } from "../markdown-parser.mjs";
 
+// text 안에서 marker(2글자)가 서로 겹치지 않게 몇 번 나오는지 센다 --
+// 아래 tokenizeInline 이 "이 마커가 짝이 있는가"를 미리 알기 위한 헬퍼.
+function countMarkerOccurrences(text, marker) {
+  let count = 0;
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith(marker, i)) {
+      count += 1;
+      i += marker.length;
+    } else {
+      i += 1;
+    }
+  }
+  return count;
+}
+
+// serialize.mjs 는 "**"/"~~" 를 항상 짝 맞춰(열고-닫고) 내보내지만, 저장된
+// 원문은 타이핑만으로도(붙여넣기 없이) 짝이 없는 "**"/"~~" 를 담을 수
+// 있다(review.md §3-3 실측). 짝이 없는 마커까지 서식 토글로 삼키면 ⓐ 남은
+// 구간이 통째로 서식이 되며 재직렬화 때 닫는 마커가 새로 생기거나
+// ⓑ 마커 뒤 버퍼가 비어 있으면 그 마커 글자 자체가 흔적 없이 사라진다
+// (review.md §3-2). 그래서 같은 마커의 등장 순서를 세어(1번째-2번째가
+// 한 쌍, 3번째-4번째가 한 쌍, ...) 마지막 하나가 짝이 없을 때만(등장
+// 횟수가 홀수) 그 마지막 등장을 토글이 아니라 "글자 그대로" 버퍼에 넣는다.
 function tokenizeInline(text) {
+  const totalBold = countMarkerOccurrences(text, "**");
+  const totalStrike = countMarkerOccurrences(text, "~~");
   const segments = [];
   let bold = false;
   let strikethrough = false;
   let buffer = "";
+  let boldSeen = 0;
+  let strikeSeen = 0;
   const flush = () => {
     if (buffer.length > 0) {
       segments.push({ text: buffer, bold, strikethrough });
@@ -29,12 +65,24 @@ function tokenizeInline(text) {
   let i = 0;
   while (i < text.length) {
     if (text.startsWith("**", i)) {
-      flush();
-      bold = !bold;
+      boldSeen += 1;
+      const isUnpaired = boldSeen === totalBold && totalBold % 2 === 1;
+      if (isUnpaired) {
+        buffer += "**";
+      } else {
+        flush();
+        bold = !bold;
+      }
       i += 2;
     } else if (text.startsWith("~~", i)) {
-      flush();
-      strikethrough = !strikethrough;
+      strikeSeen += 1;
+      const isUnpaired = strikeSeen === totalStrike && totalStrike % 2 === 1;
+      if (isUnpaired) {
+        buffer += "~~";
+      } else {
+        flush();
+        strikethrough = !strikethrough;
+      }
       i += 2;
     } else {
       buffer += text[i];
