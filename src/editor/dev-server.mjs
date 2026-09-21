@@ -5,6 +5,7 @@ import { context } from "esbuild";
 import { networkInterfaces } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { resolveBindHost } from "./dev-server-host.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
@@ -33,15 +34,22 @@ async function main() {
     logLevel: "info",
   });
 
+  const host = resolveBindHost();
   const { port } = await ctx.serve({
     servedir: publicDir,
-    host: "0.0.0.0",
+    host,
     port: PORT,
   });
 
   console.log(`[dev] PC: http://localhost:${port}/`);
-  for (const address of lanAddresses()) {
-    console.log(`[dev] 휴대폰(같은 와이파이): http://${address}:${port}/`);
+  if (host === "0.0.0.0") {
+    for (const address of lanAddresses()) {
+      console.log(`[dev] 휴대폰(같은 와이파이): http://${address}:${port}/`);
+    }
+  } else {
+    console.log(
+      "[dev] 127.0.0.1 전용(기본값) -- 같은 와이파이 기기에서 열려면 `--host` 를 붙여 다시 실행",
+    );
   }
 }
 
