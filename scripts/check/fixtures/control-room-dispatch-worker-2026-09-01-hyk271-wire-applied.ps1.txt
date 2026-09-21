@@ -1,0 +1,725 @@
+# 하네스 워커 배정·기동 (사람 손 1줄 = 관례 + 게이트 설계 선택 — ⛔«차단돼 있어서»가 아니다)
+#
+# 왜 사람이 실행하나 — ★2026-08-10 정정(HYK-219 리서치 + PM 교차비평 실측):
+#   ⛔옛 문면 «ORCH 실행 분류기가 orca orchestration dispatch 를 전면 차단한다»는 **보장으로서 거짓**이었다.
+#   두 층을 갈라 적는다:
+#     (1) 기계 차단(설정 deny) = **0건**. 오히려 .claude\settings.local.json 의 permissions.allow 에
+#         "PowerShell(orca orchestration *)" 가 명시돼 있다(2026-08-10 ORCH·PM 각각 실측).
+#         ⚠️범위 한정: repo local + 사용자 2파일에서만 확인. 관리형(enterprise) 정책 파일은 미확인.
+#     (2) 모델 쪽 안전 분류기는 실존하나 **거부가 비결정적이라 보장이 아니다** —
+#         HYK-181(2026-07-24)에서 ORCH 가 좌석기동+dispatch+go 전 과정을 사람 손 0으로 완주해 행위 수준에서 반증됐다.
+#   ⇒ 사람 손 1줄은 «차단 때문»이 아니라 **관례 + 게이트 설계 선택**이다(sign.sh / bot-push-pr.sh 와 같은 축).
+#   ⇒ 이 경로를 안 거치는 직접 호출은 열려 있다 = **gap#96**(HYK-219 가 다루는 대상).
+#
+# 구조(G1 위조 차단):
+#   워커는 기동 규칙(worker-dispatch-rule.md §1)대로 `dispatch-show`로 자기 좌석 배정을
+#   런타임에 대조한 뒤에만 기동한다. 그래서 "배정 기록(dispatch record)"이 반드시 필요하다.
+#
+# ── 2026-07-22 엔진-인지형 개정 (원장 D11/D12, 사람 지시 "반복되면 강제라도") ──
+#   D12: `orca worktree create`가 워크트리마다 빈 기본 pwsh 탭을 하나 더 만든다 → 좌석 2개 →
+#        경로만으로는 AMBIGUOUS. → **에이전트 마커(preview)로 진짜 에이전트 좌석을 골라낸다.**
+#   D11: **codex 좌석은 `dispatch --inject`가 입력을 깨뜨린다**(OSC escape 누출 `]10;rgb..` →
+#        Enter 안 먹힘). claude 좌석은 --inject가 정상(붙여넣기+제출 일체). → **엔진별로 배달을 나눈다**:
+#        - claude(CODER/VERIFY): `dispatch --inject` (그대로 성립)
+#        - codex(REVIEW): `dispatch`(--inject 없이 배정 기록만) → 입력 정리(interrupt) →
+#                          `terminal send --text "go <task>"` → `--enter` (PM 좌석에서 검증된 깨끗한 경로)
+#
+# 사용:
+#   pwsh -File dispatch-worker.ps1 -Task task_xxx -Worktree "<path>" -Role REVIEW
+#   (Role 생략 시 CODER=claude. 좌석이 여럿이고 마커로도 못 고르면 -Handle 로 지정.)
+
+param(
+  [Parameter(Mandatory = $true)][string]$Task,
+  [Parameter(Mandatory = $true)][string]$Worktree,
+  [ValidateSet("CODER","REVIEW","VERIFY","PM")][string]$Role = "CODER",
+  # 워커가 받을 'go' 라벨 = task 파일 첫 줄의 harness task_id(예 HYK-170-review-1). 워커 규칙 §2가
+  # 전달 문구의 go <label>과 파일 task_id 일치를 요구한다. 생략 시 $Task(런타임 id)를 쓰지만,
+  # 그러면 §2 불일치로 거부되므로 codex 배달에는 사실상 필수. (claude --inject는 preamble에
+  # spec이 그대로 들어가 무관.)
+  [string]$GoLabel,
+  # 후보가 여럿이고 마커로도 유일하게 안 좁혀질 때만(사람이 눈으로 고른 좌석). 지정값도
+  # "그 워크트리의 살아있는 좌석 목록에 실제로 있는지" 대조 후에만 인정한다(stale handle 방어).
+  [string]$Handle,
+  # HYK-219-receipts-1: 영수증 파일 경로(생략 시 env DISPATCH_RECEIPT_PATH를
+  # 쓴다). 형식·필수 필드 검증·기록은 전부 저장소 안 dispatch-receipt-cli.mjs가
+  # 한다 -- 여기는 값을 넘기기만 한다(§1 비타협).
+  [string]$ReceiptPath
+)
+
+$ErrorActionPreference = "Stop"
+
+# 비타협: Orca JSON preview에 한글·비ASCII가 섞여 콘솔 인코딩이 UTF-8이 아니면 자식 stdout이
+# 잘못 디코딩돼 JSON이 깨진다(2026-07-22 실측, 원장 D9d). Node 어댑터는 무관(PowerShell 소비자 전용).
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
+# 엔진 매핑 = 어댑터 ENGINE_BY_ROLE와 동일(단일 진실).
+$engine = if ($Role -eq "REVIEW" -or $Role -eq "PM") { "codex" } else { "claude" }
+
+# D14(2026-07-22, HYK-162 재발): 파일 핸드셰이크 완료는 Orca dispatch 컨텍스트를 안 푼다.
+# 한 좌석은 active dispatch 하나만 가질 수 있어, 같은 좌석 재사용 시 이전(이미 소비된)
+# dispatch가 남아 "already has an active dispatch"로 막힌다. → 그 stale task를 완료 처리 후 1회 재시도.
+# 안전성: 이 워크플로는 "결과 소비 후에만" 같은 좌석에 재-dispatch하므로 걸려 있는 이전 dispatch는
+# 항상 소비 완료분이다(진행 중 태스크를 죽이지 않는다). task-update는 ORCH 분류기에 안 막힘(실측).
+function Invoke-Dispatch([string]$task, [string]$to, [bool]$inject) {
+  $a = @("orchestration", "dispatch", "--task", $task, "--to", $to)
+  if ($inject) { $a += "--inject" }
+  $a += "--json"
+  $out = (& orca @a | ConvertFrom-Json)
+  if ((-not $out.ok) -and ($out.error.message -match 'already has an active dispatch.*for task (task_\w+)')) {
+    $stale = $Matches[1]
+    Write-Host "      stale active dispatch($stale) 감지 → 완료 처리 후 재시도 (D14)"
+    & orca orchestration task-update --id $stale --status completed --json | Out-Null
+    Start-Sleep -Milliseconds 400
+    $out = (& orca @a | ConvertFrom-Json)
+  }
+  return $out
+}
+
+function Norm([string]$p) {
+  if ([string]::IsNullOrWhiteSpace($p)) { return "" }
+  return ($p -replace '\\', '/').TrimEnd('/').ToLowerInvariant()
+}
+
+# 에이전트가 실제로 떠 있는 좌석인지 preview 내용으로 판정한다(빈 셸 탭 걸러내기, D12).
+# title은 셸이 덮어써서 못 쓴다(E3) — preview의 TUI 마커를 본다.
+function Looks-Like-Agent([string]$preview) {
+  if ([string]::IsNullOrEmpty($preview)) { return $false }
+  # D15: 죽은 셸(에이전트 종료 후 남은 pwsh 프롬프트)을 제외한다 — tail이 PS 프롬프트로 끝나면
+  # 스크롤백에 옛 에이전트 마커가 남아 있어도 살아있는 에이전트가 아니다(실측: codex 종료 후
+  # 필터가 그 좌석을 골라 지시문을 셸에 명령으로 흘려보낸 사고).
+  if ($preview -match 'PS [A-Za-z]:\\[^\r\n]*>\s*$') { return $false }
+  return ($preview -match 'gpt-5\.6|Sonnet|Opus|\[CODER\]|\[REVIEW\]|bypass permissions|MCP startup|weekly \d')
+}
+
+$target = Norm $Worktree
+if ($target -eq "") { Write-Error "Worktree 경로가 비었습니다."; exit 2 }
+
+Write-Host "[1/3] 좌석 조회 — 워크트리 경로로 현재 handle 해석 (저장값 사용 안 함, engine=$engine)"
+$list = (orca terminal list --json | ConvertFrom-Json)
+if (-not $list.ok) { Write-Error "terminal list 실패"; exit 3 }
+
+# 고아 좌석(worktreePath 빈 문자열)은 제외 — 제거된 워크트리 좌석이 connected:true로 남고
+# worktreeId엔 옛 경로가 박혀 있다(2026-07-22 실측). worktreeId로 매칭하면 죽은 좌석이 되살아난다.
+$cands = @($list.result.terminals | Where-Object {
+    $_.worktreePath -ne "" -and (Norm $_.worktreePath) -eq $target
+  })
+
+if ($cands.Count -eq 0) {
+  Write-Error "NOT_FOUND: '$Worktree' 에 붙은 살아있는 좌석이 없습니다. 좌석을 먼저 만드세요."
+  exit 4
+}
+
+if ($Handle) {
+  $picked = @($cands | Where-Object { $_.handle -eq $Handle })
+  if ($picked.Count -ne 1) {
+    Write-Host "지정 handle이 이 워크트리의 살아있는 좌석 목록에 없습니다: $Handle"
+    $cands | ForEach-Object { Write-Host "  - $($_.handle)  title=$($_.title)" }
+    Write-Error "STALE_OR_FOREIGN_HANDLE — 낡은 handle이거나 다른 워크트리 좌석입니다."
+    exit 7
+  }
+  $seat = $picked[0]
+  Write-Host "      (사람 지정 — 목록 대조 통과)"
+}
+elseif ($cands.Count -eq 1) {
+  $seat = $cands[0]
+}
+else {
+  # 여럿 — 에이전트 마커로 진짜 좌석만 남긴다(D12: 빈 기본 pwsh 탭 걸러내기).
+  $agents = @($cands | Where-Object { Looks-Like-Agent $_.preview })
+  if ($agents.Count -eq 1) {
+    $seat = $agents[0]
+    Write-Host "      (좌석 $($cands.Count)개 중 에이전트 마커로 1개 선별 — 빈 셸 탭 제외)"
+  } else {
+    Write-Host "AMBIGUOUS: 후보 $($cands.Count)개, 에이전트 후보 $($agents.Count)개 —"
+    $cands | ForEach-Object { Write-Host "  - $($_.handle)  agent=$([bool](Looks-Like-Agent $_.preview))  title=$($_.title)" }
+    Write-Error "자동 추정하지 않습니다(오배송 방지). 빈 탭을 닫거나 -Handle <handle> 로 지정하세요."
+    exit 5
+  }
+}
+
+$handle = $seat.handle
+Write-Host "      -> $handle"
+# HYK-224-3R §2 (REVIEW 2R 반려): $target(정규화 워크트리 경로)는 핸들
+# 회전에는 안전했지만 «유일한» 값이 아니었다 -- CODER/REVIEW가 같은
+# 워크트리를 공유하면 둘 다 같은 seat_key를 갖게 돼, 한쪽이 죽어도 다른
+# 쪽이 살아있으면 sweep이 둘 다 «live»로 오인할 수 있었다(검토자 실측).
+# $seat.tabId+":"+$seat.leafId(pane key -- 이 워커 자신의 G1 위조확인이
+# 대조하는 ORCA_PANE_KEY와 동일 포맷)는 «탭(pane)」 단위로 유일하다 --
+# 같은 워크트리에 여러 좌석이 있어도 서로 다른 pane key를 갖는다. 핸들
+# 회전에도 안전하다(pane key는 orca 런타임 핸들이 아니라 IDE 탭/리프
+# 식별자이므로 D9 계열 핸들 회전과 다른 축).
+$paneKey = "$($seat.tabId):$($seat.leafId)"
+
+# HYK-256(2026-08-19): dispatch-worker.ps1 154~224행 결함 수리 -- 배달 전
+# 게이트 호출(아래 & node $gateScript ...)에 --dispatch-receipt-path가
+# 없었고, $ReceiptPath는 그 호출보다 «뒤»에서야 정해졌다(같은 워크트리
+# 두 번째 라운드부터 게이트가 dispatchId를 못 찾아 거부, 2026-08-14
+# 실측·2026-08-19 실제 거부 1건). 이 블록(원래 아래쪽 "HYK-219-receipts-2
+# §3-ⓐ" 주석+분기)을 게이트 호출보다 앞으로 옮기고, 그 호출에
+# --dispatch-receipt-path $ReceiptPath를 추가한다 -- «영수증을 기록하는
+# 경로»와 «게이트가 소비를 확인하는 경로»가 항상 같은 값을 보게 만드는
+# 불변식 하나를 세운다. PM 분기는 게이트 자체를 건너뛰지만 $ReceiptPath
+# 자신은 이 블록이 위로 올라오면서 무조건(분기 밖) 채워지므로 그대로
+# 성립한다.
+# HYK-219-receipts-2 §3-ⓐ (1R ORCH 실측: 이 값을 아무도 안 주면 배달이
+# 전건 실패했다): 인자·env 둘 다 없으면 이 스크립트 자신이 놓인 위치
+# 기준 기본 경로로 떨어진다 — 저장소 안에는 이 경로가 전혀 없으므로
+# "절대경로 하드코딩 금지"에 걸릴 대상 자체가 없다. $PSScriptRoot는
+# 설치마다 달라지는 런타임 값이지 고정 리터럴이 아니다.
+if (-not $ReceiptPath) {
+  $ReceiptPath = if ($env:DISPATCH_RECEIPT_PATH) { $env:DISPATCH_RECEIPT_PATH } else { Join-Path $PSScriptRoot "dispatch-receipts.jsonl" }
+}
+# HYK-387 3R(코더 레인 · S7): 소비 쪽(scripts/check/relay-handshake.mjs의
+# resolveDispatchLedgerPath)이 이 라운드의 배정 기록이 원장에 실제로
+# 있는지 확인하려면 방금 해석한 $ReceiptPath 값을 알아야 한다. 이
+# 배달기는 완료 감시(watch-result.mjs 등)를 직접 부르지 않으므로(grep
+# 실측 0건) env 하나로는 그 별도 프로세스 경계를 넘길 수 없다 -- 대신
+# 이 라운드의 $Worktree(소비 쪽 harnessDir의 부모, 둘 다 이미 아는 유일한
+# 공유 앵커) 안에 포인터 파일 한 줄을 남긴다. 실패해도 배달을 막지
+# 않는다(비치명적) -- 이 축의 존재 여부는 소비 쪽의 fail-closed 판정
+# 몫이지, 배달을 막는 새 게이트가 아니다.
+try {
+  $receiptPointerDir = Join-Path $Worktree ".harness"
+  if (-not (Test-Path -LiteralPath $receiptPointerDir)) {
+    New-Item -ItemType Directory -Path $receiptPointerDir -Force | Out-Null
+  }
+  $receiptPointerPath = Join-Path $receiptPointerDir "dispatch-receipt-path.txt"
+  Set-Content -LiteralPath $receiptPointerPath -Value $ReceiptPath -Encoding utf8 -NoNewline
+} catch {
+  Write-Warning "HYK-387 3R: dispatch-receipt-path.txt 포인터 기록 실패(비치명적, 배달은 계속): $($_.Exception.Message)"
+}
+
+# HYK-217(2026-08-10 병합 master 68560cf): 배달 전 게이트 확인 — fail-closed.
+# 계기 = 2026-08-10 실사고: 진단 게이트가 exit 2(불통과)를 냈는데 ORCH가 게이트 검사와
+# 배달을 한 명령에 묶어 실행해 "불통과인데도 배달이 나갔다". 그때 방어는 "ORCH가 순서를
+# 지킨다"는 약속뿐이었고 기계 앵커가 0이었다 → 배달 도구가 스스로 확인하게 만든다.
+# 판단은 저장소 안(scripts/check/dispatch-gate-decision.mjs), 여기는 얇은 껍데기다
+# (관제실은 CI 대상이 아니라 판단 로직을 두면 CI가 실제 수리 지점을 못 덮는다).
+# ⚠️ 스크립트가 없으면 "생략"이 아니라 "거부"다(HYK-217 1R 반려 사유). 열린 구멍은
+# docs/enforcement-known-gaps.md gap#96(직접 주입)·gap#97·gap#98 참조.
+
+# HYK-315(2026-08-20, HYK-327-wire-1 선행 수리 -- coder-task.md B-6): admission
+# 원장 경로($admissionLedgerPath)는 원래 admission-cli 호출 근처(아래
+# "[1.6/3]" 구간)에서만 정의됐다 -- 게이트 호출(바로 아래 dispatch-gate-
+# decision.mjs)«보다 뒤»였다. dispatch-arg-contract-registry.mjs가 이미
+# --admission-ledger-path를 이 게이트의 hard=false 필수 인자로 선언했고
+# (HYK-319-argcheck-2), 이 인자가 없으면 verifyAbortRecordRecoveryMarker가
+# 항상 false로 닫혀 정당한 abort record 회수 표식도 REJECT된다(Linear
+# HYK-315, 코드 실측: dispatch-gate-decision.mjs 1226-1231행·1289-1299행).
+# 이 정의를 게이트 호출보다 앞으로 «옮긴다»(새 정의 추가가 아니라 이동 --
+# 원래 "[1.6/3]" 구간의 정의는 그 자리에서 지운다, 중복 정의 없음 -- 아래
+# "[1.6/3]" 구간의 교체 문면 참고).
+$admissionLedgerPath = Join-Path $PSScriptRoot "admission-ledger.json"
+
+# HYK-319(2026-08-20): 이 배달기가 잠시 뒤 부를 저장소 CLI 5개(게이트·
+# 원자 입장·영수증·좌석 증명·착수 확인) 호출문에 필수 인자가 빠지지
+# 않았는지, 실제로 부르기 전에 «자기 자신»을 정적으로 대조한다(HYK-256/
+# 315 재발 방지 -- 오늘까지 이 실수가 두 번 났다). 판단은 저장소 안
+# scripts/check/dispatch-arg-contract.mjs 몫이다(관제실은 CLI를 부르고
+# 종료코드로만 분기하는 얇은 껍데기). ⛔이 검사는 "안전한지"를 판단하지
+# 않는다 -- 배달기 원문에 필수 인자 «이름»이 있는지만 본다. 값의 옳음,
+# 그리고 고의로 검사를 피하려 꾸민 문면은 이 검사기의 범위 밖이다
+# (docs/control-room-patches/HYK-319-dispatch-arg-contract.md 정직 한계
+# 참조).
+$argContractCliPath = Join-Path $Worktree "scripts/check/dispatch-arg-contract.mjs"
+if (-not (Test-Path $argContractCliPath)) {
+  Write-Error "ARG_CONTRACT_CLI_MISSING: $argContractCliPath 가 없다 -- 저장소 CLI 호출 인자를 대조할 수 없으므로 배달을 계속하지 않는다(HYK-319 기계 게이트, fail-closed)."
+  exit 9
+}
+$argContractOut = & node $argContractCliPath --script $PSCommandPath 2>&1
+$argContractExit = $LASTEXITCODE
+foreach ($line in @($argContractOut)) { Write-Host "      $line" }
+if ($argContractExit -ne 0) {
+  Write-Error "ARG_CONTRACT_REJECTED: 저장소 CLI 호출 인자 대조 실패(exit $argContractExit, 위 출력의 각 CLI 줄 참고) -- 이 인자 누락은 배달 뒤에야 드러나는 경우가 많으므로(HYK-256/315), 실제로 부르기 전에 멈춘다(fail-closed). 원인을 해소한 뒤 재시도하라."
+}
+
+if ($Role -eq "PM") {
+  Write-Host "[1.5/3] PM 배달: 1-B 게이트 건너뜀(HYK-241 3R 실측 -- PM 지시서(D:\문서관리\하네스-관제실\PM\relay\pm-task.md)는 관제실 자체 git 저장소에 있어, --expect-repo-root 대조가 항상 저장소 불일치로 거부하고 대조를 빼도 그 저장소엔 .harness/reject-streak.json이 없어 거부된다 -- ALLOW 도달 경로가 없음을 직접 실행해 확인함. 저장소 코드 변경 없이는 PM을 커버할 수 없다(다음 트랙 과제 = HYK-245)."
+} else {
+  $gateScript = Join-Path $Worktree "scripts/check/dispatch-gate-decision.mjs"
+  $roleTaskFile = Join-Path $Worktree (".harness/" + $Role.ToLower() + "-task.md")
+  if (-not (Test-Path $gateScript)) {
+    Write-Error "GATE_REJECTED: gate script missing ($gateScript) -- 이 워크트리에는 아직 HYK-217 게이트가 없다. scripts/check/dispatch-gate-decision.mjs 를 포함한 브랜치(master 68560cf 이후)로 갱신한 뒤 재시도하라."
+  }
+  Write-Host "[1.5/3] 배달 전 게이트 확인 (HYK-217)"
+  & node $gateScript $roleTaskFile --expect-repo-root $Worktree --dispatch-receipt-path $ReceiptPath --admission-ledger-path $admissionLedgerPath
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "GATE_REJECTED: 위 사유로 배달을 거부합니다(HYK-217 기계 게이트). 원인을 해소한 뒤 재시도하세요."
+  }
+}
+
+$label = if ($GoLabel) { $GoLabel } else { $Task }
+
+# HYK-224 (coder-task.md §1/§3, PM 항 4 TOCTOU): 배달 전 «원자 입장» 확인 --
+# fail-closed. 판단(원장 판정)은 전부 저장소 안
+# scripts/supervisor/admission-cli.mjs 몫이다(§4 "판단은 저장소, 관제실은
+# 얇은 껍데기"). 이 블록은 그 CLI를 부르고 종료코드로만 분기한다.
+# 원장/락 파일은 관제실 소유(전역 상태, 워크트리별이 아니다) -- 이
+# 워크트리의 concurrency-cap.json을 --cap-path로 넘겨 상한값 자체는
+# 여전히 저장소 커밋값이 권위다(HYK-193 S-5, 값 하드코딩 금지).
+$admissionCliPath = Join-Path $Worktree "scripts/supervisor/admission-cli.mjs"
+if (-not (Test-Path $admissionCliPath)) {
+  Write-Error "ADMISSION_CLI_MISSING: $admissionCliPath 가 없다 -- HYK-224 원자 입장 게이트를 확인할 수 없으므로 dispatch를 만들지 않는다(fail-closed). 이 CLI를 포함한 브랜치로 워크트리를 갱신한 뒤 재시도하라."
+}
+# HYK-315(2026-08-20): $admissionLedgerPath 정의는 위(§1.5 게이트 호출 앞)로
+# 옮겨졌다 -- 여기서는 다시 정의하지 않는다(중복 정의 없음, 위 이동 문면의
+# 주석 참고).
+$admissionLockPath = Join-Path $PSScriptRoot "admission-ledger.lock"
+$capPath = Join-Path $Worktree "scripts/supervisor/concurrency-cap.json"
+# HYK-224-2R §2 (REVIEW 1R 반려): seat_key로 $handle(orca terminal handle)을
+# 넘기지 않는다 -- 오늘만 2회 관측된 «핸들 회전»에 그대로 노출돼, 같은
+# 물리 좌석이 회전 후 다른 핸들로 나타나면 sweep의 ground truth(향후 호출자가
+# 채울 liveSeatKeys)와 더 이상 일치하지 않아 «영구 미회수»가 재발한다.
+# HYK-224-3R §2 (REVIEW 2R 반려): $target(정규화 워크트리 경로)도 안 된다 --
+# 유일하지 않다(위 $paneKey 주석 참고). $paneKey를 쓴다.
+Write-Host "[1.6/3] 동시 상한 원자 입장 확인 (HYK-224)"
+$admissionOut = & node $admissionCliPath admit --ledger $admissionLedgerPath --lock $admissionLockPath --reservation-id $label --cap-path $capPath --role $Role --seat-key $paneKey 2>&1
+$admissionExit = $LASTEXITCODE
+Write-Host "      $admissionOut"
+if ($admissionExit -ne 0) {
+  Write-Error "CAP_REJECTED: 위 사유로 배달을 거부합니다(HYK-224 원자 입장 게이트, exit $admissionExit). 원인을 해소한 뒤 재시도하세요."
+}
+
+# HYK-323(2026-08-19 후속, wrapper-shape-1; wrapper-shape-4에서 범위
+# 재확정): 좌석 증명 게이트를 부르기 전에, 이 배달기 자신의
+# Invoke-SeatProofGate 함수 본문이 정본(pinned SHA-256)과 달라졌는지
+# 자기 검사한다. 판단은 저장소 안
+# scripts/check/seat-proof-wrapper-shape.mjs 몫이다(관제실은 CLI를
+# 부르고 종료코드로만 분기하는 얇은 껍데기). ⛔이 검사는 "안전한지"를
+# 판단하지 않는다 -- 텍스트가 정본과 다른지만 알려준다. 사고성 회귀는
+# 반드시 걸리지만, 고의로 꾸민 문면(예: 정본 본문을 here-string이나
+# 죽은 if($false) 블록에 넣는 것)은 원리적으로 잡지 못한다
+# (docs/control-room-patches/HYK-323-seat-proof-wrapper-shape-check.md
+# 정직 한계 6줄 참조).
+$wrapperShapeCliPath = Join-Path $Worktree "scripts/check/seat-proof-wrapper-shape.mjs"
+if (-not (Test-Path $wrapperShapeCliPath)) {
+  Write-Error "WRAPPER_SHAPE_CLI_MISSING: $wrapperShapeCliPath 가 없다 -- 좌석 증명 래퍼가 정본과 달라졌는지 확인할 수 없으므로 배달을 계속하지 않는다(HYK-323 기계 게이트, fail-closed)."
+  exit 9
+}
+$wrapperShapeOut = & node $wrapperShapeCliPath --script $PSCommandPath 2>&1
+$wrapperShapeExit = $LASTEXITCODE
+foreach ($line in @($wrapperShapeOut)) { Write-Host "      $line" }
+if ($wrapperShapeExit -ne 0) {
+  Write-Error "WRAPPER_SHAPE_REJECTED: 좌석 증명 래퍼가 정본 지문과 달라졌다(WRAPPER_CHANGED: YES, exit $wrapperShapeExit) -- Invoke-SeatProofGate 함수 본문이 pinned SHA-256과 다르거나 검사기가 함수를 찾지 못했다. 좌석 증명을 부르기도 전에 멈춘다(fail-closed). 원인을 사람/ORCH가 확인하라(정당한 변경이면 정본 갱신 절차를 거쳐라)."
+}
+
+# HYK-219-receipts-2 §1 (1R P1 반려 "반쪽 배달" 대응): 영수증 CLI가 이
+# 워크트리에 없으면 dispatch 자체를 만들지 않는다 — 아래 존재 확인만
+# ps1에 남는다(부트스트랩 문제: CLI가 없으면 그 CLI에게 "있냐"고 물어볼
+# 수 없다). 이 확인 이후의 모든 판단(형식·필수 필드·기록·실패 사유)은
+# 전부 저장소 CLI 몫이다(§1 문면 그대로, 늘리지 않았다).
+$receiptCliPath = Join-Path $Worktree "scripts/relay/dispatch-receipt-cli.mjs"
+if (-not (Test-Path $receiptCliPath)) {
+  Write-Error "RECEIPT_CLI_MISSING: $receiptCliPath 가 없다 -- 영수증을 남길 수 없으므로 dispatch를 만들지 않는다(HYK-219 2R §1, 반쪽 배달 방지). 이 CLI를 포함한 브랜치로 워크트리를 갱신한 뒤 재시도하라."
+}# HYK-400 2R: 대상 워크트리의 수신부를 배달 전에 실제 delivery args 기준으로
+# 확인한다. caller가 flag 집합을 고르거나 비워 검사를 생략할 수 없다.
+$receiverGuardCliPath = Join-Path $Worktree "scripts/check/hyk400-receiver-guard.mjs"
+if (-not (Test-Path $receiverGuardCliPath)) {
+  Write-Host "RECEIVER_GUARD_CLI_MISSING: $receiverGuardCliPath 가 없다 -- 수신부 capability를 확인할 수 없으므로 dispatch를 만들지 않는다(HYK-400 fail-closed). 워크트리를 갱신한 뒤 재시도하라."
+  exit 10
+}
+$receiverGuardDeliveryArgs = @(
+  "--role", $Role,
+  "--task-label", $label,
+  "--receipt-path", $ReceiptPath,
+  "--harness-dir", (Join-Path $Worktree ".harness")
+)
+$receiverGuardArgs = @("--worktree", $Worktree)
+foreach ($deliveryArg in $receiverGuardDeliveryArgs) {
+  $receiverGuardArgs += @("--delivery-arg", $deliveryArg)
+}
+$receiverGuardOut = & node $receiverGuardCliPath @receiverGuardArgs 2>&1
+$receiverGuardExit = $LASTEXITCODE
+foreach ($line in @($receiverGuardOut)) { Write-Host "      $line" }
+if ($receiverGuardExit -ne 0) {
+  Write-Error "RECEIVER_CAPABILITY_REJECTED: 대상 워크트리의 수신부가 --harness-dir capability를 충족하지 않는다(exit $receiverGuardExit, 위 출력의 사유 참고) -- 실제 영수증 호출 전에 멈춘다(fail-closed). 워크트리를 갱신한 뒤 재시도하라."
+}
+
+# HYK-219-receipts-2 §2 (1R 반려 "관제실이 얇지 않다" 대응): 남기는 것은
+# "부르고, 종료코드가 0이 아니면 멈춘다" 수준뿐이다. ConvertTo-Json은
+# 판단이 아니라 운반(glue)이다 — PowerShell 객체를 CLI가 stdin으로 소비할
+# 수 있는 텍스트로 바꿀 뿐, 값을 걸러내거나 해석하지 않는다(검토자 자신도
+# "운반으로 볼 여지" 라고 적었다). 실패 사유 문구는 CLI 자신의 stdout(바로
+# 위 Write-Host로 그대로 보임)에만 있다 — 정책 설명을 여기서 다시 쓰지 않는다.
+function Record-DispatchReceipt($dispatchOut, [string]$cliPath, [string]$role, [string]$label, [string]$receiptPath) {
+  $cliArgs = @($cliPath, "--role", $role, "--task-label", $label, "--receipt-path", $receiptPath, "--harness-dir", (Join-Path $Worktree ".harness"))
+  $receiptOut = ($dispatchOut | ConvertTo-Json -Depth 10 -Compress) | & node @cliArgs 2>&1
+  Write-Host "      $receiptOut"
+  if ($LASTEXITCODE -ne 0) { Write-Error "RECEIPT_FAILED (위 출력 참고)" }
+}
+
+# ── [4/4-A] 배달 전 기준선 수집 (HYK-280 · 삽입점 A) ─────────────────────────
+# 정확한 위치: 현행 Write-Host "[2/3] 배정 기록 생성 (dispatch)" 줄 바로 앞.
+# 주입 전 스냅샷을 고정해 Claude의 주입 직후 대량 기록을 기준선에 흡수하지 않는다.
+$confirmCli = Join-Path $Worktree "scripts\supervisor\dispatch-start-confirm-cli.mjs"
+$confirmNotifyDir = "D:\문서관리\통역\받는함"
+$confirmEngine = [string]$engine
+$confirmEngineSource = "dispatch-worker.ps1:`$engine"
+$confirmBaselineMode = "pre-dispatch"
+$confirmClaudeHome = "C:\Users\Administrator\.claude-team"
+$confirmSessionHome = "unavailable"
+$confirmProjectDir = "unavailable"
+$confirmCodexSessions = "unavailable"
+$confirmBaselineAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$confirmDispatchedAtMs = $null
+[int64]$confirmBaselineBytes = 0
+$confirmBaselineKnown = $false
+$confirmBaselineFiles = @{}
+$confirmBaselineError = ""
+$confirmLastObservationBytes = "N/A"
+$confirmLastObservationAtMs = $confirmBaselineAtMs
+
+function Confirm-GetClaudeBytes([string]$ProjectDir) {
+  try {
+    if (-not (Test-Path -LiteralPath $ProjectDir -PathType Container)) {
+      return [pscustomobject]@{ ok = $true; totalBytes = [int64]0; error = "" }
+    }
+    $sum = Get-ChildItem -LiteralPath $ProjectDir -File -Filter "*.jsonl" -ErrorAction Stop |
+      Measure-Object -Property Length -Sum
+    $total = if ($null -eq $sum.Sum) { [int64]0 } else { [int64]$sum.Sum }
+    return [pscustomobject]@{ ok = $true; totalBytes = [int64]$total; error = "" }
+  } catch {
+    return [pscustomobject]@{ ok = $false; totalBytes = [int64]0; error = $_.Exception.Message }
+  }
+}
+
+function Confirm-GetCodexSnapshot([string]$SessionsDir, [string]$TargetWorktree) {
+  $targetFiles = @{}
+  [int64]$total = 0
+  try {
+    if (-not (Test-Path -LiteralPath $SessionsDir -PathType Container)) {
+      return [pscustomobject]@{ ok = $true; totalBytes = [int64]0; files = $targetFiles; error = "" }
+    }
+    $rollouts = @(Get-ChildItem -LiteralPath $SessionsDir -Recurse -File -Filter "rollout-*.jsonl" -ErrorAction Stop)
+  } catch {
+    return [pscustomobject]@{ ok = $false; totalBytes = [int64]0; files = $targetFiles; error = $_.Exception.Message }
+  }
+  foreach ($rollout in $rollouts) {
+    try {
+      $firstLine = Get-Content -LiteralPath $rollout.FullName -TotalCount 1 -ErrorAction Stop
+      # HYK-286(2026-08-20): 갓 생긴 rollout 파일은 codex가 session_meta 첫
+      # 줄을 다 쓰기 전 짧은 동안 비어 있거나(아래) JSON이 반쯤만 쓰인
+      # 상태(바로 아래 안쪽 try)일 수 있다 -- 둘 다 "아직 쓰는 중"이라는
+      # 같은 타이밍 사고이지 수집 실패가 아니므로, 대상 워크트리가 아닌
+      # 파일과 같은 처리(건너뛰기)로 맞춘다. 고의로 꾸민 rollout 파일을
+      # 막는 것은 이 수리의 범위 밖이다(docs/control-room-patches/
+      # HYK-286-codex-first-line-tolerance.md §0 정직 한계 참조).
+      if ([string]::IsNullOrWhiteSpace($firstLine)) { continue }
+      try {
+        $meta = $firstLine | ConvertFrom-Json -ErrorAction Stop
+      } catch {
+        # HYK-286: 첫 줄이 JSON으로 아직 다 안 써진 조각이면(쓰다 만
+        # JSON) 위 빈 줄과 같은 사유이므로 별도 안쪽 catch로 바깥
+        # catch(전체 실패)로 전파되지 않게 건너뛴다.
+        continue
+      }
+      $cwd = ""
+      if ($null -ne $meta.payload) { $cwd = [string]$meta.payload.cwd }
+      if ([string]::IsNullOrWhiteSpace($cwd) -or (Norm $cwd) -ne (Norm $TargetWorktree)) { continue }
+      [int64]$length = $rollout.Length
+      $targetFiles[$rollout.FullName] = $length
+      $total += $length
+    } catch {
+      # 동시 삭제는 다음 관측에서 다시 열거할 수 있으므로 건너뛰고, 그 외
+      # 개별 파일 읽기 실패(권한 등)는 여전히 2(COLLECTION_FAILED)로 올린다.
+      if (-not (Test-Path -LiteralPath $rollout.FullName)) { continue }
+      return [pscustomobject]@{ ok = $false; totalBytes = $total; files = $targetFiles; error = $_.Exception.Message }
+    }
+  }
+  return [pscustomobject]@{ ok = $true; totalBytes = $total; files = $targetFiles; error = "" }
+}
+
+function Confirm-HasCodexGrowth($BaselineFiles, $CurrentFiles) {
+  foreach ($path in @($CurrentFiles.Keys)) {
+    if (-not $BaselineFiles.ContainsKey($path)) { return $true }
+    if ([int64]$CurrentFiles[$path] -gt [int64]$BaselineFiles[$path]) { return $true }
+  }
+  return $false
+}
+
+# 런처 원문에서 실제 Claude 기록 홈을 읽고, 읽기 실패 때만 런처에 적힌 기본값을 쓴다.
+$confirmLauncher = Join-Path $PSScriptRoot "orca-worker-seat.ps1"
+if (Test-Path -LiteralPath $confirmLauncher) {
+  try {
+    $confirmLauncherText = Get-Content -Raw -LiteralPath $confirmLauncher
+    $confirmClaudeMatch = [regex]::Match($confirmLauncherText, '\$env:CLAUDE_CONFIG_DIR\s*=\s*"([^"]+)"')
+    if ($confirmClaudeMatch.Success -and -not [string]::IsNullOrWhiteSpace($confirmClaudeMatch.Groups[1].Value)) {
+      $confirmClaudeHome = $confirmClaudeMatch.Groups[1].Value
+    }
+  } catch {
+    $confirmBaselineError = "launcher read: $($_.Exception.Message)"
+  }
+}
+
+if ($confirmEngine -eq "claude") {
+  $confirmSessionHome = $confirmClaudeHome
+  $confirmProjectName = [string]$Worktree -replace '[\\/:]', '-'
+  $confirmProjectDir = Join-Path (Join-Path $confirmSessionHome "projects") $confirmProjectName
+  $confirmClaudeBaseline = Confirm-GetClaudeBytes $confirmProjectDir
+  $confirmBaselineKnown = [bool]$confirmClaudeBaseline.ok
+  $confirmBaselineBytes = [int64]$confirmClaudeBaseline.totalBytes
+  if (-not $confirmBaselineKnown) { $confirmBaselineError = [string]$confirmClaudeBaseline.error }
+} else {
+  $confirmSessionHome = [string]$env:ORCA_CODEX_HOME
+  if ([string]::IsNullOrWhiteSpace($confirmSessionHome)) {
+    $confirmSessionHome = "unavailable"
+    $confirmCodexSessions = "unavailable"
+    $confirmBaselineKnown = $false
+    $confirmBaselineError = "ORCA_CODEX_HOME is empty"
+  } else {
+    $confirmCodexSessions = Join-Path $confirmSessionHome "sessions"
+    $confirmCodexBaseline = Confirm-GetCodexSnapshot $confirmCodexSessions $Worktree
+    $confirmBaselineKnown = [bool]$confirmCodexBaseline.ok
+    $confirmBaselineBytes = [int64]$confirmCodexBaseline.totalBytes
+    $confirmBaselineFiles = $confirmCodexBaseline.files
+    if (-not $confirmBaselineKnown) { $confirmBaselineError = [string]$confirmCodexBaseline.error }
+  }
+}
+Write-Host "[4/4] 엔진 선별: engine=$confirmEngine source=$confirmEngineSource role=$Role baseline_mode=$confirmBaselineMode"
+if (-not $confirmBaselineKnown) {
+  Write-Warning "배달 전 기준선 수집 실패; 착수 확인은 2(COLLECTION_FAILED)로 남기고 배달은 계속합니다: $confirmBaselineError"
+}
+
+# ── 현행 [2/3] 배정 기록 생성 (dispatch) 본문은 여기서부터 그대로 유지 ──────────
+
+# HYK-299(2026-08-19, gap#55 결선): 좌석 증명(scripts/relay/
+# dispatch-worker-seat-proof-gate.mjs -> seat-proof-cli.mjs 그대로 재사용)을
+# 배달기에 결선한다. 판단은 전부 저장소 CLI 몫이다(관제실은 ⑴dispatch-show/
+# terminal-show를 파일로 뜨고 ⑵CLI를 부르고 ⑶종료코드로만 분기하는 얇은
+# 껍데기). 범위(2026-08-19 16:47 책임자 확정 «가»): codex 경로는 배정 기록
+# 생성 → (빈 창) → terminal send 순서라 이 창에서 거부하면 워커는 시작조차
+# 안 한다(진짜 거부). claude 경로는 dispatch --inject가 배정 기록 생성과
+# 워커 시작을 한 번에 하므로 막을 창이 없다 -- 실패해도 이미 시작된 뒤이므로
+# 감지 후 중단·경보만 가능하다(라운드를 더 진행하지 않는다, 이미 만들어진
+# 배정 기록·영수증은 건드리지 않는다, 재배달 같은 즉흥 복구를 넣지 않는다).
+function Invoke-SeatProofGate([string]$dispatchId) {
+  $gateCliPath = Join-Path $Worktree "scripts/relay/dispatch-worker-seat-proof-gate.mjs"
+  if (-not (Test-Path $gateCliPath)) {
+    Write-Error "SEAT_PROOF_CLI_MISSING: $gateCliPath 가 없다 -- 좌석 증명을 확인할 수 없으므로 배달을 계속하지 않는다(HYK-299 gap#55 기계 게이트, fail-closed)."
+    exit 8
+  }
+  $dsShowPath = Join-Path $env:TEMP "hyk299-seatproof-$Task-dispatch-show.json"
+  $tsShowPath = Join-Path $env:TEMP "hyk299-seatproof-$Task-terminal-show.json"
+  & orca orchestration dispatch-show --task $Task --json | Out-File -FilePath $dsShowPath -Encoding utf8
+  & orca terminal show --terminal $handle --json | Out-File -FilePath $tsShowPath -Encoding utf8
+  # worktreeId 축은 ps1이 사전에 독립적으로 알 수 있는 값이 아니다(실측:
+  # `<세션 guid>::<경로>` 형태, guid part는 ps1이 모른다) -- 이번 결선에서는
+  # 방금 뜬 terminal-show 자신에서 취한다(부분 동어반복, 알려진 한계 --
+  # docs/control-room-patches/HYK-299-dispatch-worker-seat-proof.md 정직
+  # 한계 절 참조). worktreePath는 $Worktree(ps1이 처음부터 아는 값, Norm으로
+  # orca의 슬래시 표기와 맞춘다)를 그대로 쓴다 -- 이 축은 진짜 독립이다.
+  # 배정 신원 축(harnessTaskId=$label/runtimeTaskId=$Task/dispatchId)과
+  # pane-key 축(dispatch-show의 assignee_pane_key vs 이 terminal-show의
+  # tabId:leafId)은 전부 진짜 독립 대조다.
+  $tsShowObj = Get-Content $tsShowPath -Raw | ConvertFrom-Json
+  $seatProofWorktreeId = $tsShowObj.result.terminal.worktreeId
+  # ★HYK-323 비상 직수리(2026-08-19, ORCH 교대 28회차 · 검토 없이 적용 -- 상신
+  # 통역 받는함 `2026-08-19-1906-상신-좌석증명-래퍼결함-배달전면차단.md` 5항 ⓐ 승인분).
+  # 결함: `& node ...` 의 stdout 한 줄이 함수 반환값에 섞여 `return $LASTEXITCODE` 와
+  # 함께 [문장, 코드] 배열로 나갔다 -> 호출부 `-ne 0` 이 «PROVEN(exit 0)» 도 참으로 읽어
+  # **모든 배달을 거부**했다(합성 재현 완료: exit 0 인데 거부). 판정 로직·검사 강도는
+  # 그대로이며, 화면 출력을 Write-Host 로 분리해 반환값을 종료코드 하나로 만든다.
+  $gateOut = & node $gateCliPath --dispatch-show $dsShowPath --terminal-show $tsShowPath --harness-task-id $label --runtime-task-id $Task --dispatch-id $dispatchId --worktree-id $seatProofWorktreeId --worktree-path (Norm $Worktree) 2>&1
+  $gateExit = $LASTEXITCODE
+  foreach ($line in @($gateOut)) { Write-Host "      $line" }
+  # HYK-271(2026-09-01, HYK-271-wire-1 -- docs/control-room-patches/HYK-271-preflight-preview-marker.md
+  # §2/§2-a): 좌석 증명 게이트가 이미 통과했을 때만(先행 게이트가 이미
+  # 비0이면 그대로 그 사유로 거부되므로 여기서 또 돌 이유가 없다), 같은
+  # $tsShowPath로 사이드카 모달 검사기를 부른다 -- 추가 orca 조회 0, 기존
+  # $gateExit 하나에 그대로 접는다(새 exit 코드·새 분기 없음, design doc
+  # "두 게이트 중 하나라도 비0이면 기존 SEAT_PROOF_REJECTED 분기에 그대로
+  # 올라탄다" 그대로).
+  if ($gateExit -eq 0) { & node (Join-Path $Worktree "scripts/relay/dispatch-worker-modal-check.mjs") --terminal-show $tsShowPath 2>&1 | ForEach-Object { Write-Host "      $_" }; $gateExit = $LASTEXITCODE }
+  return $gateExit
+}
+
+Write-Host "[2/3] 배정 기록 생성 (dispatch)"
+if ($engine -eq "claude") {
+  # claude: --inject가 붙여넣기+제출 일체로 정상 동작(D6).
+  $out = Invoke-Dispatch $Task $handle $true
+  if (-not $out.ok) { Write-Error "DISPATCH_FAILED: $($out.error.message)"; exit 6 }
+  Write-Host "      dispatch id=$($out.result.dispatch.id) injected=$($out.result.injected)"
+  Record-DispatchReceipt $out $receiptCliPath $Role $label $ReceiptPath
+
+  Write-Host "[2.5/3] 좌석 증명 확인 (HYK-299 gap#55 -- claude: 감지 후 중단·경보, 이미 워커는 시작됐다)"
+  $seatProofExit = Invoke-SeatProofGate $out.result.dispatch.id
+  if ($seatProofExit -ne 0) {
+    Write-Error "SEAT_PROOF_REJECTED: 좌석 증명 실패(exit $seatProofExit) -- claude 경로는 dispatch --inject가 배정+시작을 한 번에 하므로 이미 워커가 시작된 뒤다. 이 라운드를 더 진행하지 않는다(감지 후 중단). 이미 만들어진 배정 기록·영수증은 그대로 둔다 -- 자동 재배달을 시도하지 않는다. 원인을 사람/ORCH가 확인하라."
+    exit 7
+  }
+  Write-Host "      좌석 증명 통과(exit 0)"
+}
+else {
+  # codex: --inject가 입력을 깨뜨린다(D11) → 배정 기록만 만들고(--inject 없이),
+  # 텍스트는 깨끗한 terminal send로 전달한다(PM 좌석에서 검증됨).
+  $out = Invoke-Dispatch $Task $handle $false
+  if (-not $out.ok) { Write-Error "DISPATCH_FAILED: $($out.error.message)"; exit 6 }
+  Write-Host "      dispatch id=$($out.result.dispatch.id) (inject 안 함 — codex 깨끗 배달)"
+  Record-DispatchReceipt $out $receiptCliPath $Role $label $ReceiptPath
+
+  Write-Host "[2.4/3] 좌석 증명 확인 (HYK-299 gap#55 -- codex: 진짜 거부, 아직 워커는 시작 전이다)"
+  $seatProofExit = Invoke-SeatProofGate $out.result.dispatch.id
+  if ($seatProofExit -ne 0) {
+    Write-Error "SEAT_PROOF_REJECTED: 좌석 증명 실패(exit $seatProofExit) -- codex 경로는 아직 'go' 텍스트를 보내기 전이므로 여기서 막으면 워커가 시작조차 안 한다(진짜 거부). terminal send를 실행하지 않고 배달을 중단한다."
+    exit 7
+  }
+  Write-Host "      좌석 증명 통과(exit 0) — 'go' 전달을 계속한다"
+
+  Write-Host "[2.5/3] codex 입력 정리 후 'go' 깨끗 전달"
+  # D13(2026-07-22): codex 좌석은 런처가 worker-dispatch-rule을 시스템 프롬프트로 안 싣는다
+  # (claude만 --append-system-prompt). 바닐라 codex에 "go"만 가면 뜻을 몰라 idle. → 기동 규칙+
+  # 역할 task 파일 포인터를 첫 입력으로 함께 전달한다(어댑터 deliverTask도 codex엔 이 지침을
+  # 실어야 함 — 범위3에서 정식화). claude는 --append-system-prompt+inject preamble로 이미 받음.
+  $lower = $Role.ToLower()
+  if ($Role -eq "PM") {
+    $goText = "너는 하네스 [PM] 기획 에이전트다(무인 좌석). 먼저 위조확인: orca orchestration dispatch-show --task $Task --json 실행해 result.dispatch.assignee_pane_key가 이 좌석 환경변수 ORCA_PANE_KEY와 일치하는지 대조하고, 결과 파일 맨 위에 3줄(dispatch_verified/task_id_from_dispatch/pane_match) 기록. 일치할 때만 진행. 지침은 오직 D:\문서관리\하네스-관제실\PM\relay\pm-task.md, 규약은 D:\문서관리\하네스-관제실\PM\PM-부팅블록.md(증거 우선·추측 금지·repo/Linear 쓰기 금지·HYK-112 재시도금지). 결과는 D:\문서관리\하네스-관제실\PM\relay\pm.md에 상단 task_id 에코 + 마지막 줄 '>>> DONE: PM @ 실제시각KST' 로 쓰고, 그다음 D:\문서관리\하네스-관제실\STATUS.md 1절 PM 행만 갱신. go $label"
+  } else {
+    $goText = "너는 하네스 릴레이 [$Role] 워커다. D:\문서관리\하네스-관제실\worker-dispatch-rule.md를 읽고 1절대로 위조확인하라: orca orchestration dispatch-show --task $Task --json 실행해 result.dispatch.assignee_pane_key가 이 좌석 환경변수 ORCA_PANE_KEY와 일치하는지 대조하고 결과 파일 맨 위에 3줄(dispatch_verified/task_id_from_dispatch/pane_match) 기록. 그다음 .harness/$lower-task.md 지침대로 수행(코드 수정은 그 지침 범위 내). 결과는 .harness/$lower.md에 task_id 에코 + 마지막 줄 '>>> DONE: $Role @ 실제시각KST' 로 쓰고, STATUS.md 1절 $Role 행만 갱신. go $label"
+  }
+  # D15: --interrupt(Ctrl-C) 제거 — idle codex에 보내면 codex가 종료된다(실측 사고). codex 경로는
+  # --inject를 안 쓰므로 애초에 정리할 escape 쓰레기가 없다(D11 junk는 --inject 전용).
+  & orca terminal send --terminal $handle --text $goText --json | Out-Null
+  Start-Sleep -Milliseconds 500
+  & orca terminal send --terminal $handle --enter --json | Out-Null
+  Write-Host "      codex 기동 지침(규칙+task 포인터)+go $label 전송 + Enter"
+  if (-not $GoLabel) { Write-Host "      ⚠ -GoLabel 미지정 — 런타임 id로 보냈다. 워커 §2 불일치로 거부될 수 있다." }
+}
+
+Write-Host "[3/3] OK — 워커가 dispatch-show로 대조 후 기동합니다."
+
+# ── [4/4-B] 동기 배달 후 착수 확인 (HYK-280 · 삽입점 B) ─────────────────────────
+# 정확한 위치: 현행 [4/4] 블록 전체를 삭제한 자리, 파일 끝까지.
+$confirmExit = 2
+$confirmLastObservationAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$confirmLastObservationBytes = if ($confirmBaselineKnown) { [string]$confirmBaselineBytes } else { "N/A" }
+
+try {
+  $confirmDispatchStamp = [string]$out.result.dispatch.dispatched_at
+  if (-not [string]::IsNullOrWhiteSpace($confirmDispatchStamp)) {
+    $confirmDispatchedAtMs = [DateTimeOffset]::Parse(
+      "$confirmDispatchStamp`Z",
+      [Globalization.CultureInfo]::InvariantCulture,
+      ([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal)
+    ).ToUnixTimeMilliseconds()
+  }
+} catch {
+  Write-Warning "dispatch 응답 시각 파싱 실패; 이 ps1의 UTC 시계를 사용합니다: $($_.Exception.Message)"
+}
+if ($null -eq $confirmDispatchedAtMs) { $confirmDispatchedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+
+[int64]$confirmTimeoutMs = 5 * 60 * 1000
+[int64]$confirmStallThresholdMs = 3 * 60 * 1000
+[int64]$confirmPollIntervalMs = 15 * 1000
+
+if ($confirmEngine -eq "codex") {
+  $confirmCodexSessions = Join-Path $confirmSessionHome "sessions"
+  $confirmCodexStarted = $false
+  $confirmLastGrowthAtMs = $null
+  if ($confirmBaselineKnown) {
+    $confirmImmediate = Confirm-GetCodexSnapshot $confirmCodexSessions $Worktree
+    if (-not $confirmImmediate.ok) {
+      $confirmExit = 2
+      Write-Warning "Codex 세션 수집 실패; 배달은 계속합니다: $($confirmImmediate.error)"
+    } else {
+      $confirmLastObservationBytes = [string]$confirmImmediate.totalBytes
+      $confirmLastObservationAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      if (Confirm-HasCodexGrowth $confirmBaselineFiles $confirmImmediate.files) {
+        $confirmCodexStarted = $true
+        $confirmLastGrowthAtMs = $confirmLastObservationAtMs
+      }
+      $confirmWatchStartedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      while ($true) {
+        $confirmNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        if ($confirmCodexStarted -and (($confirmNowMs - $confirmLastGrowthAtMs) -ge $confirmStallThresholdMs)) {
+          $confirmExit = 3
+          break
+        }
+        if (($confirmNowMs - $confirmWatchStartedAtMs) -ge $confirmTimeoutMs) {
+          $confirmExit = if ($confirmCodexStarted) { 0 } else { 1 }
+          break
+        }
+        Start-Sleep -Milliseconds $confirmPollIntervalMs
+        $confirmObserved = Confirm-GetCodexSnapshot $confirmCodexSessions $Worktree
+        $confirmLastObservationAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        if (-not $confirmObserved.ok) {
+          $confirmExit = 2
+          Write-Warning "Codex 세션 관측 실패; 배달은 계속합니다: $($confirmObserved.error)"
+          break
+        }
+        $confirmLastObservationBytes = [string]$confirmObserved.totalBytes
+        if (Confirm-HasCodexGrowth $confirmBaselineFiles $confirmObserved.files) {
+          $confirmCodexStarted = $true
+          $confirmLastGrowthAtMs = $confirmLastObservationAtMs
+        }
+      }
+    }
+  }
+  if (-not $confirmBaselineKnown) { $confirmExit = 2 }
+  Write-Host "[4/4] Codex 착수 확인 종료코드=$confirmExit (0=STARTED, 1=NOT_STARTED, 2=COLLECTION_FAILED, 3=STALLED_AFTER_START; 0은 WORKTREE_ACTIVITY_WEAK)"
+  Write-Host "[4/4] 진단: engine=$confirmEngine folder=$confirmCodexSessions baseline=$confirmBaselineBytes baseline_at=$confirmBaselineAtMs last_observation=$confirmLastObservationBytes last_observation_at=$confirmLastObservationAtMs"
+} elseif (-not (Test-Path -LiteralPath $confirmCli)) {
+  $confirmExit = 2
+  Write-Warning "착수 확인 CLI 없음($confirmCli); 배달은 계속합니다."
+  Write-Host "[4/4] 진단: engine=$confirmEngine folder=$confirmProjectDir baseline=$confirmBaselineBytes baseline_at=$confirmBaselineAtMs last_observation=$confirmLastObservationBytes last_observation_at=$confirmLastObservationAtMs"
+} else {
+  if ($confirmBaselineKnown) {
+    $confirmArgs = @(
+      $confirmCli,
+      "--repo-root"; $Worktree,
+      "--dispatched-at-ms"; $confirmDispatchedAtMs,
+      "--claude-home"; $confirmSessionHome,
+      "--baseline-bytes"; $confirmBaselineBytes,
+      "--notify-dir"; $confirmNotifyDir,
+      "--task-id"; $label,
+      "--timeout-ms"; $confirmTimeoutMs,
+      "--stall-threshold-ms"; $confirmStallThresholdMs,
+      "--poll-interval-ms"; $confirmPollIntervalMs
+    )
+    try {
+      & node @confirmArgs
+      $confirmExit = [int]$LASTEXITCODE
+    } catch {
+      $confirmExit = 2
+      Write-Warning "Claude 착수 확인 실행 실패; 배달은 계속합니다: $($_.Exception.Message)"
+    }
+  } else {
+    $confirmExit = 2
+  }
+  $confirmClaudeLast = Confirm-GetClaudeBytes $confirmProjectDir
+  $confirmLastObservationAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  if ($confirmClaudeLast.ok) { $confirmLastObservationBytes = [string]$confirmClaudeLast.totalBytes }
+  # HYK-378 후속(ORCH 레인 · S7): 계약 밖 종료코드는 fail-closed 로 다룬다.
+  # 4 = INVALID_ARGS(저장소 CLI 의 인자 계약 위반). 그 밖의 미지 코드도 같은 취급 --
+  # "모르는 코드니까 통과"가 곧 fail-open 이기 때문이다.
+  $confirmContractViolation = $false
+  $confirmExitObserved = $confirmExit
+  if ($confirmExit -notin @(0, 1, 2, 3)) {
+    Write-Warning "dispatch-start-confirm 계약 밖 종료코드=$confirmExit -- 착수 확인 결과를 신뢰할 수 없다"
+    $confirmContractViolation = $true
+  }
+  Write-Host "[4/4] Claude 착수 확인 종료코드=$confirmExit (0=STARTED, 1=NOT_STARTED, 2=COLLECTION_FAILED, 3=STALLED_AFTER_START)"
+  Write-Host "[4/4] 진단: engine=$confirmEngine folder=$confirmProjectDir baseline=$confirmBaselineBytes baseline_at=$confirmBaselineAtMs last_observation=$confirmLastObservationBytes last_observation_at=$confirmLastObservationAtMs"
+}
+# HYK-378 후속(ORCH 레인 · S7) -- 계약 밖 종료코드를 "성공"으로 보고하지 않는다.
+# 이 지점은 [2/3] dispatch 뒤이므로 워커는 이미 기동됐다. 그래서 막는 것은 배달이 아니라
+# "배달이 성공했다는 보고"이며, 종료코드 4를 따로 두어 "배달 실패"와 구별한다.
+if ($confirmContractViolation) {
+  Write-Host "[4/4] 착수 확인이 돌지 못했다 -- 관측된 종료코드=$confirmExitObserved (계약 = 0,1,2,3)"
+  Write-Host "[4/4] 배달 자체는 이미 이뤄졌다(dispatch 완료) -- 이 실행을 성공으로 취급하지 마라."
+  Write-Host "[4/4] 이 스크립트는 4 로 끝난다(0=정상 진행 · 4=착수확인 인자계약 위반)."
+  exit 4
+}
+# HYK-272 후속(CODER 레인) -- 1(NOT_STARTED)·2(COLLECTION_FAILED, 원인 불문)·
+# 3(STALLED_AFTER_START)도 4(계약 밖 코드)와 마찬가지로 "성공"으로 보고하지
+# 않는다. 세 상태를 원인별로 쪼개지 않고 하나의 종료코드로 묶는다 -- 이
+# 스크립트의 유일한 소비자(사람/ORCH)에게 필요한 구별은 "확인됐다 vs 못
+# 됐다"뿐이고, 원인은 위에서 이미 찍은 Write-Host 진단 줄로 남는다.
+# ⛔자동 재전달은 하지 않는다 -- 이 블록은 진단을 찍고 비-영 종료코드로 끝날
+# 뿐, 배달을 다시 시도하는 어떤 호출도 추가하지 않는다.
+if ($confirmExit -in @(1, 2, 3)) {
+  Write-Host "[4/4] 착수 확인 결과가 성공이 아니다 -- 종료코드=$confirmExit (1=NOT_STARTED, 2=COLLECTION_FAILED, 3=STALLED_AFTER_START)"
+  Write-Host "[4/4] 배달 자체는 이미 이뤄졌다(dispatch 완료) -- 이 실행을 성공으로 취급하지 마라."
+  Write-Host "[4/4] 이 스크립트는 5 로 끝난다(0=정상 진행 · 4=착수확인 인자계약 위반 · 5=착수 확인 결과 미성공)."
+  exit 5
+}

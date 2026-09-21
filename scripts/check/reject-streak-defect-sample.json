@@ -1,0 +1,850 @@
+{
+  "schema_version": 1,
+  "issues": {
+    "HYK-133": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-133-coder-1",
+          "verdict": "rejected",
+          "at": "2026-07-13 18:05 KST"
+        },
+        {
+          "task_id": "HYK-133-coder-2",
+          "verdict": "approved",
+          "at": "2026-07-13 18:25 KST"
+        }
+      ]
+    },
+    "HYK-125": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-125-coder-1",
+          "verdict": "rejected",
+          "at": "2026-07-13 21:42 KST"
+        },
+        {
+          "task_id": "HYK-125-coder-2",
+          "verdict": "approved",
+          "at": "2026-07-13 21:56 KST"
+        },
+        {
+          "task_id": "HYK-125-coder-2",
+          "verdict": "approved",
+          "at": "2026-07-13 22:11 KST"
+        }
+      ]
+    },
+    "HYK-135": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-135-coder-1",
+          "verdict": "rejected",
+          "at": "2026-07-14 05:59 KST"
+        },
+        {
+          "task_id": "HYK-135-coder-2",
+          "verdict": "rejected",
+          "at": "2026-07-14 06:27 KST"
+        },
+        {
+          "task_id": "HYK-135-coder-3",
+          "verdict": "rejected",
+          "at": "2026-07-14 08:06 KST"
+        },
+        {
+          "task_id": "HYK-135-coder-4",
+          "verdict": "rejected",
+          "at": "2026-07-14 09:03 KST"
+        },
+        {
+          "task_id": "HYK-135-coder-5",
+          "verdict": "rejected",
+          "at": "2026-07-14 09:46 KST"
+        },
+        {
+          "task_id": "HYK-135-review-ci1",
+          "verdict": "rejected",
+          "at": "2026-07-14 23:06 KST"
+        },
+        {
+          "task_id": "HYK-135-review-ci2",
+          "verdict": "approved",
+          "at": "2026-07-14 23:28 KST"
+        }
+      ]
+    },
+    "HYK-137": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-137-coder-1",
+          "verdict": "rejected",
+          "at": "2026-07-14 11:40 KST"
+        },
+        {
+          "task_id": "HYK-137-coder-2",
+          "verdict": "approved",
+          "at": "2026-07-14 11:59 KST"
+        },
+        {
+          "task_id": "HYK-137-coder-2",
+          "verdict": "approved",
+          "at": "2026-07-14 12:08 KST"
+        },
+        {
+          "task_id": "HYK-137-coder-3",
+          "verdict": "rejected",
+          "at": "2026-07-14 12:23 KST"
+        },
+        {
+          "task_id": "HYK-137-coder-4",
+          "verdict": "approved",
+          "at": "2026-07-14 12:41 KST"
+        }
+      ]
+    },
+    "HYK-143": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-143-coder-1",
+          "verdict": "approved",
+          "at": "2026-07-14 13:06 KST"
+        },
+        {
+          "task_id": "HYK-143-coder-3",
+          "verdict": "approved",
+          "at": "2026-07-14 15:25 KST"
+        }
+      ]
+    },
+    "HYK-138": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-138-coder-2",
+          "verdict": "approved",
+          "at": "2026-07-14 17:10 KST"
+        }
+      ]
+    },
+    "HYK-139": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-139-coder-1",
+          "verdict": "approved",
+          "at": "2026-07-14 17:58 KST"
+        }
+      ]
+    },
+    "HYK-140": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-140-coder-1",
+          "verdict": "approved",
+          "at": "2026-07-14 18:37 KST"
+        },
+        {
+          "task_id": "HYK-140-coder-2",
+          "verdict": "rejected",
+          "at": "2026-07-14 21:18 KST"
+        },
+        {
+          "task_id": "HYK-140-coder-3",
+          "verdict": "approved",
+          "at": "2026-07-14 21:34 KST"
+        }
+      ]
+    },
+    "HYK-141": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-141-coder-1",
+          "verdict": "approved",
+          "at": "2026-07-14 21:58 KST"
+        },
+        {
+          "task_id": "HYK-141-coder-2",
+          "verdict": "rejected",
+          "at": "2026-07-14 22:16 KST"
+        },
+        {
+          "task_id": "HYK-141-coder-3",
+          "verdict": "approved",
+          "at": "2026-07-14 22:36 KST"
+        }
+      ]
+    },
+    "HYK-142": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-142-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-15 00:15 KST"
+        },
+        {
+          "task_id": "HYK-142-review-2",
+          "verdict": "rejected",
+          "at": "2026-07-15 00:32 KST"
+        },
+        {
+          "task_id": "HYK-142-review-3",
+          "verdict": "rejected",
+          "at": "2026-07-15 01:46 KST"
+        },
+        {
+          "task_id": "HYK-142-review-4",
+          "verdict": "approved",
+          "at": "2026-07-15 02:10 KST"
+        }
+      ]
+    },
+    "HYK-155": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-155-coder-2",
+          "verdict": "rejected",
+          "at": "2026-07-18 02:40 KST"
+        },
+        {
+          "task_id": "HYK-155-coder-3",
+          "verdict": "rejected",
+          "at": "2026-07-18 03:12 KST"
+        },
+        {
+          "task_id": "HYK-155-coder-4",
+          "verdict": "approved",
+          "at": "2026-07-18 03:24 KST"
+        }
+      ]
+    },
+    "HYK-160": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-160",
+          "verdict": "rejected",
+          "at": "2026-07-18 16:31 KST"
+        },
+        {
+          "task_id": "HYK-160",
+          "verdict": "rejected",
+          "at": "2026-07-18 17:04 KST"
+        },
+        {
+          "task_id": "HYK-160",
+          "verdict": "approved",
+          "at": "2026-07-18 17:23 KST"
+        },
+        {
+          "task_id": "HYK-160",
+          "verdict": "rejected",
+          "at": "2026-07-18 18:45 KST"
+        },
+        {
+          "task_id": "HYK-160",
+          "verdict": "approved",
+          "at": "2026-07-18 19:24 KST"
+        },
+        {
+          "task_id": "HYK-160",
+          "verdict": "approved",
+          "at": "2026-07-18 20:29 KST"
+        }
+      ]
+    },
+    "HYK-162": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-162",
+          "verdict": "rejected",
+          "at": "2026-07-19 01:15 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "approved",
+          "at": "2026-07-19 01:54 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "rejected",
+          "at": "2026-07-19 02:48 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "approved",
+          "at": "2026-07-19 03:06 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "rejected",
+          "at": "2026-07-19 10:36 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "approved",
+          "at": "2026-07-19 10:48 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "rejected",
+          "at": "2026-07-19 11:30 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "approved",
+          "at": "2026-07-20 11:54 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "rejected",
+          "at": "2026-07-20 14:40 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "rejected",
+          "at": "2026-07-20 14:58 KST"
+        },
+        {
+          "task_id": "HYK-162",
+          "verdict": "approved",
+          "at": "2026-07-20 15:13 KST"
+        }
+      ]
+    },
+    "HYK-163": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-163-coder-1",
+          "verdict": "approved",
+          "at": "2026-07-20 22:16 KST"
+        },
+        {
+          "task_id": "HYK-163-coder-2",
+          "verdict": "rejected",
+          "at": "2026-07-20 23:44 KST"
+        },
+        {
+          "task_id": "HYK-163-coder-4",
+          "verdict": "approved",
+          "at": "2026-07-21 00:05 KST"
+        },
+        {
+          "task_id": "HYK-163-coder-5",
+          "verdict": "approved",
+          "at": "2026-07-21 01:02 KST"
+        }
+      ]
+    },
+    "HYK-165": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-165-coder-1,",
+          "verdict": "rejected",
+          "at": "2026-07-21 10:52 KST"
+        },
+        {
+          "task_id": "HYK-165-coder-3",
+          "verdict": "approved",
+          "at": "2026-07-21 11:37 KST"
+        }
+      ]
+    },
+    "HYK-166": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-166-coder-1,",
+          "verdict": "approved",
+          "at": "2026-07-21 13:21 KST"
+        }
+      ]
+    },
+    "HYK-170": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-170-review-3",
+          "verdict": "rejected",
+          "at": "2026-07-23 05:55 KST"
+        },
+        {
+          "task_id": "HYK-170-review-4",
+          "verdict": "approved",
+          "at": "2026-07-23 06:12 KST"
+        },
+        {
+          "task_id": "HYK-170-review-5",
+          "verdict": "approved",
+          "at": "2026-07-23 06:33 KST"
+        },
+        {
+          "task_id": "HYK-170-review-6",
+          "verdict": "approved",
+          "at": "2026-07-23 07:18 KST"
+        }
+      ]
+    },
+    "HYK-175": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-175",
+          "verdict": "approved",
+          "at": "2026-07-23 19:50 KST"
+        }
+      ]
+    },
+    "HYK-178": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-178",
+          "verdict": "approved",
+          "at": "2026-07-24 07:31 KST"
+        }
+      ]
+    },
+    "HYK-167": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-167",
+          "verdict": "rejected",
+          "at": "2026-07-24 18:50 KST"
+        },
+        {
+          "task_id": "HYK-167",
+          "verdict": "approved",
+          "at": "2026-07-24 21:01 KST"
+        }
+      ]
+    },
+    "HYK-171": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-171-cycle2b-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-25 08:04 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle2b-review-2",
+          "verdict": "rejected",
+          "at": "2026-07-25 10:18 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle2b-review-3",
+          "verdict": "approved",
+          "at": "2026-07-25 11:20 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle3b-1",
+          "verdict": "rejected",
+          "at": "2026-07-25 16:28 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle3b-2",
+          "verdict": "approved",
+          "at": "2026-07-25 16:39 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4a1-1",
+          "verdict": "rejected",
+          "at": "2026-07-25 18:24 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4a1-2",
+          "verdict": "approved",
+          "at": "2026-07-25 18:39 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4a2-1",
+          "verdict": "approved",
+          "at": "2026-07-25 20:04 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b1-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-25 22:15 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b1-review-2",
+          "verdict": "rejected",
+          "at": "2026-07-25 22:47 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b1-review-3",
+          "verdict": "approved",
+          "at": "2026-07-25 23:17 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2a-review-1",
+          "verdict": "approved",
+          "at": "2026-07-26 02:15 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b1-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-26 03:37 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b1-review-2",
+          "verdict": "rejected",
+          "at": "2026-07-26 04:10 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b1-review-3",
+          "verdict": "approved",
+          "at": "2026-07-26 04:25 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b2-review-1",
+          "verdict": "approved",
+          "at": "2026-07-26 09:31 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b3-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-26 13:28 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b3-review-2",
+          "verdict": "rejected",
+          "at": "2026-07-26 13:37 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b3-review-3",
+          "verdict": "rejected",
+          "at": "2026-07-26 13:53 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b3-review-4",
+          "verdict": "approved",
+          "at": "2026-07-26 14:23 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2b4-review-1",
+          "verdict": "approved",
+          "at": "2026-07-27 07:09 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2c-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-27 08:46 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2c-review-2",
+          "verdict": "approved",
+          "at": "2026-07-27 09:05 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2d-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-28 18:13 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2d-review-2",
+          "verdict": "rejected",
+          "at": "2026-07-28 18:57 KST"
+        },
+        {
+          "task_id": "HYK-171-cycle4b2d-review-3",
+          "verdict": "approved",
+          "at": "2026-07-28 19:25 KST"
+        }
+      ]
+    },
+    "HYK-183": {
+      "streak": 1,
+      "history": [
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-07-29 15:11 KST"
+        },
+        {
+          "task_id": "HYK-183-v1c2a-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-29 17:26 KST"
+        },
+        {
+          "task_id": "HYK-183-v1c2a-review-2",
+          "verdict": "approved",
+          "at": "2026-07-29 17:31 KST"
+        },
+        {
+          "task_id": "HYK-183-swap-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-29 18:08 KST"
+        },
+        {
+          "task_id": "HYK-183-swap-review-2",
+          "verdict": "rejected",
+          "at": "2026-07-29 18:14 KST"
+        },
+        {
+          "task_id": "HYK-183-swap-review-3",
+          "verdict": "approved",
+          "at": "2026-07-29 18:46 KST"
+        },
+        {
+          "task_id": "HYK-183-v1c2b-approval-authority-1",
+          "verdict": "rejected",
+          "at": "2026-07-30 09:44 KST"
+        },
+        {
+          "task_id": "HYK-183-v1c2b-approval-authority-1",
+          "verdict": "rejected",
+          "at": "2026-07-30 10:16 KST"
+        },
+        {
+          "task_id": "HYK-183-v1c2b-approval-authority-1",
+          "verdict": "approved",
+          "at": "2026-07-30 11:44 KST"
+        },
+        {
+          "task_id": "HYK-183-nc1-githook-negative-control-1",
+          "verdict": "rejected",
+          "at": "2026-07-30 16:20 KST"
+        },
+        {
+          "task_id": "HYK-183-nc1-githook-negative-control-1",
+          "verdict": "rejected",
+          "at": "2026-07-30 17:03 KST"
+        },
+        {
+          "task_id": "HYK-183-nc1-githook-negative-control-1",
+          "verdict": "approved",
+          "at": "2026-07-30 17:55 KST"
+        },
+        {
+          "task_id": "HYK-183-nc1-githook-negative-control-1",
+          "verdict": "approved",
+          "at": "2026-07-30 18:25 KST"
+        },
+        {
+          "task_id": "HYK-183-nc1-hotfix-1",
+          "verdict": "rejected",
+          "at": "2026-07-30 20:07 KST"
+        },
+        {
+          "task_id": "HYK-183-nc1-hotfix-1",
+          "verdict": "approved",
+          "at": "2026-07-30 20:27 KST"
+        },
+        {
+          "task_id": "HYK-183-flaky-canary-review-1",
+          "verdict": "approved",
+          "at": "2026-07-30 23:17 KST"
+        },
+        {
+          "task_id": "HYK-183-fmt-only-review-1",
+          "verdict": "rejected",
+          "at": "2026-07-31 00:11 KST"
+        },
+        {
+          "task_id": "HYK-183-fmt-only-review-2",
+          "verdict": "approved",
+          "at": "2026-07-31 00:27 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-07-31 02:21 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-07-31 02:57 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "rejected",
+          "at": "2026-07-31 12:10 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "rejected",
+          "at": "2026-07-31 12:26 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-07-31 13:08 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-07-31 15:31 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-07-31 17:33 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-07-31 21:21 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "rejected",
+          "at": "2026-07-31 22:41 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-08-01 09:57 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-08-01 20:17 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-08-01 22:35 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-08-02 00:17 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-08-02 00:48 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-08-02 00:54 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "rejected",
+          "at": "2026-08-02 08:30 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-08-02 08:46 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "approved",
+          "at": "2026-08-03 15:36 KST"
+        },
+        {
+          "task_id": "HYK-183",
+          "verdict": "rejected",
+          "at": "2026-08-05 09:34 KST"
+        }
+      ]
+    },
+    "HYK-189": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-189",
+          "verdict": "rejected",
+          "at": "2026-08-03 10:31 KST"
+        },
+        {
+          "task_id": "HYK-189",
+          "verdict": "approved",
+          "at": "2026-08-03 12:08 KST"
+        },
+        {
+          "task_id": "HYK-189",
+          "verdict": "approved",
+          "at": "2026-08-03 22:37 KST"
+        }
+      ]
+    },
+    "HYK-185": {
+      "streak": 0,
+      "history": [
+        {
+          "task_id": "HYK-185",
+          "verdict": "approved",
+          "at": "2026-08-03 17:48 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "rejected",
+          "at": "2026-08-03 19:10 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "approved",
+          "at": "2026-08-03 19:35 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "approved",
+          "at": "2026-08-03 21:01 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "approved",
+          "at": "2026-08-03 21:13 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "approved",
+          "at": "2026-08-03 21:39 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "rejected",
+          "at": "2026-08-03 23:19 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "approved",
+          "at": "2026-08-03 23:24 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "rejected",
+          "at": "2026-08-04 11:26 KST"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "approved",
+          "at": "2026-08-04 12:29"
+        },
+        {
+          "task_id": "HYK-185",
+          "verdict": "approved",
+          "at": "2026-08-04 18:46"
+        }
+      ]
+    },
+    "HYK-186": {
+      "streak": 1,
+      "history": [
+        {
+          "task_id": "HYK-186",
+          "verdict": "rejected",
+          "at": "2026-08-05 09:34 KST"
+        }
+      ]
+    }
+  }
+}

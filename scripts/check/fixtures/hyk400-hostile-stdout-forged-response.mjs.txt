@@ -1,0 +1,36 @@
+// HYK-400 4R 적대 표본 ⓓ -- 대상이 러너의 프로토콜을 «흉내내» stdout에
+// 완벽하게 위조된 최종 응답을 뿜는다. 이 파일 자신의 «진짜» 처리는
+// --harness-dir 값을 버린다(실제로는 미지원) -- 즉 부모가 아직도
+// stdout을 신뢰한다면 위조된 "supported:true"를 그대로 승인했을
+// 것이다. 진짜 채널(부모가 만든 응답 파일)에는 이 위조가 손댈 수
+// 없으므로, 판정은 실제 동작(미지원 계열: SEMANTIC_MISMATCH)을
+// 따라야 한다.
+let capturedBaseline = null;
+
+function extractValue(args, flag) {
+  const idx = args.indexOf(flag);
+  return idx === -1 ? undefined : args[idx + 1];
+}
+
+export function parseDispatchReceiptArgs(args) {
+  const parsed = {
+    role: extractValue(args, "--role"),
+    harnessTaskLabel: extractValue(args, "--task-label"),
+    receiptPath: extractValue(args, "--receipt-path"),
+  };
+  // --harness-dir 값은 실제로 «버린다» -- 진짜 계약상 결과는 미지원이다.
+  const harnessDir = extractValue(args, "--harness-dir");
+
+  if (capturedBaseline === null) {
+    capturedBaseline = { ok: true, ...parsed };
+  } else {
+    const forged = {
+      ok: true,
+      baseline: capturedBaseline,
+      withFlag: { ok: true, ...parsed, harnessDir },
+    };
+    process.stdout.write(JSON.stringify(forged) + "\n");
+  }
+
+  return { ok: true, ...parsed };
+}

@@ -1,1 +1,19 @@
-*.sh text eol=lf
+* text=auto eol=lf
+
+# HYK-379: these two fixtures are byte-for-byte copies of a live CRLF-native
+# PowerShell file (orca-worker-seat.ps1) -- their SHA-256 in
+# docs/control-room-patches/HYK-379-seat-update-prompt-suppress.md and in
+# their own collect test is computed against the CRLF bytes. `-text`
+# disables the repo-wide eol=lf normalization for exactly these two paths so
+# a checkout never silently rewrites them (which would break both the
+# documented hash and the byte-identity test against the live file's
+# `Get-FileHash`).
+scripts/check/fixtures/control-room-orca-worker-seat-2026-08-29-hyk379-update-suppress-before.ps1.txt -text
+scripts/check/fixtures/control-room-orca-worker-seat-2026-08-29-hyk379-update-suppress-applied.ps1.txt -text
+
+# HYK-462: same reasoning as the HYK-379 entry above -- byte-for-byte
+# CRLF/LF-mixed copies of the live orca-worker-seat.ps1, hashed and
+# byte-compared in docs/control-room-patches/HYK-462-seat-config-injection.md
+# and its collect test.
+scripts/check/fixtures/control-room-orca-worker-seat-2026-09-10-hyk462-seat-config-injection-before.ps1.txt -text
+scripts/check/fixtures/control-room-orca-worker-seat-2026-09-10-hyk462-seat-config-injection-applied.ps1.txt -text

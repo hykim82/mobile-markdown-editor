@@ -1,0 +1,170 @@
+task_id: HYK-465-467-channel-loss-1
+for: HYK-465 + HYK-467
+role: CODER
+head_commit: 0bb66d0126380e43c6a2d1861c3640d8cd38ebb0
+
+# HYK-465 + HYK-467 1R — 결과
+
+## 0. 요약
+
+**A(HYK-465)**: `dispatch-gate-decision.mjs`에 `bestEffortInjectResultPaths`를 새로 추가했다 — 기존 `bestEffortStampDroppedAt`(dropped_at 기계 스탬프)와 같은 best-effort/비파괴 패턴으로, 배달 게이트가 도는 매 라운드마다 task 파일에 (a) 작성자 결과 파일 절대경로 (b) 러너 영수증 절대경로 (c) ".harness/는 git-ignore라 커밋 diff에 안 나온다"는 사실 한 줄 (d) "검토/작업 뒤 워크트리를 옮기지 마라" 규율 한 줄을 기계로 박는다. 멱등(재실행 시 중복 없음), ALLOW/REJECT 무관하게 항상 돈다(dropped_at과 동일 관례).
+
+**B(HYK-467)**: `scripts/check/ci-status.mjs`(CI 폴링 감시기)는 이미 이전 라운드(HYK-334)에서 이 문제를 정확히 해결해 뒀다는 것을 실측 확인했다(재구현하지 않음, 아래 §1 참조). `scripts/supervisor/watch-run.mjs`(좌석 조회 감시기)에 실제로 있던 동형 결함을 찾아 고쳤다 — 감지기 서브프로세스가 크래시(비정상 종료 + 파싱 불가 stdout)했을 때 `verdict`/`reasonCode`가 둘 다 정상적인 "관측할 것 없음" 상태와 같은 `"NONE"`/`null`("UNKNOWN")로 접혀 grep으로 구별이 안 됐다 — 이제 `DETECTOR_STDOUT_UNPARSEABLE`이라는 구별되는 값으로 발화한다. 추가로 §B-3(예산 합계)을 `scripts/check/probe-budget.mjs`(신규, 공유 파일 기반 크로스프로세스 카운터)로 구현해 ci-status.mjs의 실제 호출 경로에 결선했고, §B-4(전수 목록화)를 `docs/hyk467-or-fold-inventory.md`로 남겼다.
+
+## 1. A — 완료 조건 대조 (coder-task.md §A-4)
+
+### 1) 실측: 새 배달 1회에서 경로가 실물로 박혀 나옴
+
+지정 시험(`dispatch-gate-result-path-inject.test.mjs` (a))의 원문:
+```
+dispatch-gate-decision: result-path block machine-injected (HYK-465) -- <tmp>/coder-task.md -> result_file=<tmp>/coder.md, runner_receipt_file=<tmp>/runner-receipt.json
+```
+주입된 파일 내용(발췌, 실측):
+```
+task_id: HYK-9201-inject-1
+dropped_at: 2026-09-14 10:58 KST
+result_file: C:\Users\...\coder.md
+runner_receipt_file: C:\Users\...\runner-receipt.json
+harness_gitignore_note: .harness/ 는 git-ignore라 커밋 diff에 절대 안 나온다 -- 검토는 위 절대경로 파일을 직접 열어 확인하라(HYK-465 기계 주입, 손 기억 의존 금지).
+worktree_discipline: 작업/검토가 끝나면 DONE 을 찍기 «전»에 워크트리를 작업/검토한 커밋에 둔 채로 두라 -- 뒷정리로 HEAD 를 옮기면 소비가 막힌다(HYK-465 기계 주입).
+role: CODER
+...
+```
+
+### 2) 음성 확인 (★필수, "주입이 일을 한다"를 증명)
+
+시험 (e)가 정확히 이걸 한다: 2026-09-10 실사고와 같은 모양(`task_id`/`role`/`for`만 있고 결과 경로 언급이 전혀 없는 손 작성 지시서)을 만들어, **게이트를 거치기 전에는** `hasDiscoverableResultPathSignal()`(결과 파일의 절대경로가 텍스트에 있는지)이 `false`임을 먼저 확인하고, **게이트를 거친 뒤에는** `true`가 됨을 대조한다. 즉 "검토자가 이 지시서 텍스트만 보고는 산출물을 못 찾는다"는 실사고 상태를 재현한 뒤, 주입이 그걸 없앤다는 것을 직접 보였다.
+
+### 3) 되돌림 변이
+
+`bestEffortInjectResultPaths(taskPath, args)` 호출을 되돌리면(제거) 지정 시험 5개 중 4개(a/b/d/e)가 즉시 RED(원문: "insertion must be visible...", "Expected values to be strictly equal", "injection must still have run...", "the reviewer-discoverable absolute-path signal must now exist"). 복원 후 `sha256sum scripts/check/dispatch-gate-decision.mjs` = `274a6101aba2109957740df96712bcc8fecd3b288fce69331f08d3f377f3c2a8`(변이 전과 바이트 동일, 재확인).
+
+### 설계 판단 (요구된 것)
+
+- **주입 지점**: `dispatch-gate-decision.mjs`(게이트가 도는 자리) 선택 — `dispatch-worker.ps1`(관제실 라이브 파일, 읽기 전용) 쪽에 넣으면 라이브 파일을 고쳐야 하는데, 이 게이트는 이미 저장소 안에서 `bestEffortStampDroppedAt`으로 같은 종류의 기계 주입을 검증된 패턴으로 하고 있어 그 옆에 대칭적으로 추가하는 것이 최소 변경이었다.
+- **실행 순서**: `bestEffortInjectResultPaths`를 `bestEffortStampDroppedAt`«보다 먼저» 부른다 — 후자의 내부 라운드 스냅숏(`bestEffortSnapshotRoundTaskFile`)이 "자신이 항상 마지막 재작성"이라는 전제를 갖고 있어(`dispatch-gate-round-snapshot.test.mjs`), 순서를 반대로 하면 그 시험 2개가 깨졌다(직접 실측, 되돌려 확인 후 순서 확정).
+- **기존 시험 영향**: `dispatch-gate-dropped-at-stamp.test.mjs`의 두 fixture(정확한 바이트 비교를 하는 시험)가 새 주입으로 깨져서, 그 두 fixture에 `result_file:`을 미리 심어 새 주입을 무력화(no-op)시키는 최소 수정을 했다 — 그 시험들의 관심사(dropped_at 재작성 자체)와 무관한 새 기능이 끼어들지 않게 격리.
+
+## 2. B — 완료 조건 대조 (coder-task.md §B-5)
+
+### 1) 한도 초과 합성 주입 -> "오류" 발화, NO_RUNS_YET류로 안 감 (ⓐ)
+
+`ci-status.test.mjs`(기존, 이 라운드가 추가하지 않음) 실측: `403 + X-RateLimit-Remaining:0` -> `verdict=UNKNOWN, reasonCode=RATE_LIMIT_EXHAUSTED`, `PENDING`이 아님을 명시 단언. 이 감시기에는 애초에 "NO_RUNS_YET"류 접기가 없다(§B-4 표, 0건).
+
+### 2) 반대 방향: 진짜 "아직 안 뜸" -> 여전히 PENDING
+
+같은 파일 기존 시험 `status: 'queued'/'in_progress'/'waiting'/'requested'/'pending' -> 여전히 PENDING`(5개 개별 단언) — 회귀 방지로 이미 고정돼 있다.
+
+### 3) 좌석 조회 실패(ⓑ)도 "유휴"와 다른 문장
+
+`watch-run.test.mjs`에 추가한 시험 3개, 원문:
+```
+✔ HYK-467: 감지기가 비정상 종료(exit!=0)하면서 stdout이 파싱 불가(빈 문자열)이면, 정상 판정 어휘(...)나 일반 'UNKNOWN'이 아닌 구별되는 오류 신호로 발화한다 -- 유휴/정상과 다른 문장
+✔ HYK-467 회귀: 감지기가 exit 0(정상)이지만 stdout이 파싱 불가(빈 문자열)여도 -- 우연히 조용한 성공으로 보이지 않는다
+✔ HYK-467 대조(회귀 0): 감지기가 정상 종료 + 유효 JSON을 내면 여전히 기존 verdict 어휘 그대로다
+```
+`result.detectorResult.verdict === "DETECTOR_STDOUT_UNPARSEABLE"`(≠ `"UNKNOWN"`), `reasonCode`도 동일 값(≠ `"NONE"`) — 두 값 모두 실측 확인.
+
+### 4) 예산 합계가 "감시기 2개 이상 동시 가동"에서 실제로 합산
+
+`ci-status.test.mjs`에 추가한 시험, 원문 요지:
+```
+✔ ★핵심: 서로 다른 두 fetchCheckRuns 호출자(=두 감시기)가 같은 probeBudgetPath를 공유하면, 실제 GitHub 호출 없이 예산 소진이 발화한다
+  -- 감시기 A: capPerHour=2 로 1회 호출(합계 1) -> GREEN
+  -- 감시기 B(별개 호출자, 같은 파일): 1회 호출(합계 2, 상한 도달) -> GREEN
+  -- 감시기 A: 2번째 호출 -> verdict=UNKNOWN, reasonCode=LOCAL_PROBE_BUDGET_EXHAUSTED, 실제 fetchFn 호출 안 함(realCallCount==2 그대로)
+✔ pollCiStatus도 매 폴링 시도마다 같은 probeBudgetPath로 예산을 소비한다
+  -- capPerHour=3, maxAttempts=10 -> 실제 호출은 정확히 3회에서 멈춤(UNKNOWN, 즉시 중단 §3-3 계약)
+```
+`probe-budget.mjs`의 코어 시험(`probe-budget.test.mjs`, 10개)이 판정 로직 자체(창 가지치기·소진 시 미기록·손상 파일 안전 처리)를 별도로 고정한다.
+
+### 5) B-4 목록 산출물
+
+`docs/hyk467-or-fold-inventory.md` — 이 이슈가 실제로 겨눈 세 파일(`ci-status.mjs`·`watch-run.mjs`·`orch-stall-detect.mjs`, 마지막은 읽기 전용)의 `?? []`/`|| []`/`?? "NONE"` 류 40건을 전수 나열, 각 줄에 판정(안전/실사고)과 "삼킬 수 있는 실패" 한 줄. 실제 위험으로 확정한 것은 `watch-run.mjs:1397` 1건뿐 — 이 라운드가 고쳤다.
+
+## 3. 되돌림 변이 (B) + 바이트 동일 복원
+
+`parseDetectorStdout`의 catch 분기에서 `DETECTOR_STDOUT_UNPARSEABLE_VERDICT` 오버라이드를 제거(원래 `emptyDetectorFields()`만 반환)하면:
+```
+✖ HYK-467: ... (1/1)
+✖ HYK-467 회귀: ... (1/1)
+```
+두 시험 모두 RED. 원본 복원 후 `sha256sum scripts/supervisor/watch-run.mjs` = `391a2029577ba5972676ffc9f9115ae93a1bc8b245c75814da7905ed90ba8230`(변이 전과 바이트 동일, 재확인) → 전체 23개 재실행 전부 PASS.
+
+## 4. 지정 실행선 원문
+
+```
+$ node --test scripts/check/dispatch-gate-result-path-inject.test.mjs scripts/supervisor/watch-run.test.mjs scripts/check/probe-budget.test.mjs scripts/check/ci-status.test.mjs; echo "exit=$?"
+...
+ℹ tests 80
+ℹ pass 80
+ℹ fail 0
+exit=0
+```
+(1b_exec_line 헤더 예시값 `dispatch-gate-decision.test.mjs scripts/supervisor/watch-run.test.mjs` 대신, 이 라운드가 실제로 만든 시험 파일명 4개로 바꿔 적었다 — coder-task.md §C-3 지시대로.)
+
+## 5. 품질/범위
+
+```
+$ node scripts/check/quality-check.mjs --mode ci --base-sha 66441bd8
+[quality-check:checked] quality-check: 9 file(s) linted, 10 file(s) format-checked -- all clean
+```
+`git diff --check master...HEAD`: 이 라운드가 만든 파일 10개에는 경고 0 — 경고는 전부 `control-room-orca-worker-seat-...ps1.txt`(HYK-462 라운드의 CRLF 보존 fixture, 이번 라운드가 안 건드림)의 "trailing whitespace" 오탐이다(HYK-462 2R coder.md가 이미 문서화한 동일 부작용, 이 라운드가 재확인만 함).
+
+`git diff --name-only master...HEAD`에 `scripts/check/selfcheck-smoke.mjs`/`.test.mjs`가 보이는 건 이 라운드 이전(`HYK-466`)에 이미 merge된 파일이다(`git log`로 확인) — 이 라운드가 만들거나 건드리지 않았다.
+
+**범위 밖 무접촉**: `admission-completion-worktree-isolation.test.mjs`, `HYK-464`/`HYK-460` 관련 파일 — grep/git diff로 확인, 이 커밋의 diff에 등장하지 않는다.
+
+## 6. 전체 러너 원문 (분리 프로세스, 영수증 회수)
+
+```json
+{
+  "schema_version": 1,
+  "runner_exit": 1,
+  "tests": 6324,
+  "pass": 6317,
+  "fail": 1,
+  "skip": 6,
+  "head_commit": "0bb66d0126380e43c6a2d1861c3640d8cd38ebb0",
+  "finished_at": "2026-09-14 11:24:12 KST"
+}
+```
+
+**실패 1건(로컬 재현, 재시도하지 않음 — coder-task.md §3 경고 그대로 보고)**:
+```
+test at scripts\relay\adapters\terminal-show-adapter.test.mjs:232:1
+AssertionError [ERR_ASSERTION]: terminal-show-adapter.test.mjs must leave the real worktree exactly as it found it
++ actual - expected
++ '?? scripts/check/hyk466-contamination-fixture.tmp\n'
+- ''
+```
+이 시험은 이 라운드가 건드린 어떤 파일과도 무관하다(`ci-status.mjs`/`watch-run.mjs`/`dispatch-gate-decision.mjs`/`probe-budget.mjs` 어디에도 없음) — 격리 클론 안에서 "실물 워크트리가 정확히 원래 상태로 남았는가"를 검사하는 시험이, **다른(HYK-466) 시험이 남긴 임시 fixture 파일**을 오염으로 잡은 것으로 읽힌다(파일명 자체가 `hyk466-contamination-fixture.tmp`). coder-task.md §3-4가 미리 경고한 "부하·환경 민감 실패 계열(HYK-463)"과 같은 모양이라 판단해 재시도하지 않고 그대로 보고한다. ORCH 판정 대상.
+
+러너는 커밋(`0bb66d0`) **뒤**에 1회만 돌렸고, 러너 종료 후 어떤 커밋도 하지 않았다(`git status --short` = 완전히 clean).
+
+## 7. 완료 조건 CI 축
+
+이 라운드는 흉내 낸 조건(위 §1/§2 실측)까지만 스스로 확인했다 — 실제 리눅스 판정은 이 조각의 PR CI 결과로 ORCH가 이슈 본문·봉투에 기록한다(coder-task.md §C-5, 리눅스에서 직접 돌리라는 뜻이 아님, Docker 안 엶).
+
+## 8. 정직 한계
+
+- **A가 못 막는 것**: ★경로를 받고도 «안 읽는» 검토자 — 이 라운드는 경로를 지시서에 «넣는» 것까지만 보장한다. 검토자가 그 줄을 무시하거나 다른 이유로 결과를 못 찾는 경우(예: 결과 파일 자체가 아직 안 만들어진 진짜 미완료 라운드)는 이 기계 주입이 해결할 문제가 아니다. 또한 이 주입은 **결과 파일이 실제로 존재하는지는 확인하지 않는다** — 경로만 계산해서 적을 뿐, `existsSync` 검사가 없다(고의: 게이트가 도는 시점엔 아직 워커가 작업을 시작도 안 했을 수 있어 "아직 없다"가 정상이다).
+- **B가 못 막는 것**: ★오류를 발화했는데 사람·ORCH가 안 읽는 경우 — `DETECTOR_STDOUT_UNPARSEABLE`이라는 구별되는 문자열이 watch.log에 찍혀도, 아무도 그 로그를 안 보면(또는 자동 경보로 안 이어지면) 소용없다. 이 라운드는 "구별 가능한 신호를 만드는 것"까지만 하고, "그 신호를 누군가 실제로 소비하게 하는 것"(예: wake/escalation 축과의 결선)은 범위 밖으로 남긴다 — 그런 결선이 필요하다면 별도 라운드.
+- **B-3 예산 추적의 한계**: 진짜 파일 잠금(flock)이 없다 — 두 프로세스가 정확히 같은 밀리초에 읽고 쓰면 레이스가 날 수 있다(probe-budget.mjs 헤더에 명시). 또한 이 추적은 **ci-status.mjs를 통해서만** 걸린다 — 누군가 GitHub API를 다른 도구(예: `gh` CLI, 손으로 친 `curl`)로 직접 부르면 이 예산 카운터를 아예 거치지 않는다(정직 한계, 이 라운드는 "이 저장소의 이 CLI를 통한 호출"만 계량할 수 있다).
+- **Windows↔CI(Linux·Node20) 차이**: 이 CODER는 윈도우+Node 26에서 돌았다. 로컬 초록(4번 지정 실행선 80/80, 6번 전체 러너 6317/6324 — 위 1건 제외)은 "이 환경에서 통과했다"까지만 주장한다. CI도 초록일 것이라고 이 문서는 주장하지 않는다.
+- ★**「내가 고치는 도구가 곧 내 판정을 나르는 도구다」**: `ci-status.mjs`와 `probe-budget.mjs`는 이 이슈 자체가 고치는 대상이면서, 동시에 이 저장소의 PR CI 상태를 감시하는 데 쓰일 바로 그 도구다 — 이 라운드의 러너 초록(§6)은 "이 도구의 코드가 문법적으로 옳고 단위시험을 통과한다"만 증명하지, "이 도구가 실전에서 실제 GitHub 응답을 올바로 분류한다"를 증명하지 않는다(모든 시험이 합성 fetchFn을 쓴다, 실제 네트워크 호출 0). 이 도구 자신의 판정이 틀리면, 이 PR을 포함해 앞으로 이 도구가 감시하는 모든 CI 판정이 같이 틀릴 수 있다는 순환 의존을 여기 명시해 둔다.
+
+## 9. 산출물 파일 목록
+
+- `scripts/check/dispatch-gate-decision.mjs`(수정) — `bestEffortInjectResultPaths` 신설 + 호출 배선.
+- `scripts/check/dispatch-gate-result-path-inject.test.mjs`(신규) — 5개 시험.
+- `scripts/check/dispatch-gate-dropped-at-stamp.test.mjs`(수정) — 기존 fixture 2개에 격리용 `result_file:` 사전 삽입.
+- `scripts/supervisor/watch-run.mjs`(수정) — `DETECTOR_STDOUT_UNPARSEABLE_VERDICT` 신설 + `parseDetectorStdout` catch 분기 수리.
+- `scripts/supervisor/watch-run.test.mjs`(수정) — 3개 시험 추가.
+- `scripts/check/ci-status.mjs`(수정) — `CI_REASON_CODE.LOCAL_PROBE_BUDGET_EXHAUSTED` 신설, `fetchCheckRuns`/`pollCiStatus`에 공유 예산 결선.
+- `scripts/check/ci-status.test.mjs`(수정) — 격리용 로컬 래퍼(기존 ~30개 호출부 무변경) + 2개 신규 시험.
+- `scripts/check/probe-budget.mjs`(신규) — 공유 예산 코어+어댑터.
+- `scripts/check/probe-budget.test.mjs`(신규) — 10개 시험.
+- `docs/hyk467-or-fold-inventory.md`(신규) — B-4 목록.
+>>> DONE: CODER @ 2026-09-14 11:26:36 KST
+done_stamped_by: finalize-done

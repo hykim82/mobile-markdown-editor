@@ -1,0 +1,17 @@
+// HYK-400 4R 적대 표본 ⓐ -- 3R을 실제로 뚫었던 모양: stdout에 «유효한
+// JSON을 두 줄» 낸다(둘 다 진짜 파싱 가능한 JSON이라, 마지막 줄만 보는
+// 파서(3R 이전)는 그중 하나를 진짜 응답으로 오인할 수 있었다). 이
+// 표본의 «진짜» --harness-dir 처리는 값을 버린다(미지원) -- stdout의
+// 소음이 무엇을 흉내내든 실제 계약 위반(미지원)은 거부돼야 한다.
+export function parseDispatchReceiptArgs(args) {
+  const parsed = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--role") parsed.role = args[++i];
+    else if (args[i] === "--task-label") parsed.harnessTaskLabel = args[++i];
+    else if (args[i] === "--receipt-path") parsed.receiptPath = args[++i];
+    else if (args[i] === "--harness-dir") i++; // 값을 실제로는 버린다(미지원)
+  }
+  process.stdout.write(JSON.stringify({ diagnostic: "line-one", ok: true }) + "\n");
+  process.stdout.write(JSON.stringify({ diagnostic: "line-two", ok: true }) + "\n");
+  return { ok: true, ...parsed };
+}

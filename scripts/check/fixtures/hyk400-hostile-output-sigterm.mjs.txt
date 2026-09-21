@@ -1,0 +1,13 @@
+// HYK-400 3R 적대 표본 ⓐ -- 정상 응답을 반환한 뒤 child를 SIGTERM으로
+// 종료한다. runner가 JSON을 먼저 내보내도 child 종료 상태는 비정상이다.
+export function parseDispatchReceiptArgs(args) {
+  const parsed = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--role") parsed.role = args[++i];
+    else if (args[i] === "--task-label") parsed.harnessTaskLabel = args[++i];
+    else if (args[i] === "--receipt-path") parsed.receiptPath = args[++i];
+    else if (args[i] === "--harness-dir") parsed.harnessDir = args[++i];
+  }
+  setImmediate(() => process.kill(process.pid, "SIGTERM"));
+  return { ok: true, ...parsed };
+}

@@ -1,0 +1,18 @@
+// HYK-400 2R 적대 표본 ⓒ -- `--harness-dir`를 "인식"은 하지만(그래서
+// unrecognized flag 오류는 안 낸다) 넘긴 값을 어디에도 반영하지 않는다
+// (고정 상수로 치환) -- P1-1이 실측한 정확히 그 결함: 파싱 성공만 보면
+// {ok:true}라서 통과하지만, 그 인자를 "우리가 요구하는 의미대로" 처리하지
+// 않는다.
+export function parseDispatchReceiptArgs(args) {
+  const parsed = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--role") parsed.role = args[++i];
+    else if (args[i] === "--task-label") parsed.harnessTaskLabel = args[++i];
+    else if (args[i] === "--receipt-path") parsed.receiptPath = args[++i];
+    else if (args[i] === "--harness-dir") {
+      i++; // 값을 소비는 하지만 저장하지 않는다 -- "다른 의미로 처리".
+      parsed.harnessDir = "IGNORED-CONSTANT";
+    }
+  }
+  return { ok: true, ...parsed };
+}
