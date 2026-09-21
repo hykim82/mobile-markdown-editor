@@ -178,6 +178,38 @@ test("이미 있는 메모를 전부 지워 빈 문자열이 되면 하드 삭�
   assert.equal((await adapter.get(secondId)).body, "b");
 });
 
+// coder-task.md §1-⑸ · review.md §4 새 P1(HYK-304-storage-3): "짝은 있지만
+// 속이 빈" 마커("****")를 복원이 훼손해 빈 문자열로 만들면, 이 하드 삭제
+// 정책이 "정상적으로" 발동해 멀쩡한 메모가 사라졌다(review.md §4-1). 정책
+// 자체는 죄가 없다 -- restore.mjs 수리로 "****" 가 애초에 빈 문자열이 되지
+// 않으면(§1-⑴) 이 경로는 열리지 않는다. 여기서는 그 전제(빈 판정은
+// «원문 길이 0»에만 걸린다 -- 공백·마커만인 본문은 "비어 있지 않다")를
+// memo-store 시험으로 직접 고정한다.
+test('공백·마커만인 본문은 "비어 있지 않다" -- 하드 삭제되지 않는다', async () => {
+  const adapter = createFakeAdapter();
+  const store = createMemoStore(adapter);
+  await store.onContentChange("a");
+  const id = store.getMemoId();
+
+  store.onContentChange("****"); // 짝은 있지만 속이 빈 마커(review.md §4) -- 디바운스 대기
+  await store.flushImmediate(); // 뒤로가기·백그라운드 전환과 같은 즉시 저장 경로로 확정
+  assert.equal(
+    store.getMemoId(),
+    id,
+    "id 가 그대로여야 한다(하드 삭제되어 새 메모로 갈라지면 안 됨)",
+  );
+  assert.equal((await adapter.get(id)).body, "****");
+
+  store.onContentChange("   "); // 공백만
+  await store.flushImmediate();
+  assert.equal(store.getMemoId(), id);
+  assert.equal((await adapter.get(id)).body, "   ");
+
+  await store.onContentChange(""); // 대조군: 진짜 빈 본문(length === 0)만 하드 삭제
+  assert.equal(store.getMemoId(), null);
+  assert.equal(await adapter.get(id), undefined);
+});
+
 // 회귀 시험(HYK-304-storage-1 실기기 확인 중 실측): Node 의 네이티브
 // setTimeout/clearTimeout 은 `obj.setTimeout(...)` 처럼 다른 객체의
 // 메서드로 불려도 상관하지 않지만, 실제 브라우저의 네이티브 구현은

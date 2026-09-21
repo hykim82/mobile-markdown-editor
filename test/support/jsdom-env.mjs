@@ -22,6 +22,12 @@ globalThis.getComputedStyle = dom.window.getComputedStyle;
 globalThis.CompositionEvent = dom.window.CompositionEvent;
 globalThis.InputEvent = dom.window.InputEvent;
 globalThis.KeyboardEvent = dom.window.KeyboardEvent;
+// current-memo-pointer.mjs 는 전역 `localStorage` 를 바로 참조한다(HYK-304
+// -storage-3 · 런타임 안전판 시험이 app.mjs 의 mountStorage/
+// restoreCurrentMemo 를 이 전역으로 실제로 태워야 해서 추가) -- 없으면
+// ReferenceError 가 그 파일의 try/catch 에 조용히 삼켜져 포인터가 항상
+// null 로 읽힌다.
+globalThis.localStorage = dom.window.localStorage;
 
 export function setNativeSelection(node, offset) {
   if (!node) {
