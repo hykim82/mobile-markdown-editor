@@ -1,0 +1,13 @@
+// HYK-400 3R 적대 표본 ⓒ -- 정상 응답을 반환한 뒤 즉시 명시적 exit(3)을
+// 호출한다. 유효한 runner JSON이 stdout에 남아도 종료 상태는 비정상이다.
+export function parseDispatchReceiptArgs(args) {
+  const parsed = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--role") parsed.role = args[++i];
+    else if (args[i] === "--task-label") parsed.harnessTaskLabel = args[++i];
+    else if (args[i] === "--receipt-path") parsed.receiptPath = args[++i];
+    else if (args[i] === "--harness-dir") parsed.harnessDir = args[++i];
+  }
+  setImmediate(() => process.exit(3));
+  return { ok: true, ...parsed };
+}

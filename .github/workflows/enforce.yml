@@ -1,0 +1,88 @@
+name: enforce
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pinned quality tooling (eslint/prettier, HYK-148)
+        run: npm ci
+
+      # HYK-365 2R: moved ahead of the suite so gitleaks is on PATH when it
+      # runs. This step is fail-closed like every other step here (1R's
+      # error-tolerant flag was downgraded after review) -- an install
+      # failure fails the job right here, nc-ci-enforce.test.mjs:145 keeps
+      # that true workflow-wide.
+      - name: Install gitleaks (pinned, checksum-verified)
+        run: |
+          set -e
+          curl -sSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      # HYK-365 3R: 3 conditional skips stay accepted -- a Windows-only
+      # control-room script path and 2 checks on the untracked
+      # .claude/settings.local.json can never exist in the CI RUNNER'S
+      # checkout (they do exist on this review host, which is why this says
+      # "CI runner's checkout" specifically, not "this checkout" generally).
+      # Local weekly selfcheck covers them; that is not an external anchor.
+      # HYK-403: `npm test` is the canonical single line for the whole
+      # suite -- package.json's "test" script is this exact command
+      # (node scripts/check/isolated-suite-runner.mjs), so CI and a local
+      # run are byte-identical. Do not inline the node invocation here
+      # again; that duplication is what let CI and local drift silently.
+      - name: check test suites (scripts/check + scripts/relay + scripts/relay/adapters + scripts/supervisor *.test.mjs)
+        run: npm test
+
+      - name: hooks POSIX syntax check
+        run: |
+          sh -n hooks/commit-msg
+          sh -n hooks/pre-commit
+
+      - name: hook-sync-check smoke -- device runs in CI (HYK-196; does NOT check any developer PC's installed hook -- CI's checkout has none to compare against)
+        run: |
+          tmp_hooks=$(mktemp -d)
+          node scripts/check/hook-sync-check.mjs --versioned-dir hooks --installed-dir "$tmp_hooks" --install --json
+          node scripts/check/hook-sync-check.mjs --versioned-dir hooks --installed-dir "$tmp_hooks" --json
+
+      - name: Resolve quality:check base SHA (HYK-148)
+        id: quality_base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: quality:check -- changed-files lint+format gate (HYK-148, mirrors local pre-commit)
+        run: node scripts/check/quality-check.mjs --mode ci --base-sha "${{ steps.quality_base.outputs.sha }}"
+
+      - name: nul-byte-guard -- changed-files raw NUL byte scan (HYK-183, mirrors local pre-commit)
+        run: node scripts/check/nul-byte-guard.mjs --mode ci --base-sha "${{ steps.quality_base.outputs.sha }}"
+
+      - name: live-harness-scratch-guard -- changed-files live-worktree-.harness-scratch pattern scan (HYK-394, mirrors local pre-commit)
+        run: node scripts/check/live-harness-scratch-guard.mjs --mode ci --base-sha "${{ steps.quality_base.outputs.sha }}"
+
+      - name: gitleaks secret scan
+        run: gitleaks detect --source . --redact

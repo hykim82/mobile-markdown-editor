@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "note": "HYK-167 사이클0 D0-2 (B0 §3.1/§3.3): trusted canonical static role-profile root. This file's location (scripts/check/, alongside enforcement-inventory.json) IS the authority root for this repo -- a linked-worktree copy under a local .harness/ is NEVER authoritative, and launch-envelope.schema.mjs's validator enforces that by construction (it never consults cwd/git-toplevel/local .harness to pick which profile file wins; see launch-envelope.schema.mjs's SHADOW_AUTHORITY_DETECTED path). Cycle 0 scope: this is a STRUCTURAL CONTRACT only -- min_required_anchors/anchors declare what a role's launch envelope must carry, but no runtime here actually blocks a spawn against it (that is cycle 4, per task §0's explicit deferral list).",
+  "profiles": [
+    {
+      "profile_id": "profile-common-v1",
+      "role": "COMMON",
+      "allowed_modes": ["LIMITED"],
+      "min_required_anchors": 2,
+      "anchors": [
+        { "id": "context-inject", "class": "REQUIRED" },
+        { "id": "report-style-guard", "class": "REQUIRED" },
+        { "id": "status-fresh", "class": "ADVISORY" }
+      ],
+      "outputs": [],
+      "high_authority_requires": false,
+      "design_note": "COMMON is not itself a launchable role -- it documents the baseline anchor set every other profile below repeats explicitly (no 'extends' mechanism was adopted this cycle; see this file's non-adoption note at the bottom, HG10)."
+    },
+    {
+      "profile_id": "profile-pm-v1",
+      "role": "PM",
+      "allowed_modes": ["LIMITED", "HIGH_ASSURANCE"],
+      "min_required_anchors": 4,
+      "anchors": [
+        { "id": "pm-guard", "class": "REQUIRED" },
+        { "id": "context-inject", "class": "REQUIRED" },
+        { "id": "report-style-guard", "class": "REQUIRED" },
+        { "id": "go-task-id-gate", "class": "REQUIRED" },
+        { "id": "linear-sync", "class": "ADVISORY" },
+        { "id": "status-fresh", "class": "ADVISORY" },
+        { "id": "worker-status-onstart", "class": "OUTPUT" }
+      ],
+      "outputs": [".harness/pm.md", "control-room task/status writes"],
+      "high_authority_requires": true,
+      "design_note": "PM writes into the control room and Linear (shared authority beyond its own worktree lane) -- classified high-authority so a future HIGH_ASSURANCE launch for this role is validator-blocked (LIMITED_DENY) without a capability_receipt."
+    },
+    {
+      "profile_id": "profile-coder-v1",
+      "role": "CODER",
+      "allowed_modes": ["LIMITED"],
+      "min_required_anchors": 4,
+      "anchors": [
+        { "id": "role-guard", "class": "REQUIRED" },
+        { "id": "context-inject", "class": "REQUIRED" },
+        { "id": "report-style-guard", "class": "REQUIRED" },
+        { "id": "go-task-id-gate", "class": "REQUIRED" },
+        { "id": "status-fresh", "class": "ADVISORY" },
+        { "id": "worker-status-onstart", "class": "OUTPUT" }
+      ],
+      "outputs": [".harness/coder.md"],
+      "high_authority_requires": false,
+      "design_note": "CODER writes only inside its own dispatched worktree lane -- not classified high-authority; this cycle never grants it a HIGH_ASSURANCE entry in allowed_modes at all (stronger than requiring a receipt -- it cannot even attempt the mode)."
+    },
+    {
+      "profile_id": "profile-review-v1",
+      "role": "REVIEW",
+      "allowed_modes": ["LIMITED"],
+      "min_required_anchors": 4,
+      "anchors": [
+        { "id": "role-guard", "class": "REQUIRED" },
+        { "id": "context-inject", "class": "REQUIRED" },
+        { "id": "report-style-guard", "class": "REQUIRED" },
+        { "id": "go-task-id-gate", "class": "REQUIRED" },
+        { "id": "status-fresh", "class": "ADVISORY" },
+        { "id": "worker-status-onstart", "class": "OUTPUT" }
+      ],
+      "outputs": [".harness/review.md"],
+      "high_authority_requires": false,
+      "design_note": "Same shape as CODER -- REVIEW's authority (approving a commit-msg gate signature) is scoped to its own review file, not shared/external state."
+    },
+    {
+      "profile_id": "profile-verify-v1",
+      "role": "VERIFY",
+      "allowed_modes": ["LIMITED"],
+      "min_required_anchors": 4,
+      "anchors": [
+        { "id": "role-guard", "class": "REQUIRED" },
+        { "id": "context-inject", "class": "REQUIRED" },
+        { "id": "report-style-guard", "class": "REQUIRED" },
+        { "id": "go-task-id-gate", "class": "REQUIRED" },
+        { "id": "status-fresh", "class": "ADVISORY" },
+        { "id": "selfcheck-freshness", "class": "ADVISORY" },
+        { "id": "worker-status-onstart", "class": "OUTPUT" }
+      ],
+      "outputs": [".harness/verify.md"],
+      "high_authority_requires": false,
+      "design_note": "VERIFY additionally carries selfcheck-freshness as ADVISORY (its weekly-loop posture checks, e.g. orca-posture-check, are VERIFY-owned per enforcement-inventory.json's 'owner' field) -- still not high-authority since it writes only its own report file."
+    },
+    {
+      "profile_id": "profile-orch-v1",
+      "role": "ORCH",
+      "allowed_modes": ["LIMITED", "HIGH_ASSURANCE"],
+      "min_required_anchors": 4,
+      "anchors": [
+        { "id": "clear-safe-check", "class": "REQUIRED" },
+        { "id": "controlroom-fresh", "class": "REQUIRED" },
+        { "id": "context-inject", "class": "REQUIRED" },
+        { "id": "report-style-guard", "class": "REQUIRED" },
+        { "id": "status-fresh", "class": "ADVISORY" },
+        { "id": "linear-sync", "class": "ADVISORY" },
+        { "id": "selfcheck-freshness", "class": "ADVISORY" }
+      ],
+      "outputs": ["control-room dispatch/task-drop records"],
+      "high_authority_requires": true,
+      "design_note": "ORCH owns the control room, dispatch, and packet-signing surface (enforcement-inventory.json 'owner':'ORCH' on the majority of entries) -- the highest-authority role in this set, hence high_authority_requires:true and clear-safe-check/controlroom-fresh (both ORCH-only-blocking per their post_hyk131_note) as REQUIRED rather than ADVISORY."
+    }
+  ],
+  "non_adopted_design_decisions": [
+    "No profile 'extends'/inheritance field -- each role profile repeats the COMMON baseline anchors explicitly instead of referencing profile-common-v1. Rationale: an extends chain adds a second place validateEnvelope would need to resolve before judging REQUIRED-anchor counts, and this cycle's scope is a flat structural contract (task §0); revisit only if profile drift across roles becomes a real maintenance problem.",
+    "No per-anchor severity beyond the four classes (REQUIRED/ADVISORY/CONDITIONAL/OUTPUT) -- e.g. no numeric weight or partial-credit scheme. Rationale: B0 §3.1's four-class enum is the signed contract; a finer scheme is unrequested scope creep for cycle 0.",
+    "CONDITIONAL class is declared in the schema/enum but no profile below uses it yet -- left available for a future role/anchor pairing (e.g. an anchor required only under HIGH_ASSURANCE) rather than removed, since HG10 prefers declaring the shape now over silently omitting it."
+  ]
+}

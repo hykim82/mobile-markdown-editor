@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(orca orchestration *)",
+      "mcp__claude_ai_Linear__get_issue"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "vault"
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|mcp__linear-server__.*|mcp__claude_ai_Linear__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/Users/Administrator/Documents/HARNESSENGINEERING/scripts/check/pm-guard.mjs\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/Users/Administrator/Documents/HARNESSENGINEERING/scripts/check/worker-status-onstart.mjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"C:/Users/Administrator/Documents/HARNESSENGINEERING/scripts/check/go-task-id-gate.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+// HYK-400 4R 적대 표본 ⓑ -- stdout에 유효한 JSON 뒤로 JSON이 아닌
+// 쓰레기를 이어 붙인다. 이 표본의 «진짜» --harness-dir 처리는 값을
+// 버린다(미지원) -- stdout의 소음이 무엇을 흉내내든 실제 계약 위반
+// (미지원)은 거부돼야 한다.
+export function parseDispatchReceiptArgs(args) {
+  const parsed = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--role") parsed.role = args[++i];
+    else if (args[i] === "--task-label") parsed.harnessTaskLabel = args[++i];
+    else if (args[i] === "--receipt-path") parsed.receiptPath = args[++i];
+    else if (args[i] === "--harness-dir") i++; // 값을 실제로는 버린다(미지원)
+  }
+  process.stdout.write(
+    JSON.stringify({ diagnostic: "ok" }) + "\nTRAILING GARBAGE NOT JSON {{{",
+  );
+  return { ok: true, ...parsed };
+}

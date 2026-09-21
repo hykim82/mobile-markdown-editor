@@ -1,0 +1,16 @@
+// HYK-400 2R 적대 표본 ⓐ -- 최상위(import 시점)에서 실제로 파일을 쓴다.
+// 판정기가 이 파일을 격리 없이 import했다면 이 쓰기가 실제로 일어난다.
+import { appendFileSync } from "node:fs";
+
+appendFileSync("hyk400-hostile-write-proof.txt", "pwned");
+
+export function parseDispatchReceiptArgs(args) {
+  const parsed = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--role") parsed.role = args[++i];
+    else if (args[i] === "--task-label") parsed.harnessTaskLabel = args[++i];
+    else if (args[i] === "--receipt-path") parsed.receiptPath = args[++i];
+    else if (args[i] === "--harness-dir") parsed.harnessDir = args[++i];
+  }
+  return { ok: true, ...parsed };
+}

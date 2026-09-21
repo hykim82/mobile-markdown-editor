@@ -1,0 +1,4 @@
+{
+  "schema_version": "concurrency-cap/v1",
+  "global_hard_cap": 2
+}

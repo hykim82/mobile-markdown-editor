@@ -1,0 +1,15 @@
+{
+  "functionName": "Invoke-SeatProofGate",
+  "sha256": "910dfbcd0527f74b29b508981bfcd982afbc67153da86abb02043b036f007156",
+  "measuredAt": "2026-09-01 19:26:28 KST",
+  "measuredFrom": "scripts/check/fixtures/control-room-dispatch-worker-2026-09-01-hyk271-wire-applied.ps1.txt (라이브 무접촉 -- HYK-415-canonical-sync-1 라운드가 §0-A 비타협에 따라 저장소 픽스처만으로 재측정. 이 픽스처는 ORCH 실측 SHA-256 88AEAD564559C1E7214AA8EEFBDF369EF366173C4EC0F89C42F696EF56D2C615 · 725줄과 바이트 동일하다고 확인됨 -- 이 라운드가 직접 재계산해 반증하지 못함/일치 확인)",
+  "wholeFileSha256AtMeasurement": "88aead564559c1e7214aa8eefbdf369ef366173c4ec0f89c42f696ef56d2c615",
+  "basis": "HYK-271 결선(docs/control-room-patches/HYK-271-wire-modal-check.md) 적용 -- ORCH가 2026-09-01 관제실 라이브 dispatch-worker.ps1에 사이드카 모달 검사기 호출 1줄(+8 물리줄, 주석 포함)을 Invoke-SeatProofGate 함수 본문 안(기존 seat-proof CLI 호출 출력 처리 줄 직후, return $gateExit 직전)에 삽입해 이미 적용했다. 저장소 정본 지문이 그 적용을 못 박고 있지 않아 로컬 전체 러너가 빨갛게 됐고(HYK-411 소비 게이트 발동 -> 롤백, coder-task.md §0-C 실사고) 이 라운드가 그 지문을 새 값으로 동기화한다. 오늘 사고 경위: 관제실 먼저 변경 -> 저장소 정본 갱신 없음 -> 로컬 RED -> HYK-411 게이트가 소비 차단 -> 롤백 -> 이 라운드가 재적용(지문 동기화)한다.",
+  "normalization": "함수 본문 문자열에 CRLF(\\r\\n) -> LF(\\n) 치환만 적용한 뒤 SHA-256을 뜬다. 그 외 정규화(들여쓰기 통일, 트리밍, 대소문자 통일 등) 없음 -- 정규화가 넓어질수록 '지문이 알아보지 못하는 안전한 새 형태'가 늘어나 다시 표기법 추격전이 재발하므로, 최소로 고정한다.",
+  "changeProcedure": [
+    "관제실 dispatch-worker.ps1의 Invoke-SeatProofGate 함수 본문을 정당하게 바꾸는 경우에만 이 파일을 갱신한다 (HYK-306 방식 준용):",
+    "1) 바뀐 함수 본문을 이 파일과 동일한 방식(브레이스 깊이 카운팅 추출 + CRLF->LF 정규화)으로 다시 측정해 새 sha256을 얻는다.",
+    "2) 이 파일의 sha256/measuredAt/measuredFrom/wholeFileSha256AtMeasurement를 새 값으로 갱신하고, basis에 '왜 바뀌었는지'(이슈 번호·사유)를 적는다.",
+    "3) 이 갱신은 반드시 검토 라운드를 거친다 -- 지문 갱신 = 사람이 한 번 본다. 검토 없이 지문만 바꿔 판정을 통과시키는 것은 이 검사기의 존재 이유(fail-closed)를 무력화한다."
+  ]
+}

@@ -1,0 +1,11 @@
+// HYK-400 2R 적대 표본 ⓑ -- 최상위에서 절대 안 풀리는 대기(무한 top-level
+// await)에 걸린다. setInterval로 이벤트 루프를 계속 살려 둔다 -- 그냥
+// `await new Promise(() => {})` 만으로는 Node가 "unsettled top-level
+// await"로 판단하고 프로세스를 그냥 끝내 버려(실측: 2026-08-30 프로토타입)
+// 진짜 행(hang)을 재현하지 못한다.
+setInterval(() => {}, 1_000_000);
+await new Promise(() => {});
+
+export function parseDispatchReceiptArgs() {
+  return { ok: true };
+}

@@ -1,0 +1,36 @@
+# 하네스 무인 워커 좌석 런처 (Orca 어댑터 B)
+# 사용: pwsh -NoExit -File orca-worker-seat.ps1 -Role CODER -Worktree "<path>"
+# 기동 규칙(G1 위조 차단)은 worker-dispatch-rule.md를 시스템 프롬프트로 실어 보낸다.
+param(
+  [ValidateSet("CODER","REVIEW","VERIFY","PM")]
+  [string]$Role = "CODER",
+  [string]$Worktree = "C:\Users\Administrator\orca\workspaces\HARNESSENGINEERING\hyk164-fix"
+)
+
+Set-Location $Worktree
+$global:LASTEXITCODE = 1; node scripts/check/seat-preflight.mjs; if ($LASTEXITCODE -ne 0) { Write-Host "[$Role seat] BLOCKED -- 훅 대조에 실패했습니다. 좌석을 띄우지 않습니다. 위에 뜬 «고치는 명령»을 실행한 뒤 다시 기동하십시오."; exit $LASTEXITCODE }
+
+$rulePath = "D:\문서관리\하네스-관제실\worker-dispatch-rule.md"
+$rule = Get-Content -Raw -Encoding UTF8 $rulePath
+
+$env:HARNESS_ROLE = $Role
+$env:HARNESS_STATUS_PATH = "D:\문서관리\하네스-관제실\STATUS.md"
+
+Write-Host "[$Role seat] worktree=$Worktree  pane=$env:ORCA_PANE_KEY"
+
+if (($Role -eq "REVIEW" -or $Role -eq "PM") -and $env:HARNESS_SEAT_ENGINE -ne "claude") {
+  # REVIEW/PM = codex (CODER와 다른 엔진 원칙 유지). REVIEW=luna / PM=sol.
+  # 2026-08-28: 주석이 22일간 코드와 어긋나 있었다(주석 terra / 코드 luna). 정본 = relay-terminal-setup.md §1.5 ③(같은 날 luna 로 개정).
+  $env:CODEX_HOME = $env:ORCA_CODEX_HOME
+  # 관측 B6: codex 좌석에서 `spawn orca ENOENT` — orca 실행파일 경로를 PATH 앞에 명시한다.
+  $orcaBin = "C:\Users\Administrator\AppData\Local\Programs\orca\resources\bin"
+  if (Test-Path $orcaBin) { $env:PATH = "$orcaBin;$env:PATH" }
+  $codexModel = if ($Role -eq "PM") { "gpt-5.6-sol" } else { "gpt-5.6-luna" }
+  codex --model $codexModel -a never -s danger-full-access
+} else {
+  $env:CLAUDE_CONFIG_DIR = "C:\Users\Administrator\.claude-team"
+  $env:CLAUDE_CODE_FORCE_SESSION_PERSISTENCE = '1'
+  # 무인 운영 시에는 권한 확인 창에서 멈추지 않도록 사람이 이 좌석의 권한 모드를 별도로 정한다
+  # (관제실 노트 참조 — 안전망은 권한창이 아니라 하네스 훅·git 훅·독립 REVIEW).
+  claude --model claude-sonnet-5 --effort medium --dangerously-skip-permissions --append-system-prompt $rule
+}
