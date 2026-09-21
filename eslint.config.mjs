@@ -387,4 +387,31 @@ export default [
       "no-restricted-syntax": "off",
     },
   },
+  {
+    // HYK-304-render-layer-1: 이 저장소 최초의 브라우저 실행 코드(에디터
+    // 렌더링 계층) -- lexical 은 DOM/window 전역을 가정한다. 지금까지의
+    // languageOptions.globals 는 node 전역만 선언돼 있었으므로 이 경로만
+    // 좁게 브라우저 전역을 더한다.
+    files: ["src/editor/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        document: "readonly",
+        window: "readonly",
+        navigator: "readonly",
+      },
+    },
+  },
+  {
+    // test/editor/** 와 test/support/** 는 jsdom 으로 lexical 을 헤드리스
+    // 구동한다(브라우저 DOM 전역이 있다고 가정하는 lexical import 시점
+    // 요구 때문) -- 같은 이유로 브라우저 전역이 필요하다.
+    files: ["test/editor/**/*.mjs", "test/support/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        document: "readonly",
+        window: "readonly",
+        navigator: "readonly",
+      },
+    },
+  },
 ];
