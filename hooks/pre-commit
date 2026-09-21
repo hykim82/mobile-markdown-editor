@@ -1,0 +1,132 @@
+#!/usr/bin/env sh
+# Engine-agnostic local secret scan (Claude, Codex, or a manual `git commit`
+# all go through git's native pre-commit hook, unlike Claude Code's own
+# PreToolUse hooks which only see Claude's own tool calls).
+#
+# HYK-101 note: hooks/commit-msg needed a git-worktree fallback because it
+# depends on the untracked harness check script directory (see
+# docs/harness-init.md, "Git hooks and worktrees") that a linked worktree
+# never has checked out. This hook's gitleaks step has no such dependency --
+# `gitleaks`/`gitleaks.exe` is resolved from PATH (an installed binary, not a
+# repo-relative file), and `$root` below is only used as `cd`'s target,
+# which is valid for a linked worktree exactly the same as for the main one
+# (each worktree is a fully functional working tree with its own index).
+# HYK-148 adds a second, chained step (quality-check.mjs) that DOES depend on
+# a repo-relative script, so that step reuses the same worktree fallback
+# commit-msg already established. HYK-183 adds a third, chained step
+# (nul-byte-guard.mjs) that reuses the same worktree fallback for the same
+# reason. HYK-394 adds a fourth, chained step (live-harness-scratch-guard.mjs)
+# that reuses the same worktree fallback for the same reason -- this is the
+# device's first live invocation point (previously it existed but nothing
+# called it, see live-harness-scratch-guard.mjs's own header).
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+
+status=0
+
+# --- Step 1: gitleaks secret scan (unchanged from pre-HYK-148 behavior) ---
+if command -v gitleaks >/dev/null 2>&1; then
+  GITLEAKS=gitleaks
+elif command -v gitleaks.exe >/dev/null 2>&1; then
+  GITLEAKS=gitleaks.exe
+else
+  echo "pre-commit hook: gitleaks not found on PATH ('gitleaks' or 'gitleaks.exe') -- skipping local secret scan for this commit." >&2
+  echo "This is fail-open by design: local scanning is fast feedback only. CI (.github/workflows/enforce.yml) runs the authoritative gitleaks scan on every push/PR and will still block a real leak even if it slips past this local hook." >&2
+  echo "Install gitleaks for local feedback: https://github.com/gitleaks/gitleaks#installing" >&2
+  GITLEAKS=""
+fi
+
+if [ -n "$GITLEAKS" ]; then
+  "$GITLEAKS" protect --staged --redact
+  gitleaks_status=$?
+  [ "$gitleaks_status" -ne 0 ] && status="$gitleaks_status"
+fi
+
+# --- Step 2 (HYK-148): quality:check on staged files (changed-files-only
+# lint+format gate). Chained, not substituted -- gitleaks above always runs
+# first and its own exit code is preserved in $status regardless of what
+# happens here. ---
+qc_script="$root/scripts/check/quality-check.mjs"
+if [ ! -f "$qc_script" ]; then
+  common_dir=$(git rev-parse --git-common-dir) || common_dir=""
+  if [ -n "$common_dir" ]; then
+    case "$common_dir" in
+      /*|[A-Za-z]:*) : ;;
+      *) common_dir="$root/$common_dir" ;;
+    esac
+    main_root=${common_dir%/.git}
+    main_qc_script="$main_root/scripts/check/quality-check.mjs"
+    [ -f "$main_qc_script" ] && qc_script="$main_qc_script"
+  fi
+fi
+
+if command -v node >/dev/null 2>&1; then
+  NODE=node
+elif command -v node.exe >/dev/null 2>&1; then
+  NODE=node.exe
+else
+  NODE=""
+fi
+
+if [ -n "$NODE" ] && [ -f "$qc_script" ]; then
+  "$NODE" "$qc_script" --mode staged --cwd "$root"
+  qc_status=$?
+  [ "$qc_status" -ne 0 ] && status="$qc_status"
+else
+  echo "pre-commit hook: quality-check script or node runtime not found -- skipping quality gate for this commit (fail-open, same posture as gitleaks-missing above; CI's quality:check mirror still blocks a real violation)." >&2
+fi
+
+# --- Step 3 (HYK-183): nul-byte-guard on staged files (raw NUL byte scan,
+# changed-files-only). Chained after quality-check, same posture: earlier
+# steps' exit codes are preserved in $status regardless of what happens
+# here. ---
+nb_script="$root/scripts/check/nul-byte-guard.mjs"
+if [ ! -f "$nb_script" ]; then
+  common_dir=$(git rev-parse --git-common-dir) || common_dir=""
+  if [ -n "$common_dir" ]; then
+    case "$common_dir" in
+      /*|[A-Za-z]:*) : ;;
+      *) common_dir="$root/$common_dir" ;;
+    esac
+    main_root=${common_dir%/.git}
+    main_nb_script="$main_root/scripts/check/nul-byte-guard.mjs"
+    [ -f "$main_nb_script" ] && nb_script="$main_nb_script"
+  fi
+fi
+
+if [ -n "$NODE" ] && [ -f "$nb_script" ]; then
+  "$NODE" "$nb_script" --mode staged --cwd "$root"
+  nb_status=$?
+  [ "$nb_status" -ne 0 ] && status="$nb_status"
+else
+  echo "pre-commit hook: nul-byte-guard script or node runtime not found -- skipping NUL-byte gate for this commit (fail-open, same posture as gitleaks-missing above; CI's nul-byte-guard mirror still blocks a real violation)." >&2
+fi
+
+# --- Step 4 (HYK-394): live-harness-scratch-guard on staged files (blocks a
+# test file from combining a repo-root-derived identifier with the literal
+# ".harness" in a join() call -- the exact HYK-394-test-leak-3 incident
+# shape). Chained after nul-byte-guard, same posture: earlier steps' exit
+# codes are preserved in $status regardless of what happens here. ---
+lhg_script="$root/scripts/check/live-harness-scratch-guard.mjs"
+if [ ! -f "$lhg_script" ]; then
+  common_dir=$(git rev-parse --git-common-dir) || common_dir=""
+  if [ -n "$common_dir" ]; then
+    case "$common_dir" in
+      /*|[A-Za-z]:*) : ;;
+      *) common_dir="$root/$common_dir" ;;
+    esac
+    main_root=${common_dir%/.git}
+    main_lhg_script="$main_root/scripts/check/live-harness-scratch-guard.mjs"
+    [ -f "$main_lhg_script" ] && lhg_script="$main_lhg_script"
+  fi
+fi
+
+if [ -n "$NODE" ] && [ -f "$lhg_script" ]; then
+  "$NODE" "$lhg_script" --mode staged --cwd "$root"
+  lhg_status=$?
+  [ "$lhg_status" -ne 0 ] && status="$lhg_status"
+else
+  echo "pre-commit hook: live-harness-scratch-guard script or node runtime not found -- skipping live-.harness-scratch gate for this commit (fail-open, same posture as gitleaks-missing above; CI's live-harness-scratch-guard mirror still blocks a real violation)." >&2
+fi
+
+exit "$status"

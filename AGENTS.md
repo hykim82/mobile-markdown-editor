@@ -41,3 +41,40 @@
 - 기록: Linear = 코드 작업 로그. AI는 In Review까지, Done은 Human(한용).
 - 완료 판정·스펙 드리프트·빌드 루프는 위의 기존 규칙을 그대로 따른다(중복 정의 안 함).
 - loop profile(LOOP.md·verify.sh 등)은 명시 승인 시에만 설치.
+
+# Harness Operating Rules
+
+Harness is opt-in for this repository.
+
+## Project
+
+Linear-Project: PROJECT_NAME
+
+## Task Contract
+
+Before durable work starts, create or reference a Task Contract.
+
+Each task chooses exactly one profile:
+
+- `loop`: one command can judge PASS/FAIL
+- `non-loop`: review checklist and evidence are required
+- `none`: clarification or administration with no durable artifact
+
+## Loop Boundary
+
+Loop profile is not installed automatically.
+
+If `LOOP.md` or `scripts/verify.sh` is absent, treat the repository as:
+
+```text
+loop profile not applied
+```
+
+Install loop only after explicit approval.
+
+## Records
+
+Linear is the primary work log. If Linear is unavailable, report the outage and
+use repository fallback records only if work continues.
+
+AI-managed work stops at In Review. Done is a human action.

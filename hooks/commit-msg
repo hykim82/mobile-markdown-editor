@@ -1,0 +1,55 @@
+#!/usr/bin/env sh
+root=$(git rev-parse --show-toplevel) || exit 1
+script="$root/scripts/check/review-gate.mjs"
+
+# HYK-101: team-local's scripts/check/ is untracked (gitignored) -- a fresh
+# `git worktree add` checkout never has it, only the main clone does, since
+# a linked worktree only ever gets tracked files. Without this fallback the
+# node call below dies with MODULE_NOT_FOUND from inside any worktree, which
+# blocks every commit there for a reason that has nothing to do with commit
+# message format (this crashed for real, twice, on TEAM10 coder sessions).
+if [ ! -f "$script" ]; then
+  common_dir=$(git rev-parse --git-common-dir) || common_dir=""
+  if [ -n "$common_dir" ]; then
+    # --git-common-dir is relative (plain ".git") when we're already in the
+    # main worktree, and absolute when called from a linked worktree (it
+    # then points at the main clone's .git, which is what recovers the
+    # original script here). Normalize both to an absolute path before
+    # stripping the trailing "/.git" to get back to the main clone's root.
+    case "$common_dir" in
+      /*|[A-Za-z]:*) : ;;
+      *) common_dir="$root/$common_dir" ;;
+    esac
+    main_root=${common_dir%/.git}
+    main_script="$main_root/scripts/check/review-gate.mjs"
+    [ -f "$main_script" ] && script="$main_script"
+  fi
+fi
+
+# Still not found (main clone doesn't have it installed either, or some
+# other layout): fail open rather than crash. A missing check script is not
+# a commit-message format violation, and this hook's job is to enforce
+# format, not to require its own dependency to exist -- same fail-open
+# posture hooks/pre-commit already uses when gitleaks itself is missing.
+if [ ! -f "$script" ]; then
+  echo "commit-msg hook: harness check script not found in this worktree or the main clone -- skipping (see docs/harness-init.md, \"Git hooks and worktrees\"). Fix: re-run the harness-init installer, or copy scripts/check/ from the main clone." >&2
+  exit 0
+fi
+
+msg="$1"
+if command -v node >/dev/null 2>&1; then
+  NODE=node
+elif command -v node.exe >/dev/null 2>&1; then
+  NODE=node.exe
+  # node.exe is a Windows binary. Under WSL the paths above are POSIX
+  # (/mnt/c/...) which Windows node reads as C:\mnt\c\... and fails to
+  # resolve. Translate the paths we hand it back into Windows form.
+  if command -v wslpath >/dev/null 2>&1; then
+    script=$(wslpath -w "$script")
+    [ -n "$msg" ] && msg=$(wslpath -w "$msg")
+  fi
+else
+  echo "commit-msg hook: node runtime not found (need 'node' or 'node.exe' on PATH)" >&2
+  exit 1
+fi
+exec "$NODE" "$script" "$msg"

@@ -1,0 +1,23 @@
+title = "HARNESSENGINEERING gitleaks config"
+
+# Extend, don't replace, gitleaks' default ruleset (AWS keys, generic
+# high-entropy secrets, private key blocks, provider-specific token shapes,
+# etc.): https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
+[extend]
+useDefault = true
+
+# No real secret has ever been committed to this repo (verified before this
+# config was written). The entries below exist only to keep the scanner from
+# false-positiving on prose that happens to contain the word "token" near
+# something quoted — each is scoped to the exact file and exact literal
+# substring involved, not a blanket path or directory exemption.
+
+[[allowlists]]
+description = "review-gate.test.mjs fixture strings: literal '[skip-review: ...] token' text used to test that a skip-review mention inside inline brackets is NOT treated as the real trailer directive — not a credential"
+paths = ['''scripts/check/review-gate\.test\.mjs''']
+regexes = ['''\[skip-review: ?[^\]]*\] token''']
+
+[[allowlists]]
+description = "phase-handoff template: prose parenthetical '(save tokens)' referring to LLM context-window tokens, not a credential"
+paths = ['''templates/harness-init/phase-handoff\.template\.md''']
+regexes = ['''\(save tokens\)''']

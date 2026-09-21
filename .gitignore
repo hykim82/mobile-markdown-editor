@@ -5,3 +5,7 @@ dist/
 .omc/
 *-memo.md
 .harness/
+
+# harness-init (solo-full)
+.harness/
+.claude/settings.local.json
