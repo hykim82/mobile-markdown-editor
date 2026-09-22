@@ -174,6 +174,50 @@ test("autosaveBlocked 가 선 뒤에는 실제 사용자 입력이 와도 자동
   );
 });
 
+// 소수리 A(coder-task.md §1-⑺ · 3R 검토 P2-4): 예전엔 console.error 만
+// 남아 사용자는 자기 입력이 저장되지 않는 것을 몰랐다("save-notice.hidden
+// === true" 였던 실측). 이 시험은 mountStorage 를 통째로 태워 안전판이
+// 걸린 뒤 notice 가 실제로 화면에 뜨는지(hidden === false)를 잰다.
+test("소수리 A: 안전판이 걸리면 notice.hidden === false 로 바뀌고 문구가 뜬다(coder-task.md §1-⑺)", async () => {
+  writeCurrentMemoId("safety-net-notice-1");
+  const adapter = createFakeAdapter();
+  await adapter.put({
+    id: "safety-net-notice-1",
+    title: "제목",
+    body: "저장된 원문",
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  });
+  const { editor } = makeProductEditor();
+  const notice = document.createElement("div");
+  notice.hidden = true;
+  const brokenRestoreFn = (ed) => {
+    ed.update(
+      () => {
+        $getRoot().clear();
+      },
+      { discrete: true },
+    );
+  };
+
+  mountStorage(editor, notice, adapter, { restoreFn: brokenRestoreFn });
+  // restoreCurrentMemo 의 유일한 비동기 지점(adapter.get)이 끝날 시간을
+  // 준다(위 통합 시험과 같은 근거 -- 매크로태스크 한 틱).
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(
+    notice.hidden,
+    false,
+    "안전판이 걸렸으면 사용자에게 보이는 notice 가 hidden=false 여야 한다",
+  );
+  assert.match(
+    notice.textContent,
+    /저장이 막혔습니다/,
+    "화면에 실제로 보이는 문구가 떠 있어야 한다",
+  );
+});
+
 test("복원할 현재 메모 포인터가 없으면 조회조차 하지 않는다(readCurrentMemoId 회귀 -- 안전판과 별개로 항상 성립해야 하는 것)", async () => {
   writeCurrentMemoId(null);
   assert.equal(readCurrentMemoId(), null);

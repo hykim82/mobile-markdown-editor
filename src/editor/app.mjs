@@ -9,6 +9,7 @@ import { PRODUCT_TRANSFORMERS, PRODUCT_NODES } from "./transformers.mjs";
 import { serializeEditorToMarkdown } from "./serialize.mjs";
 import { EDITOR_THEME } from "./theme.mjs";
 import { mountStorage } from "./storage-mount.mjs";
+import { mountNotionCopy } from "./notion-copy.mjs";
 
 function applyDesignTokens() {
   const root = document.documentElement;
@@ -63,9 +64,12 @@ function main() {
   const editorRoot = document.getElementById("editor-root");
   const rawPanel = document.getElementById("raw-panel");
   const saveNotice = document.getElementById("save-notice");
+  const copyButton = document.getElementById("notion-copy-button");
+  const copyToast = document.getElementById("notion-copy-toast");
   const editor = mountEditor(editorRoot);
   mountRawPanel(editor, rawPanel);
-  mountStorage(editor, saveNotice);
+  const store = mountStorage(editor, saveNotice);
+  mountNotionCopy(editor, store, { button: copyButton, toast: copyToast });
 }
 
 main();
