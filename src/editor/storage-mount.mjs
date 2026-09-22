@@ -18,6 +18,14 @@ export function updateSaveNotice(notice, status) {
     notice.textContent =
       "저장 공간이 부족해요(placeholder 알림 문구 -- 최종 카피는 디자인 확정 필요, coder-task.md §0-2-⑴)";
     notice.hidden = false;
+  } else if (status === "restore-mismatch") {
+    // 소수리 A(coder-task.md §1-⑺, 3R 검토 P2-4): 복원 불일치로
+    // 자동저장이 차단되면 예전엔 console.error 만 남아 사용자는 자기
+    // 입력이 저장되지 않는 것을 몰랐다. 문구는 placeholder -- 최종 카피
+    // 확정은 한용 몫이다.
+    notice.textContent =
+      "저장이 막혔습니다 -- 새로 고침 뒤 다시 확인해 주세요(placeholder 알림 문구 -- 최종 카피는 디자인 확정 필요, coder-task.md §1-⑺)";
+    notice.hidden = false;
   } else {
     notice.hidden = true;
   }
@@ -119,6 +127,9 @@ export function mountStorage(
       console.error(
         "[storage] autosave skipped: an earlier restore for this memo did not round-trip losslessly",
       );
+      // 소수리 A(§1-⑺): console.error 뿐이면 사용자는 자기 입력이
+      // 저장되지 않는 것을 모른다 -- 같은 신호를 화면에도 띄운다.
+      updateSaveNotice(notice, "restore-mismatch");
       return;
     }
     const body = serializeEditorToMarkdown(editor);
@@ -127,15 +138,17 @@ export function mountStorage(
     });
   });
 
-  restoreCurrentMemo(
-    editor,
-    store,
-    adapter,
-    restoreState,
-    restoreOptions,
-  ).finally(() => {
-    restoreState.done = true;
-  });
+  restoreCurrentMemo(editor, store, adapter, restoreState, restoreOptions)
+    .then(() => {
+      // 사용자가 아직 한 글자도 안 쳤어도(위 리스너가 아직 안 불렸어도)
+      // 복원 시점에 이미 불일치가 잡혔다면 그 즉시 화면에 띄운다.
+      if (restoreState.autosaveBlocked) {
+        updateSaveNotice(notice, "restore-mismatch");
+      }
+    })
+    .finally(() => {
+      restoreState.done = true;
+    });
 
   // 정책 "자동저장": 뒤로가기·백그라운드 전환 시 즉시 저장.
   const flushOnHide = () => {

@@ -144,5 +144,10 @@ export function createMemoStore(adapter, options = {}) {
     },
     getMemoId: () => state.memo?.id ?? null,
     getStatus: () => state.status,
+    // PRD §7 "본문(마크다운 원문)" 필드 그 자체 -- 노션 복사(coder-task.md
+    // §1-⑴)는 이 값을 읽지, 에디터를 다시 직렬화하지 않는다. state.memo.body
+    // 는 handleContentChange 안에서 매 입력마다(디바운스와 무관하게)
+    // 동기로 갱신되므로 이 값은 항상 "지금 화면에 대응하는 원문"이다.
+    getBody: () => state.memo?.body ?? "",
   };
 }
