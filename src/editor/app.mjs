@@ -1,7 +1,6 @@
-// 브라우저 엔트리(에스빌드로 번들). 이 조각의 «화면 최소 하나» -- 입력하는
-// 즉시 실제 서식으로 보이는 라이브 렌더링 하나, 그리고 그 옆에 «지금
-// 원문은 이것이다»를 그대로 보여주는 개발용 패널(coder-task.md
-// §1-B-ⓑ-2, 저장·클립보드 경로는 만들지 않음).
+// 브라우저 엔트리(에스빌드로 번들). 라이브 렌더링 화면(HYK-304-render-1)
+// 에 이어 이 라운드(HYK-304-storage-1)가 저장·자동저장을 붙인다 --
+// PRD §7/§8, coder-task.md §0.
 import { createEditor } from "lexical";
 import { registerMarkdownShortcuts } from "@lexical/markdown";
 import { registerRichText } from "@lexical/rich-text";
@@ -9,6 +8,7 @@ import tokens from "../../spec/design-tokens.json";
 import { PRODUCT_TRANSFORMERS, PRODUCT_NODES } from "./transformers.mjs";
 import { serializeEditorToMarkdown } from "./serialize.mjs";
 import { EDITOR_THEME } from "./theme.mjs";
+import { mountStorage } from "./storage-mount.mjs";
 
 function applyDesignTokens() {
   const root = document.documentElement;
@@ -62,8 +62,10 @@ function main() {
   applyDesignTokens();
   const editorRoot = document.getElementById("editor-root");
   const rawPanel = document.getElementById("raw-panel");
+  const saveNotice = document.getElementById("save-notice");
   const editor = mountEditor(editorRoot);
   mountRawPanel(editor, rawPanel);
+  mountStorage(editor, saveNotice);
 }
 
 main();

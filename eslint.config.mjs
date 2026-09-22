@@ -223,6 +223,7 @@ export default [
         require: "readonly",
         URL: "readonly",
         fetch: "readonly",
+        WebSocket: "readonly",
         setTimeout: "readonly",
         clearTimeout: "readonly",
         setInterval: "readonly",
@@ -411,6 +412,22 @@ export default [
         document: "readonly",
         window: "readonly",
         navigator: "readonly",
+      },
+    },
+  },
+  {
+    // HYK-304-storage-1 (coder-task.md §0-2-⑹): 저장 어댑터(IndexedDB
+    // 직접)가 쓰는 브라우저 전역. 다른 구현(예: SQLite WASM+OPFS)으로
+    // 바꾸면 이 전역 목록도 그 구현이 쓰는 전역으로 바뀔 뿐이고, 영향은
+    // 이 파일 그룹 밖으로 새지 않는다 -- 그게 어댑터 경계의 요점이다.
+    files: ["src/storage/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        indexedDB: "readonly",
+        IDBKeyRange: "readonly",
+        crypto: "readonly",
+        caches: "readonly",
+        localStorage: "readonly",
       },
     },
   },
