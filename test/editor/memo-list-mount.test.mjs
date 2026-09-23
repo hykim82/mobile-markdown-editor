@@ -7,6 +7,7 @@ import "../support/jsdom-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mountMemoList } from "../../src/editor/memo-list-mount.mjs";
+import { LIST_ERROR_MESSAGE } from "../../src/editor/memo-list-view.mjs";
 import { createMemoStore } from "../../src/storage/memo-store.mjs";
 import { createFakeAdapter } from "../support/fake-adapter.mjs";
 
@@ -104,6 +105,93 @@ test("제목 축(전 사슬): 역슬래시가 든 본문을 저장하면 목록 
     titleEl.textContent,
     "C:\\Users\\한용\\일감.md 정리",
     "제목은 본문 첫 줄과 바이트가 같아야 한다(사용자가 친 글자 그대로)",
+  );
+});
+
+// coder-task.md §2(P2-1) -- 검토자가 §2-1에서 실측한 "제목 + 빈 본문
+// 화면"(실패했다는 사실 자체가 안 보임)을 이 저장소 시험으로 옮겨 심는다
+// (§2-3 "실패 주입은 워크트리 안 시험에서 해야 CI 가 돈다"). 저장소
+// 어댑터 list() 를 fake-adapter 의 forceNextListFailures 로 거부시켜
+// 재현한다.
+test("실패 축: 조회가 거부되면 실패 문구·재시도 요소가 뜨고 unhandledRejection 이 없다", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  adapter.forceNextListFailures(1);
+  const rejections = [];
+  const onRejection = (err) => rejections.push(err);
+  process.on("unhandledRejection", onRejection);
+
+  const list = mountMemoList(container, adapter, { onOpen: () => {} });
+  await list.refresh();
+  // refresh() 가 fire-and-forget 으로 불려도(app.mjs 처럼) 거부가 새지
+  // 않는지 마이크로태스크 큐를 한 번 더 돌려 확인한다.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  try {
+    assert.equal(container.querySelectorAll(".memo-card").length, 0);
+    const errorEl = container.querySelector(".memo-list-error");
+    assert.ok(errorEl, "실패 요소(재시도 겸용)가 DOM 에 있어야 한다");
+    assert.equal(errorEl.textContent, LIST_ERROR_MESSAGE);
+    assert.equal(container.querySelector(".memo-list-empty"), null);
+    assert.deepEqual(
+      rejections,
+      [],
+      "unhandledRejection 이 0이어야 한다(§2-3 실패 축)",
+    );
+  } finally {
+    process.off("unhandledRejection", onRejection);
+  }
+});
+
+test("복구 축: 재시도를 누르고 저장 계층이 되살아 있으면 목록이 정상으로 그려진다(카드 수 전/후)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  await createMemoAt(adapter, "복구 후 보일 메모", 100);
+  adapter.forceNextListFailures(1);
+
+  const list = mountMemoList(container, adapter, { onOpen: () => {} });
+  await list.refresh();
+  assert.equal(
+    container.querySelectorAll(".memo-card").length,
+    0,
+    "전: 실패 화면이라 카드 0개",
+  );
+
+  container.querySelector(".memo-list-error").click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(
+    container.querySelectorAll(".memo-card").length,
+    1,
+    "후: 재시도로 저장 계층이 되살아나면 카드가 보인다",
+  );
+  assert.equal(container.querySelector(".memo-list-error"), null);
+});
+
+// 구별 축(§2-3): "메모 0개 정상" 과 "조회 실패" 는 서로 다른 화면이어야
+// 한다 -- 같은 클래스로 겹쳐 보이면 사용자가 둘을 구별할 수 없다.
+test("구별 축: 메모 0개 정상 화면과 조회 실패 화면은 서로 다른 DOM 이다", async () => {
+  const emptyContainer = document.createElement("div");
+  const emptyAdapter = createFakeAdapter();
+  await mountMemoList(emptyContainer, emptyAdapter, {
+    onOpen: () => {},
+  }).refresh();
+
+  const errorContainer = document.createElement("div");
+  const errorAdapter = createFakeAdapter();
+  errorAdapter.forceNextListFailures(1);
+  await mountMemoList(errorContainer, errorAdapter, {
+    onOpen: () => {},
+  }).refresh();
+
+  assert.ok(emptyContainer.querySelector(".memo-list-empty"));
+  assert.equal(emptyContainer.querySelector(".memo-list-error"), null);
+  assert.ok(errorContainer.querySelector(".memo-list-error"));
+  assert.equal(errorContainer.querySelector(".memo-list-empty"), null);
+  assert.notEqual(
+    emptyContainer.innerHTML,
+    errorContainer.innerHTML,
+    "두 화면의 DOM 이 달라야 한다",
   );
 });
 
