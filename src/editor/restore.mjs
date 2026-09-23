@@ -24,7 +24,12 @@
 // 그 여는/닫는 마커 둘 다 서식 토글이 아니라 글자 그대로 보존한다"는
 // 한 규칙으로 판정한다(computeMarkerRoles) -- 홀수 번째 마지막 등장(짝
 // 자체가 없음)과 "짝은 있지만 속이 빈" 경우가 같은 한 규칙으로 걸린다.
-import { $getRoot, $createParagraphNode, $createTextNode } from "lexical";
+import {
+  $getRoot,
+  $createParagraphNode,
+  $createTextNode,
+  $createLineBreakNode,
+} from "lexical";
 import { $createHeadingNode } from "@lexical/rich-text";
 import { $createListNode, $createListItemNode } from "@lexical/list";
 import { parse } from "../markdown-parser.mjs";
@@ -119,6 +124,13 @@ function tokenizeInline(text) {
         strikethrough = role === "open";
       }
       i += 2;
+    } else if (text[i] === "\n") {
+      // serialize.mjs 가 LineBreakNode 를 내보낸 "같은 문단 안 줄바꿈"
+      // 표기(HYK-304 E4) -- "\n\n"(문단 나누기)은 restoreMarkdownIntoEditor
+      // 가 블록 단위로 먼저 갈라내므로 여기까지는 절대 안 내려온다.
+      flush();
+      segments.push({ linebreak: true });
+      i += 1;
     } else {
       buffer += text[i];
       i += 1;
@@ -130,6 +142,10 @@ function tokenizeInline(text) {
 
 function appendInline(parentNode, text) {
   for (const segment of tokenizeInline(text)) {
+    if (segment.linebreak) {
+      parentNode.append($createLineBreakNode());
+      continue;
+    }
     const textNode = $createTextNode(segment.text);
     if (segment.bold) textNode.toggleFormat("bold");
     if (segment.strikethrough) textNode.toggleFormat("strikethrough");
@@ -137,34 +153,56 @@ function appendInline(parentNode, text) {
   }
 }
 
-function buildBlockNode(line) {
-  const parsed = parse(line);
+// "\n\n"(문단 나누기)로 이미 갈라낸 한 블록 안의 물리 줄들(lines) --
+// lines[0] 만 타입 프리픽스("#"/"- "/"- [ ] ")를 걸치고, 나머지는 모두
+// 그 블록 안에서 일어난 Shift+Enter 줄바꿈의 연속선이다(HYK-304 E4).
+// appendInline 이 그 사이사이의 "\n" 을 LineBreakNode 로 되돌린다.
+function buildBlockNode(lines) {
+  const parsed = parse(lines[0]);
+  const text = [parsed.text, ...lines.slice(1)].join("\n");
   if (parsed.type === "heading") {
     const node = $createHeadingNode(`h${parsed.level}`);
-    appendInline(node, parsed.text);
+    appendInline(node, text);
     return node;
   }
   const node = $createParagraphNode();
-  appendInline(node, parsed.text);
+  appendInline(node, text);
   return node;
 }
 
-function isListLine(line) {
+function isListStartLine(line) {
   const type = parse(line).type;
   return type === "bullet" || type === "checkbox";
 }
 
-function buildListNode(lines) {
-  const first = parse(lines[0]);
+// 목록 항목 하나는 "- "/"- [ ] " 로 시작하는 줄에서 시작해, 다음 그런
+// 줄이 나오기 전까지의 뒤이은 줄들은 전부 "그 항목 안" 줄바꿈이다(3R
+// P2-3 -- 항목 경계와 항목 안 줄바꿈을 같은 "\n" 하나로 표기하므로,
+// 항목 시작 여부로만 경계를 가른다).
+function groupListItemLines(lines) {
+  const items = [];
+  for (const line of lines) {
+    if (isListStartLine(line)) {
+      items.push([line]);
+    } else {
+      items[items.length - 1].push(line);
+    }
+  }
+  return items;
+}
+
+function buildListNode(itemLineGroups) {
+  const first = parse(itemLineGroups[0][0]);
   const listType = first.type === "checkbox" ? "check" : "bullet";
   const list = $createListNode(listType);
-  for (const line of lines) {
-    const parsed = parse(line);
+  for (const lineGroup of itemLineGroups) {
+    const parsed = parse(lineGroup[0]);
+    const text = [parsed.text, ...lineGroup.slice(1)].join("\n");
     const item =
       listType === "check"
         ? $createListItemNode(parsed.checked)
         : $createListItemNode();
-    appendInline(item, parsed.text);
+    appendInline(item, text);
     list.append(item);
   }
   return list;
@@ -178,12 +216,10 @@ export function restoreMarkdownIntoEditor(editor, body) {
       if (body.length === 0) return;
       for (const block of body.split("\n\n")) {
         const lines = block.split("\n");
-        if (lines.every(isListLine)) {
-          root.append(buildListNode(lines));
+        if (isListStartLine(lines[0])) {
+          root.append(buildListNode(groupListItemLines(lines)));
         } else {
-          for (const line of lines) {
-            root.append(buildBlockNode(line));
-          }
+          root.append(buildBlockNode(lines));
         }
       }
     },

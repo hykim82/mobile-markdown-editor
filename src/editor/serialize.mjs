@@ -14,7 +14,12 @@
 // 트리거 문자인 "-" 를 항상 쓴다("*"/"+" 로 시작한 원문을 불러오면 "-" 로
 // 정규화되어 그 한 글자만은 원문과 달라진다; 아래 round-trip 시험의
 // KNOWN_LIMITATIONS 에 이 경우 하나가 문서화돼 있다).
-import { $getRoot, $isTextNode, $isElementNode } from "lexical";
+import {
+  $getRoot,
+  $isTextNode,
+  $isElementNode,
+  $isLineBreakNode,
+} from "lexical";
 import { $isHeadingNode } from "@lexical/rich-text";
 import { $isListNode, $isListItemNode } from "@lexical/list";
 
@@ -37,6 +42,12 @@ function collectInlineSegments(elementNode) {
         bold: child.hasFormat("bold"),
         strikethrough: child.hasFormat("strikethrough"),
       });
+    } else if ($isLineBreakNode(child)) {
+      // Shift+Enter 로 만든 "같은 문단 안 줄바꿈"(HYK-304 E4). 이 노드는
+      // TextNode 도 ElementNode 도 아니라서 위 두 분기 어디에도 안 걸리고
+      // 조용히 사라졌었다 -- 원문 줄바꿈 문자 1개로 내보낸다("\n\n" 로 문단을
+      // 나누는 것과 겹치지 않는 표기, restore.mjs 가 그 역할을 한다).
+      segments.push({ text: "\n", bold: false, strikethrough: false });
     } else if ($isElementNode(child)) {
       // 이 조각의 트리거 집합은 인라인 서식(굵게/취소선)만 만든다 -- 다른
       // 인라인 엘리먼트 노드는 나오지 않을 것이나, 나오면 텍스트만 취해

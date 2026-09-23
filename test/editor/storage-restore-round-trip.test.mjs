@@ -23,6 +23,17 @@ const REPRESENTATIVE_BODIES = [
   "**굵고 ~~취소도~~ 같이**",
   "# 하나\n\n## 둘\n\n### 셋",
   "문단 하나\n\n- 목록 하나\n- 목록 둘\n\n**굵은** 문단",
+  // HYK-304-linebreak-1(E4) -- 목록 항목 "안" 줄바꿈(Shift+Enter)이 "다음
+  // 항목"과 같은 "\n" 하나로 표기되므로, 항목 시작 여부(그룹핑)로만
+  // 갈라야 한다(3R P2-3 이 걸린 바로 그 자리). 항목1 이 둘째 줄을 갖고,
+  // 항목2 는 갖지 않는 비대칭 모양까지 함께 재 둔다.
+  "- 항목1\n항목1줄바꿈\n- 항목2",
+  // LineBreakNode 는 서식이 없는 노드라(HYK-304 E4 실측: 실브라우저에서
+  // ctrl+b 로 켠 굵게가 줄바꿈 앞뒤 TextNode 둘 다에 남는다) serialize.mjs
+  // 는 굵게 구간을 줄바꿈에서 "**...**\n**...**" 두 span 으로 자연히
+  // 가른다 -- 단일 "**" 가 원문 줄바꿈을 그대로 가로지르는 모양은 이
+  // 직렬화기가 만들 수 없는 모양이라 fixed point 가 아니다.
+  "**굵게1**\n**굵게2**",
 ];
 
 for (const body of REPRESENTATIVE_BODIES) {
@@ -89,12 +100,25 @@ const PAIRINGS = [
   { label: "셋연속", repeat: 3 },
 ];
 
-// 위치(position) -- 생성된 마커 조각을 문장의 어디에 두는가.
+// 위치(position) -- 생성된 마커 조각을 문장의 어디에 두는가. sep 은
+// 마커 조각과 둘레 글자 사이를 무엇으로 잇는가다(LINE_BREAKS 축 참고) --
+// "단독"은 둘레 글자 자체가 없어 sep 이 들어갈 자리가 없다.
 const POSITIONS = [
-  { label: "문두", wrap: (s) => `${s} 뒤` },
-  { label: "문중", wrap: (s) => `앞 ${s} 뒤` },
-  { label: "문미", wrap: (s) => `앞 ${s}` },
+  { label: "문두", wrap: (s, sep) => `${s}${sep}뒤` },
+  { label: "문중", wrap: (s, sep) => `앞${sep}${s}${sep}뒤` },
+  { label: "문미", wrap: (s, sep) => `앞${sep}${s}` },
   { label: "단독", wrap: (s) => s },
+];
+
+// ⭐줄바꿈(HYK-304-linebreak-1 E4) -- coder-task.md §1-⑵: 손으로 예문을
+// 얹는 대신 이 축을 생성기에 넣어, 마커 조각 둘레의 이음(" ") 자체를
+// "\n"(같은 문단 안 줄바꿈, LineBreakNode)으로 바꿔 본다. 마커 두 글자
+// 내부는 절대 가르지 않는다(POSITIONS.wrap 이 sep 을 항상 마커 조각
+// "바깥" 경계에만 놓는다) -- 줄바꿈이 "**"/"~~" 한 쌍을 반으로 쪼개면
+// 그건 이 축이 아니라 마커 축 자체가 깨지는 별개 결함이라 걸러야 한다.
+const LINE_BREAKS = [
+  { label: "줄바꿈없음", sep: " " },
+  { label: "문단안줄바꿈", sep: "\n" },
 ];
 
 // marker 하나를 repeat 번 늘어놓고 그 사이마다 content 를 끼운다.
@@ -116,15 +140,17 @@ function generateMarkerShapes() {
     for (const position of POSITIONS) {
       for (const content of CONTENTS) {
         for (const pairing of PAIRINGS) {
-          const construct = kind.markers
-            .map((marker) =>
-              buildMarkerRun(marker, pairing.repeat, content.value),
-            )
-            .join("");
-          shapes.push({
-            label: `종류=${kind.label}·위치=${position.label}·속=${content.label}·짝=${pairing.label}`,
-            body: position.wrap(construct),
-          });
+          for (const lineBreak of LINE_BREAKS) {
+            const construct = kind.markers
+              .map((marker) =>
+                buildMarkerRun(marker, pairing.repeat, content.value),
+              )
+              .join("");
+            shapes.push({
+              label: `종류=${kind.label}·위치=${position.label}·속=${content.label}·짝=${pairing.label}·줄바꿈=${lineBreak.label}`,
+              body: position.wrap(construct, lineBreak.sep),
+            });
+          }
         }
       }
     }
@@ -148,8 +174,13 @@ for (const { label, body } of GENERATED_SHAPES) {
   }
 }
 
-test("생성기 축 조합 수는 3(종류)x4(위치)x3(속)x3(짝)=108 로 고정된다(축을 놓치면 이 수가 줄어든다)", () => {
-  assert.equal(GENERATED_SHAPES.length, 108);
+// HYK-304-linebreak-1(E4): 108 에 2(줄바꿈: 없음/문단 안 줄바꿈) 축을
+// 곱해 216 이 됐다("단독" 위치는 sep 이 들어갈 자리가 없어 두 줄바꿈
+// 값이 같은 body 를 만들지만, 그 중복도 조합 수 자체에는 그대로 잡힌다
+// -- REGRESSION_AND_GENERATED_BODIES 의 Map 이 실제 시험에서는 중복을
+// 제거한다).
+test("생성기 축 조합 수는 3(종류)x4(위치)x3(속)x3(짝)x2(줄바꿈)=216 로 고정된다(축을 놓치면 이 수가 줄어든다)", () => {
+  assert.equal(GENERATED_SHAPES.length, 216);
 });
 
 for (const [body, label] of REGRESSION_AND_GENERATED_BODIES) {
@@ -219,7 +250,9 @@ for (const [body, label] of REGRESSION_AND_GENERATED_BODIES) {
 // 한 번 더 고정한다 -- GENERATED_SHAPES 순회에도 이미 포함되어 있다).
 test('"짝은 있지만 속이 빈" 마커(review.md §4 신규 P1)도 생성기 축 안에 있다: 별표·단독·빈·있음 == "****"', () => {
   const shape = GENERATED_SHAPES.find(
-    (s) => s.label === "종류=별표·위치=단독·속=빈·짝=있음" && s.body === "****",
+    (s) =>
+      s.label === "종류=별표·위치=단독·속=빈·짝=있음·줄바꿈=줄바꿈없음" &&
+      s.body === "****",
   );
   assert.ok(shape, "이 좌표가 생성기 출력에 없으면 축 정의가 깨진 것이다");
 });
