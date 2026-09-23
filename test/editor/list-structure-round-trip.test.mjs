@@ -20,7 +20,12 @@ import {
   $isTextNode,
   $isLineBreakNode,
 } from "lexical";
-import { $createListNode, $createListItemNode, $isListNode, $isListItemNode } from "@lexical/list";
+import {
+  $createListNode,
+  $createListItemNode,
+  $isListNode,
+  $isListItemNode,
+} from "@lexical/list";
 import { makeProductEditor } from "../support/make-editor.mjs";
 import { restoreMarkdownIntoEditor } from "../../src/editor/restore.mjs";
 import { serializeEditorToMarkdown } from "../../src/editor/serialize.mjs";
@@ -37,7 +42,11 @@ function listStructureSignature(editor) {
   return editor.getEditorState().read(() => {
     const root = $getRoot();
     const blocks = root.getChildren();
-    assert.equal(blocks.length, 1, "이 축의 입력은 항상 최상위 블록 1개(목록)다");
+    assert.equal(
+      blocks.length,
+      1,
+      "이 축의 입력은 항상 최상위 블록 1개(목록)다",
+    );
     const list = blocks[0];
     assert.ok($isListNode(list), "최상위 블록은 목록 노드여야 한다");
     return {
@@ -46,8 +55,7 @@ function listStructureSignature(editor) {
         .getChildren()
         .filter($isListItemNode)
         .map((item) => ({
-          checked:
-            list.getListType() === "check" ? item.getChecked() : null,
+          checked: list.getListType() === "check" ? item.getChecked() : null,
           childKinds: item.getChildren().map(nodeKind),
         })),
     };
