@@ -12,6 +12,17 @@ import { isQuotaExceededError, attemptCacheCleanup } from "./quota.mjs";
 
 const DEFAULT_DEBOUNCE_MS = 1000;
 
+// HYK-304-linebreak-3(REVIEW-r2.md §1-5 선택지 ⓐ): 이 값이 있는 레코드의
+// body 는 새 직렬화기(backslash escape + 문단 안 줄바꿈 마커,
+// HYK-304-linebreak-1/2)가 썼다는 뜻이다. 없는 레코드(예전부터 IndexedDB
+// 에 있던 메모)는 main(dac26cf, 이 필드 자체가 생기기 전 배포본)이 쓴
+// 옛 형식이다 -- storage-mount.mjs(editor<->storage 를 잇는 유일한
+// 자리)가 이 필드 유무로 restore/serialize 의 legacy 옵션을 고른다. 이
+// 파일 자체는 그 의미를 몰라도 된다(값을 옮겨 적기만 한다) -- 저장
+// 기술을 어댑터 한 곳에 가두는 것과 같은 이유로, editor 지식은 이 필드
+// "값"에 갇혀 있고 storage 계층 코드는 여전히 lexical 을 모른다.
+export const CURRENT_BODY_FORMAT = "escaped-v1";
+
 function setStatus(state, config, next) {
   state.status = next;
   config.onStatusChange(next);
@@ -66,6 +77,7 @@ async function createNewMemo(state, adapter, config, body) {
     id: config.idFactory(),
     title: deriveTitleFromBody(body),
     body,
+    bodyFormat: CURRENT_BODY_FORMAT,
     createdAt: config.now(),
     updatedAt: config.now(),
     deletedAt: null,
@@ -101,6 +113,14 @@ async function handleContentChange(state, adapter, config, body) {
     return;
   }
   state.memo.body = body;
+  // body 는 항상 지금 이 순간의 serializeEditorToMarkdown(새 규칙)이 만든
+  // 값이다(storage-mount.mjs 의 리스너가 그렇게만 부른다) -- 그러니 옛
+  // 형식 메모를 불러온 뒤라도, 사용자가 한 글자라도 치는 순간(=
+  // onContentChange 가 도는 순간) 이 레코드는 이미 새 형식으로
+  // 넘어간다(HYK-304-linebreak-3). 자연 발생적 이행이라 별도의
+  // "재기록" 쓰기를 새로 만들지 않는다 -- 이미 있던 이 저장 경로 자체가
+  // 그 역할을 겸한다.
+  state.memo.bodyFormat = CURRENT_BODY_FORMAT;
   state.memo.title = deriveTitleFromBody(body);
   state.memo.updatedAt = config.now();
   scheduleDebouncedFlush(state, adapter, config);

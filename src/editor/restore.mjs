@@ -97,6 +97,60 @@ function computeMarkerRoles(text, marker) {
 //   개가 escape 된 것이고, 그 뒤에 남는 "\n" 은 그대로 문자로 취급한다.
 // "\n" 이 뒤따르지 않는 backslash run 은 전부 원문 backslash 가 escape 된
 // 것이므로 항상 짝수이고, run/2 개로 되돌린다.
+// ⭐legacy 토크나이저(HYK-304-linebreak-3 · REVIEW-r2.md §1-1): main
+// (dac26cf, bodyFormat 마커가 생기기 전 배포본)의 tokenizeInline 을 그대로
+// 재현한다 -- backslash 는 그 시절 그냥 평범한 글자였다(escape 규칙
+// 자체가 없었다). "**"/"~~" 판정(computeMarkerRoles/findMarkerPositions)은
+// 그 시절과 지금이 완전히 같다(이 축은 이번 라운드가 건드리지 않는다) --
+// 그래서 이 함수는 아래 tokenizeInline 과 마커 처리 코드를 그대로
+// 공유하고 backslash 분기만 없다. storage-mount.mjs 가 bodyFormat 마커
+// 없는 레코드(= main 이 저장한 옛 메모)에서만 이 함수를 고른다.
+function tokenizeInlineLegacy(text) {
+  const boldRoles = computeMarkerRoles(text, "**");
+  const strikeRoles = computeMarkerRoles(text, "~~");
+  const segments = [];
+  let bold = false;
+  let strikethrough = false;
+  let buffer = "";
+  let boldIdx = 0;
+  let strikeIdx = 0;
+  const flush = () => {
+    if (buffer.length > 0) {
+      segments.push({ text: buffer, bold, strikethrough });
+    }
+    buffer = "";
+  };
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith("**", i)) {
+      const role = boldRoles[boldIdx];
+      boldIdx += 1;
+      if (role === "literal") {
+        buffer += "**";
+      } else {
+        flush();
+        bold = role === "open";
+      }
+      i += 2;
+    } else if (text.startsWith("~~", i)) {
+      const role = strikeRoles[strikeIdx];
+      strikeIdx += 1;
+      if (role === "literal") {
+        buffer += "~~";
+      } else {
+        flush();
+        strikethrough = role === "open";
+      }
+      i += 2;
+    } else {
+      buffer += text[i];
+      i += 1;
+    }
+  }
+  flush();
+  return segments;
+}
+
 function tokenizeInline(text) {
   const boldRoles = computeMarkerRoles(text, "**");
   const strikeRoles = computeMarkerRoles(text, "~~");
@@ -156,8 +210,9 @@ function tokenizeInline(text) {
   return segments;
 }
 
-function appendInline(parentNode, text) {
-  for (const segment of tokenizeInline(text)) {
+function appendInline(parentNode, text, { legacy = false } = {}) {
+  const segments = legacy ? tokenizeInlineLegacy(text) : tokenizeInline(text);
+  for (const segment of segments) {
     if (segment.linebreak) {
       parentNode.append($createLineBreakNode());
       continue;
@@ -206,15 +261,15 @@ function splitBlockLines(block) {
 // 그 안에 남은 "\\\n" 은 전부 그 항목/블록 "안" 줄바꿈이라 parse() 가
 // 걷어낸 나머지 그대로(escape 포함) appendInline 에 넘기면 tokenizeInline
 // 이 되돌린다.
-function buildBlockNode(line) {
+function buildBlockNode(line, options) {
   const parsed = parse(line);
   if (parsed.type === "heading") {
     const node = $createHeadingNode(`h${parsed.level}`);
-    appendInline(node, parsed.text);
+    appendInline(node, parsed.text, options);
     return node;
   }
   const node = $createParagraphNode();
-  appendInline(node, parsed.text);
+  appendInline(node, parsed.text, options);
   return node;
 }
 
@@ -223,7 +278,7 @@ function isListLine(line) {
   return type === "bullet" || type === "checkbox";
 }
 
-function buildListNode(lines) {
+function buildListNode(lines, options) {
   const first = parse(lines[0]);
   const listType = first.type === "checkbox" ? "check" : "bullet";
   const list = $createListNode(listType);
@@ -233,25 +288,34 @@ function buildListNode(lines) {
       listType === "check"
         ? $createListItemNode(parsed.checked)
         : $createListItemNode();
-    appendInline(item, parsed.text);
+    appendInline(item, parsed.text, options);
     list.append(item);
   }
   return list;
 }
 
-export function restoreMarkdownIntoEditor(editor, body) {
+// options.legacy(HYK-304-linebreak-3 · REVIEW-r2.md §1-5 선택지 ⓐ):
+// bodyFormat 마커 없는 레코드(= main/dac26cf 가 저장한 옛 메모, storage-
+// mount.mjs 가 고른다)는 그 시절 물리 줄 나누기(`block.split("\n")`,
+// backslash 홀짝을 안 보는 단순 분리)와 tokenizeInlineLegacy 로 읽는다 --
+// splitBlockLines 의 홀짝 판정과 tokenizeInline 의 backslash-escape
+// 해독은 이 라운드(HYK-304-linebreak-2) 가 도입한 규칙이라, 그 규칙이
+// 없던 시절 body 에 걸면 "\n" 바로 앞의 평범한 backslash 를 줄바꿈
+// escape 로 오해해 항목 경계를 삼킨다(REVIEW-r2.md §1-2 P1 그 자체).
+export function restoreMarkdownIntoEditor(editor, body, options = {}) {
+  const { legacy = false } = options;
   editor.update(
     () => {
       const root = $getRoot();
       root.clear();
       if (body.length === 0) return;
       for (const block of body.split("\n\n")) {
-        const lines = splitBlockLines(block);
+        const lines = legacy ? block.split("\n") : splitBlockLines(block);
         if (lines.every(isListLine)) {
-          root.append(buildListNode(lines));
+          root.append(buildListNode(lines, options));
         } else {
           for (const line of lines) {
-            root.append(buildBlockNode(line));
+            root.append(buildBlockNode(line, options));
           }
         }
       }

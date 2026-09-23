@@ -7,11 +7,22 @@
 import { serializeEditorToMarkdown } from "./serialize.mjs";
 import { restoreMarkdownIntoEditor } from "./restore.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
-import { createMemoStore } from "../storage/memo-store.mjs";
+import {
+  createMemoStore,
+  CURRENT_BODY_FORMAT,
+} from "../storage/memo-store.mjs";
 import {
   readCurrentMemoId,
   writeCurrentMemoId,
 } from "../storage/current-memo-pointer.mjs";
+
+// HYK-304-linebreak-3(REVIEW-r2.md §1-1): bodyFormat 필드가 CURRENT_BODY_
+// FORMAT 이 아니면(없거나 다르면) main(dac26cf, 이 필드가 생기기 전
+// 배포본)이 쓴 옛 형식 메모다 -- restore/serialize 양쪽에 legacy 옵션을
+// 걸어야 "보이는 글자"가 원문과 같아진다(표제 불변식).
+function isLegacyRecord(record) {
+  return record.bodyFormat !== CURRENT_BODY_FORMAT;
+}
 
 export function updateSaveNotice(notice, status) {
   if (status === "quota-exceeded") {
@@ -76,11 +87,12 @@ export async function restoreCurrentMemo(
     return;
   }
   store.loadMemo(record);
+  const legacy = isLegacyRecord(record);
   restoreState.applying = true;
-  restoreFn(editor, record.body);
+  restoreFn(editor, record.body, { legacy });
   restoreState.applying = false;
 
-  const restoredBody = serializeFn(editor);
+  const restoredBody = serializeFn(editor, { legacy });
   if (restoredBody !== record.body) {
     restoreState.autosaveBlocked = true;
     logFn(
