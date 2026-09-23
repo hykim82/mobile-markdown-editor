@@ -56,6 +56,35 @@ export function updateSaveNotice(notice, status) {
 // restoreState.autosaveBlocked 를 세워 이후 자동저장을 전부 콘솔 기록으로
 // 돌린다(§1-⑷-ⓑ) -- 세션 하나를 자동저장 없이 보내는 게, 눈치채지 못한
 // 채 멀쩡한 저장 원문을 훼손된 값으로 덮어쓰는 것보다 훨씬 싸다.
+// restoreCurrentMemo(아래)와 openMemoInEditor(HYK-304-memo-list-1, 목록
+// 화면에서 메모를 열 때)가 공유하는 핵심 동작: 레코드를 store/에디터에
+// 앉히고, 복원 직후 왕복(round-trip)을 확인해 다르면 안전판(§1-⑷ 주석
+// 참고)을 건다. record 가 null 이면(새 메모 시작) 에디터만 비우고 왕복
+// 확인은 건너뛴다 -- 비교할 저장 원문이 없다.
+function applyRecordToEditor(
+  editor,
+  store,
+  restoreState,
+  record,
+  { restoreFn, serializeFn, logFn },
+) {
+  store.loadMemo(record);
+  restoreState.applying = true;
+  restoreFn(editor, record ? record.body : "");
+  restoreState.applying = false;
+  restoreState.autosaveBlocked = false;
+  if (!record) return;
+
+  const restoredBody = serializeFn(editor);
+  if (restoredBody !== record.body) {
+    restoreState.autosaveBlocked = true;
+    logFn(
+      "[storage] restore round-trip mismatch -- refusing to autosave over this memo until reload",
+      { memoId: record.id, storedBody: record.body, restoredBody },
+    );
+  }
+}
+
 export async function restoreCurrentMemo(
   editor,
   store,
@@ -75,19 +104,40 @@ export async function restoreCurrentMemo(
     writeCurrentMemoId(null);
     return;
   }
-  store.loadMemo(record);
-  restoreState.applying = true;
-  restoreFn(editor, record.body);
-  restoreState.applying = false;
+  applyRecordToEditor(editor, store, restoreState, record, {
+    restoreFn,
+    serializeFn,
+    logFn,
+  });
+}
 
-  const restoredBody = serializeFn(editor);
-  if (restoredBody !== record.body) {
-    restoreState.autosaveBlocked = true;
-    logFn(
-      "[storage] restore round-trip mismatch -- refusing to autosave over this memo until reload",
-      { memoId: record.id, storedBody: record.body, restoredBody },
-    );
-  }
+// 목록 화면(HYK-304-memo-list-1)에서 카드를 고르거나 "+"로 새 메모를
+// 시작할 때 쓰는 경로. restoreCurrentMemo 는 "앱을 막 열었을 때
+// pointer 가 가리키는 메모를 1회 복원"하는 초기 로드 전용 경로라
+// userEdited 레이스 가드가 있다 -- 이 함수는 사용자가 명시적으로
+// 다른 메모를 «선택»한 순간(클릭)에만 불리므로 그 레이스가 없어
+// 가드가 필요 없다. id 가 없으면(null/undefined) 빈 에디터를 만든다
+// (새 메모 시작 -- 실제 생성은 memo-store.mjs 의 "첫 글자 입력" 정책이
+// 그다음 입력에서 맡는다).
+export async function openMemoInEditor(
+  editor,
+  store,
+  adapter,
+  restoreState,
+  id,
+  {
+    restoreFn = restoreMarkdownIntoEditor,
+    serializeFn = serializeEditorToMarkdown,
+    logFn = (...args) => console.error(...args),
+  } = {},
+) {
+  writeCurrentMemoId(id ?? null);
+  const record = id ? await adapter.get(id) : null;
+  applyRecordToEditor(editor, store, restoreState, record ?? null, {
+    restoreFn,
+    serializeFn,
+    logFn,
+  });
 }
 
 // restoreOptions 는 프로덕션에서 안 쓴다(항상 기본값) -- restore.mjs/
@@ -138,7 +188,13 @@ export function mountStorage(
     });
   });
 
-  restoreCurrentMemo(editor, store, adapter, restoreState, restoreOptions)
+  const initialRestoreReady = restoreCurrentMemo(
+    editor,
+    store,
+    adapter,
+    restoreState,
+    restoreOptions,
+  )
     .then(() => {
       // 사용자가 아직 한 글자도 안 쳤어도(위 리스너가 아직 안 불렸어도)
       // 복원 시점에 이미 불일치가 잡혔다면 그 즉시 화면에 띄운다.
@@ -159,6 +215,20 @@ export function mountStorage(
     if (document.visibilityState === "hidden") flushOnHide();
   });
   window.addEventListener("pagehide", flushOnHide);
+
+  // HYK-304-memo-list-1: app.mjs 가 목록 화면에서 다른 메모를 열 때
+  // openMemoInEditor(위)를 이 mountStorage 가 등록한 것과 같은
+  // registerUpdateListener 에 물리려면, 그 리스너가 참조하는 것과
+  // «같은» restoreState 객체가 필요하다. initialRestoreReady 는 앱
+  // 부팅 시(pointer 가 가리키던 메모의) 초기 복원이 끝난 뒤에야
+  // readCurrentMemoId() 로 "처음 보여줄 화면이 에디터인지 목록인지"를
+  // 판단할 수 있게 해준다(§0-2 restoreCurrentMemo 는 삭제된/없는 메모면
+  // 포인터를 비운다). store 는 매 mountStorage 호출마다 새로 만드는
+  // 평범한 객체라 프로퍼티를 얹어도 이 함수 밖 기존 호출부
+  // (store.getMemoId() 등)에는 영향이 없다 -- 시그니처를 바꾸지 않고
+  // 참조만 내보내는 가장 작은 통로다.
+  store.restoreState = restoreState;
+  store.initialRestoreReady = initialRestoreReady;
 
   return store;
 }
