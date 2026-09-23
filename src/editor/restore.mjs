@@ -87,6 +87,16 @@ function computeMarkerRoles(text, marker) {
   return roles;
 }
 
+// serialize.mjs 의 escapeBackslashes 의 정확한 역(HYK-304-linebreak-2 ·
+// review.md P1-1 수리). 원문 backslash 는 2개로 내보내지므로, "\n" 바로
+// 앞의 연속 backslash 개수(run)의 «홀짝»만으로 유일하게 갈린다:
+// - 홀수 run: 마지막 backslash 1개가 줄바꿈 escape 마커고, 그 앞
+//   (run-1)개(항상 짝수)는 원문 backslash (run-1)/2 개가 escape 된 것.
+// - 짝수 run(0 포함): "\n" 은 escape 가 아니다(splitBlockLines 가 이미
+//   경계로 갈라내 여기까지 안 내려온다) -- run 개는 원문 backslash run/2
+//   개가 escape 된 것이고, 그 뒤에 남는 "\n" 은 그대로 문자로 취급한다.
+// "\n" 이 뒤따르지 않는 backslash run 은 전부 원문 backslash 가 escape 된
+// 것이므로 항상 짝수이고, run/2 개로 되돌린다.
 function tokenizeInline(text) {
   const boldRoles = computeMarkerRoles(text, "**");
   const strikeRoles = computeMarkerRoles(text, "~~");
@@ -124,14 +134,19 @@ function tokenizeInline(text) {
         strikethrough = role === "open";
       }
       i += 2;
-    } else if (text[i] === "\\" && text[i + 1] === "\n") {
-      // serialize.mjs 가 LineBreakNode 를 내보낸 "같은 문단 안 줄바꿈"
-      // 표기(HYK-304 E4, backslash + 줄바꿈 한 글자). 문단 나누기("\n\n")
-      // 와 목록 항목 경계(bare "\n")는 splitBlockLines 가 이미 걸러내
-      // 여기까지 안 내려온다 -- 여기 남는 "\n" 은 전부 이 escape 뿐이다.
-      flush();
-      segments.push({ linebreak: true });
-      i += 2;
+    } else if (text[i] === "\\") {
+      let j = i;
+      while (text[j] === "\\") j += 1;
+      const runLength = j - i;
+      if (text[j] === "\n" && runLength % 2 === 1) {
+        buffer += "\\".repeat((runLength - 1) / 2);
+        flush();
+        segments.push({ linebreak: true });
+        i = j + 1;
+      } else {
+        buffer += "\\".repeat(Math.floor(runLength / 2));
+        i = j;
+      }
     } else {
       buffer += text[i];
       i += 1;
@@ -155,16 +170,30 @@ function appendInline(parentNode, text) {
 }
 
 // block.split("\n") 은 backslash 로 escape 된 "\n"(같은 블록/항목 «안»
-// 줄바꿈, HYK-304 E4)까지 전부 갈라 버린다 -- 그 앞 글자가 "\\" 인 "\n" 은
-// escape 의 절반이라 건너뛰고, 정말 그 앞에 "\\" 가 없는 "\n" 만 목록
-// 항목의 경계(또는, 목록이 아니면 이 블록의 유일한 물리 줄 끝)로 본다.
+// 줄바꿈, HYK-304 E4)까지 전부 갈라 버린다 -- 그래서 "\n" 바로 앞에 연속된
+// backslash 개수(run)의 «홀짝»을 센다(HYK-304-linebreak-2 · review.md
+// P2-2 수리, serialize.mjs 의 escapeBackslashes 단사 규칙의 정확한 역):
+// run 이 홀수면 마지막 backslash 1개가 줄바꿈 escape 마커라 이 "\n" 은
+// 경계가 «아니다»(같은 항목 안 줄바꿈, tokenizeInline 이 되돌린다). run
+// 이 짝수(0 포함)면 원문 backslash 들이 이미 쌍으로 escape 되어 있을 뿐
+// "\n" 자신은 escape 가 아니므로, 목록 항목의 경계(또는 목록이 아니면 이
+// 블록의 유일한 물리 줄 끝)로 본다. 앞 글자 1개만 보던 예전 판정은
+// 원문에 원래 있던 backslash 가 "\n" 바로 앞에 오면(review.md P1-1) 홀짝을
+// 못 갈라 항목 경계를 글자로 삼켰다.
 // "\n\n"(문단 나누기)은 이미 restoreMarkdownIntoEditor 가 바깥에서 먼저
 // 갈라냈으므로 여기 들어오는 block 문자열 안에는 절대 안 남는다.
 function splitBlockLines(block) {
   const lines = [];
   let start = 0;
   for (let i = 0; i < block.length; i += 1) {
-    if (block[i] === "\n" && block[i - 1] !== "\\") {
+    if (block[i] !== "\n") continue;
+    let backslashRun = 0;
+    let j = i - 1;
+    while (j >= 0 && block[j] === "\\") {
+      backslashRun += 1;
+      j -= 1;
+    }
+    if (backslashRun % 2 === 0) {
       lines.push(block.slice(start, i));
       start = i + 1;
     }

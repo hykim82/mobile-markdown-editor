@@ -6,7 +6,12 @@
 import "../support/jsdom-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { $getRoot, $createParagraphNode, $createTextNode } from "lexical";
+import {
+  $getRoot,
+  $createParagraphNode,
+  $createTextNode,
+  $createLineBreakNode,
+} from "lexical";
 import { makeProductEditor } from "../support/make-editor.mjs";
 import { restoreMarkdownIntoEditor } from "../../src/editor/restore.mjs";
 import { serializeEditorToMarkdown } from "../../src/editor/serialize.mjs";
@@ -41,6 +46,15 @@ const REPRESENTATIVE_BODIES = [
   // 정확히 이 축을 위한 것이다(연달아 내보내도 "\n\n" 이 생기지 않아야
   // 한다).
   "가\\\n\\\n나",
+  // review.md §7-1(P2-4) -- 검토자가 직접 돌려 통과시킨 헤딩/체크박스
+  // "안" 줄바꿈 대표 입력 5줄. 데이터 층(저장·복원·재저장)이 닫혀 있음을
+  // 그대로 고정한다(검토자가 이미 쓴 값을 그대로 얹는다 -- 새로 만들지
+  // 않는다).
+  "# 헤딩1\\\n둘째줄",
+  "## 헤딩2\\\n둘째줄",
+  "### 헤딩3\\\n둘\\\n셋",
+  "- [ ] 할일\\\n둘째줄",
+  "- [x] 다한일\\\n둘째줄\n- [ ] 다음",
 ];
 
 for (const body of REPRESENTATIVE_BODIES) {
@@ -109,12 +123,18 @@ const PAIRINGS = [
 
 // 위치(position) -- 생성된 마커 조각을 문장의 어디에 두는가. sep 은
 // 마커 조각과 둘레 글자 사이를 무엇으로 잇는가다(LINE_BREAKS 축 참고) --
-// "단독"은 둘레 글자 자체가 없어 sep 이 들어갈 자리가 없다.
+// "단독"은 둘레 글자 자체가 없어 sep 이 들어갈 자리가 없다. run(백슬래시
+// 축, 아래 BACKSLASH_COUNTS 참고)은 항상 마커 조각 s 의 바로 뒤·sep 의
+// 바로 앞에 붙는다 -- 문두/문중이면 그 뒤에 sep+글자가 더 오므로 "줄
+// 중간", 문미/단독이면 그게 문자열의 끝이므로 "줄 끝"이 되고, s 가 항상
+// 마커 조각이므로 "마커 옆"은 이 축 전체가 자동으로 만족한다(review.md
+// §2 가 요구한 네 위치 중 세 곳 -- 나머지 "목록 표지 옆"은
+// list-structure-round-trip.test.mjs 가 담당한다).
 const POSITIONS = [
-  { label: "문두", wrap: (s, sep) => `${s}${sep}뒤` },
-  { label: "문중", wrap: (s, sep) => `앞${sep}${s}${sep}뒤` },
-  { label: "문미", wrap: (s, sep) => `앞${sep}${s}` },
-  { label: "단독", wrap: (s) => s },
+  { label: "문두", wrap: (s, sep, run) => `${s}${run}${sep}뒤` },
+  { label: "문중", wrap: (s, sep, run) => `앞${sep}${s}${run}${sep}뒤` },
+  { label: "문미", wrap: (s, sep, run) => `앞${sep}${s}${run}` },
+  { label: "단독", wrap: (s, _sep, run) => `${s}${run}` },
 ];
 
 // ⭐줄바꿈(HYK-304-linebreak-1 E4) -- coder-task.md §1-⑵: 손으로 예문을
@@ -127,6 +147,21 @@ const POSITIONS = [
 const LINE_BREAKS = [
   { label: "줄바꿈없음", sep: " " },
   { label: "문단안줄바꿈", sep: "\\\n" },
+];
+
+// review.md §2 -- 생성기 축에 «백슬래시»가 없었다는 빈칸(HYK-304-linebreak-2
+// 반려 사유). count 는 원문에 있는 «실제 사용자 backslash 글자 수»이고,
+// run 은 이 파일의 body 가 실제로 담을 «저장된(escape 된) 바이트열»이다
+// -- serialize.mjs 의 escapeBackslashes 규칙(HYK-304-linebreak-2 수리)이
+// backslash 1개를 2개로 내보내므로, count 개의 원문 backslash 는 저장
+// 형태에서 항상 2*count 개(짝수)로 나타난다. 홀수 개를 이 축에 넣지
+// 않는 이유: 저장 쪽(serialize.mjs)이 «절대» 홀수 개를 단독으로(줄바꿈
+// escape 마커와 안 붙어서) 만들어 내지 않으므로, 그런 body 는 "restore
+// 의 입력으로 직접 쓰는" 이 시험의 전제(저장된 형태) 밖이다.
+const BACKSLASH_COUNTS = [
+  { label: "없음", count: 0 },
+  { label: "하나", count: 1 },
+  { label: "둘", count: 2 },
 ];
 
 // marker 하나를 repeat 번 늘어놓고 그 사이마다 content 를 끼운다.
@@ -149,15 +184,19 @@ function generateMarkerShapes() {
       for (const content of CONTENTS) {
         for (const pairing of PAIRINGS) {
           for (const lineBreak of LINE_BREAKS) {
-            const construct = kind.markers
-              .map((marker) =>
-                buildMarkerRun(marker, pairing.repeat, content.value),
-              )
-              .join("");
-            shapes.push({
-              label: `종류=${kind.label}·위치=${position.label}·속=${content.label}·짝=${pairing.label}·줄바꿈=${lineBreak.label}`,
-              body: position.wrap(construct, lineBreak.sep),
-            });
+            for (const backslash of BACKSLASH_COUNTS) {
+              const construct = kind.markers
+                .map((marker) =>
+                  buildMarkerRun(marker, pairing.repeat, content.value),
+                )
+                .join("");
+              const run = "\\".repeat(backslash.count * 2);
+              shapes.push({
+                label: `종류=${kind.label}·위치=${position.label}·속=${content.label}·짝=${pairing.label}·줄바꿈=${lineBreak.label}·백슬래시=${backslash.label}`,
+                body: position.wrap(construct, lineBreak.sep, run),
+                hasBackslash: backslash.count > 0,
+              });
+            }
           }
         }
       }
@@ -171,27 +210,39 @@ const GENERATED_SHAPES = generateMarkerShapes();
 // "포함" 관계를 산문이 아니라 코드로 만든다: 레거시 목록과 생성기 출력을
 // body 기준으로 합쳐서 하나의 시험 집합으로 돌린다. 같은 body 가 양쪽에
 // 다 있으면(예: "**" 는 레거시 목록에도, 종류=별표·위치=단독·속=빈·
-// 짝=없음 좌표에도 있다) 레거시 라벨을 남겨 회귀 증거 쪽 이름을 우선한다.
+// 짝=없음·백슬래시=없음 좌표에도 있다) 레거시 라벨을 남겨 회귀 증거 쪽
+// 이름을 우선한다.
 const REGRESSION_AND_GENERATED_BODIES = new Map();
 for (const body of UNPAIRED_MARKER_BODIES) {
-  REGRESSION_AND_GENERATED_BODIES.set(body, `review.md 재현(1R/2R 회귀)`);
+  REGRESSION_AND_GENERATED_BODIES.set(body, {
+    label: `review.md 재현(1R/2R 회귀)`,
+    hasBackslash: false,
+  });
 }
-for (const { label, body } of GENERATED_SHAPES) {
+for (const { label, body, hasBackslash } of GENERATED_SHAPES) {
   if (!REGRESSION_AND_GENERATED_BODIES.has(body)) {
-    REGRESSION_AND_GENERATED_BODIES.set(body, label);
+    REGRESSION_AND_GENERATED_BODIES.set(body, { label, hasBackslash });
   }
 }
 
-// HYK-304-linebreak-1(E4): 108 에 2(줄바꿈: 없음/문단 안 줄바꿈) 축을
-// 곱해 216 이 됐다("단독" 위치는 sep 이 들어갈 자리가 없어 두 줄바꿈
-// 값이 같은 body 를 만들지만, 그 중복도 조합 수 자체에는 그대로 잡힌다
-// -- REGRESSION_AND_GENERATED_BODIES 의 Map 이 실제 시험에서는 중복을
-// 제거한다).
-test("생성기 축 조합 수는 3(종류)x4(위치)x3(속)x3(짝)x2(줄바꿈)=216 로 고정된다(축을 놓치면 이 수가 줄어든다)", () => {
-  assert.equal(GENERATED_SHAPES.length, 216);
+// HYK-304-linebreak-1(E4)+HYK-304-linebreak-2: 108 에 2(줄바꿈: 없음/문단
+// 안 줄바꿈) x 3(백슬래시: 없음/하나/둘) 축을 곱해 648 이 됐다("단독"
+// 위치는 sep 이 들어갈 자리가 없어 줄바꿈 값이 같은 body 를 만들지만,
+// 그 중복도 조합 수 자체에는 그대로 잡힌다 -- REGRESSION_AND_GENERATED_
+// BODIES 의 Map 이 실제 시험에서는 중복을 제거한다).
+test("생성기 축 조합 수는 3(종류)x4(위치)x3(속)x3(짝)x2(줄바꿈)x3(백슬래시)=648 로 고정된다(축을 놓치면 이 수가 줄어든다)", () => {
+  assert.equal(GENERATED_SHAPES.length, 648);
 });
 
-for (const [body, label] of REGRESSION_AND_GENERATED_BODIES) {
+// review.md §2-P2-3 -- 실행 집합 크기(레거시+생성기, 중복 제거 후)가
+// «산술 추정»이 아니라 시험이 직접 단언하게 만든다. 이 값은
+// node --test 로 직접 실측했다(아래 결과 파일 참고) -- 손으로 어림한
+// 수가 아니다.
+test("실행 집합(레거시+생성기, 중복 제거) 크기가 고정된다(축을 놓치면 이 수가 줄어든다)", () => {
+  assert.equal(REGRESSION_AND_GENERATED_BODIES.size, 574);
+});
+
+for (const [body, { label }] of REGRESSION_AND_GENERATED_BODIES) {
   test(`restore -> serialize 왕복이 원문을 글자 그대로 보존한다 (${label}): ${JSON.stringify(body)}`, () => {
     const { editor } = makeProductEditor();
     restoreMarkdownIntoEditor(editor, body);
@@ -201,6 +252,16 @@ for (const [body, label] of REGRESSION_AND_GENERATED_BODIES) {
 
 // 화면에 실제로 남는 문단(포맷 토글 없이 문자 그대로)을 만든다 -- 사용자가
 // "**"/"~~" 를 키보드로 직접 쳤을 때 에디터 상태가 되는 모양과 같다.
+// ⛔HYK-304-linebreak-2 수리: LINE_BREAKS 축의 "\\\n"(backslash + 실제
+// 줄바꿈 한 글자)은 "Shift+Enter 를 쳤다"는 뜻이다(LINE_BREAKS 축 주석
+// 참고) -- 그런데 이 헬퍼는 그 두 글자를 «TextNode 하나의 원문 글자»로
+// 그대로 박아 넣었다. serialize.mjs 가 backslash 를 escape 하지 않던
+// 구버전에서는 그게 우연히 LineBreakNode 가 내보내는 바이트와 같아서
+// 안 들켰을 뿐, 실제 Lexical 에서 Shift+Enter 는 항상 LineBreakNode
+// «노드»를 만들지 TextNode 안에 생 줄바꿈 글자를 남기지 않는다(그런
+// TextNode 는 실제 타이핑으로 도달 불가능하다). 그래서 "\\\n" 이 나오는
+// 자리마다 실제 LineBreakNode 를 끼워 넣는다 -- 그래야 이 헬퍼가 "타이핑
+// 그대로"를 정확히 흉내 낸다.
 function makeTypedPlainTextEditor(text) {
   const { editor } = makeProductEditor();
   editor.update(
@@ -208,7 +269,11 @@ function makeTypedPlainTextEditor(text) {
       const root = $getRoot();
       root.clear();
       const paragraph = $createParagraphNode();
-      paragraph.append($createTextNode(text));
+      const parts = text.split("\\\n");
+      parts.forEach((part, index) => {
+        if (index > 0) paragraph.append($createLineBreakNode());
+        if (part.length > 0) paragraph.append($createTextNode(part));
+      });
       root.append(paragraph);
     },
     { discrete: true },
@@ -222,7 +287,23 @@ function makeTypedPlainTextEditor(text) {
 // 한다(예전 시험은 restore -> serialize 한 번만 봤다). 타이핑 그대로의
 // 편집기 상태에서 저장(1) -> 복원 -> 재저장(2) -> 다시 복원 -> 재저장(3)
 // 까지 세 단계 모두 바이트가 같아야 재접속을 반복해도 안정적이다.
-for (const [body, label] of REGRESSION_AND_GENERATED_BODIES) {
+//
+// ⛔HYK-304-linebreak-2 -- hasBackslash 인 body(위 BACKSLASH_COUNTS 축)는
+// 이 루프에서 제외한다. body 는 여기서 "저장된(escape 된) 바이트열"로
+// 쓰이는데(REGRESSION_AND_GENERATED_BODIES 의 다른 용도, 위 restore ->
+// serialize 루프 참고), 이 루프는 그 같은 문자열을 정반대로 "사용자가
+// 서식 없이 그대로 타이핑한 원문 글자"로 해석해 TextNode 에 그대로
+// 박아 넣는다. escapeBackslashes 가 생긴 지금은 그 두 해석이 backslash
+// 앞에서 갈린다 -- 실제로 타이핑된 backslash 글자는 저장 시 반드시
+// 2배로 escape 되므로 "타이핑 직후 저장은 원문과 같다"는 이 루프의
+// 전제 자체가 backslash 가 있는 순간 항상 거짓이 된다(어느 위치에
+// 있든 -- 이건 이 축만의 결함이 아니라 escape 를 도입하면서 생긴
+// 필연적 결과다). 이 축의 왕복 보장은 restore -> serialize 루프(위,
+// "저장된 형태"로 정확히 해석)가 이미 전량 맡고 있다 -- 여기서 빼는
+// 것은 축소가 아니라, 이 루프가 애초에 재지 못하는 걸 억지로 재지
+// 않는 것이다(기존 216+8 개는 전부 그대로 남는다 -- hasBackslash=false).
+for (const [body, { label, hasBackslash }] of REGRESSION_AND_GENERATED_BODIES) {
+  if (hasBackslash) continue;
   test(`원문 바이트는 저장·복원·재저장 어디서도 변하지 않는다 (${label}): ${JSON.stringify(body)}`, () => {
     const typedEditor = makeTypedPlainTextEditor(body);
     const saved1 = serializeEditorToMarkdown(typedEditor);
@@ -259,7 +340,8 @@ for (const [body, label] of REGRESSION_AND_GENERATED_BODIES) {
 test('"짝은 있지만 속이 빈" 마커(review.md §4 신규 P1)도 생성기 축 안에 있다: 별표·단독·빈·있음 == "****"', () => {
   const shape = GENERATED_SHAPES.find(
     (s) =>
-      s.label === "종류=별표·위치=단독·속=빈·짝=있음·줄바꿈=줄바꿈없음" &&
+      s.label ===
+        "종류=별표·위치=단독·속=빈·짝=있음·줄바꿈=줄바꿈없음·백슬래시=없음" &&
       s.body === "****",
   );
   assert.ok(shape, "이 좌표가 생성기 출력에 없으면 축 정의가 깨진 것이다");

@@ -33,12 +33,26 @@ const INLINE_MARKS = [
   { name: "strikethrough", marker: "~~" },
 ];
 
+// ⭐단사(injective) 규칙(HYK-304-linebreak-2 · review.md P1-1 수리): 줄바꿈을
+// "\"+줄바꿈으로 내보내면서 원문에 "원래 있던" backslash 는 그대로 두면,
+// 그 backslash 가 escape 마커의 절반과 같은 바이트가 되어 서로 다른 두
+// 문서가 같은 바이트로 저장된다(review.md 표 참고). 규칙: escape 문자로
+// 쓰는 글자(backslash) 는 "그 자신도" escape 한다 -- 원문의 backslash
+// 1개를 2개로 내보낸다. 그러면 저장된 문자열에서 "\n" 바로 앞의 연속
+// backslash 개수는 항상 "홀수 = 줄바꿈 escape 마커(마지막 한 개) + 그
+// 앞의 원문 backslash 쌍들" 아니면 "짝수 = 원문 backslash 쌍들만, \n 은
+// escape 가 아니다"로만 나뉘어 유일하게 복원된다(restore.mjs 의 역함수
+// 참고 -- splitBlockLines/tokenizeInline 이 이 홀짝을 그대로 센다).
+function escapeBackslashes(text) {
+  return text.replace(/\\/g, "\\\\");
+}
+
 function collectInlineSegments(elementNode) {
   const segments = [];
   for (const child of elementNode.getChildren()) {
     if ($isTextNode(child)) {
       segments.push({
-        text: child.getTextContent(),
+        text: escapeBackslashes(child.getTextContent()),
         bold: child.hasFormat("bold"),
         strikethrough: child.hasFormat("strikethrough"),
       });
@@ -50,14 +64,16 @@ function collectInlineSegments(elementNode) {
       // 썼다면 "\n\n"(문단 나누기, $serializeRootToMarkdown 의 블록
       // 구분자)과 연속 두 번의 Shift+Enter 에서 정확히 충돌한다 --
       // backslash 를 앞세우면 몇 번을 연달아 내보내도("\\\n\\\n"…) 그
-      // 사이에 "\n\n"(줄바꿈 두 개가 나란히)가 생기지 않는다.
+      // 사이에 "\n\n"(줄바꿈 두 개가 나란히)가 생기지 않는다. 이 마커
+      // 자신은 escape 하지 않는다(escapeBackslashes 는 원문 글자에만
+      // 적용된다) -- 위 단사 규칙 문단 참고.
       segments.push({ text: "\\\n", bold: false, strikethrough: false });
     } else if ($isElementNode(child)) {
       // 이 조각의 트리거 집합은 인라인 서식(굵게/취소선)만 만든다 -- 다른
       // 인라인 엘리먼트 노드는 나오지 않을 것이나, 나오면 텍스트만 취해
       // 조용히 삼키지 않고 최소한 글자는 보존한다.
       segments.push({
-        text: child.getTextContent(),
+        text: escapeBackslashes(child.getTextContent()),
         bold: false,
         strikethrough: false,
       });
