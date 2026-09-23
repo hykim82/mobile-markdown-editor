@@ -53,6 +53,30 @@ function buildEmptyState(message) {
 // -- 목록 빈 상태" 고정 문구를 그대로 쓴다.
 export const EMPTY_LIST_MESSAGE = "아직 메모가 없어요. +로 시작";
 
+// coder-task.md §2-2 정본 문면: spec/GLOSSARY.md "마이크로카피 -- 목록
+// 오류" 고정 문구. "다시" 는 그 자리에서 누를 수 있어야 하므로(§2-2)
+// 문구 전체를 버튼으로 만든다 -- 클래스명을 EMPTY_LIST_MESSAGE 쪽
+// (.memo-list-empty)과 다르게 둬 "메모 0개 정상"과 "조회 실패"가 항상
+// 서로 다른 화면으로 구별된다(§2-3 구별 축).
+export const LIST_ERROR_MESSAGE = "불러오기 실패 · 다시";
+
+function buildErrorState(message, onRetry) {
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "memo-list-error";
+  retry.textContent = message;
+  retry.addEventListener("click", () => onRetry());
+  return retry;
+}
+
+// PRD §8 정책 "목록 불러오기 실패 = 재시도, 저장 파일 훼손 없음(읽기
+// 전용 실패)": 이 함수는 DOM 만 그린다 -- 저장 계층을 다시 조회하는
+// 실제 재시도는 onRetry 콜백(memo-list-mount.mjs 의 refresh)이 한다.
+export function renderMemoListError(container, { onRetry }) {
+  container.textContent = "";
+  container.append(buildErrorState(LIST_ERROR_MESSAGE, onRetry));
+}
+
 // memos 는 이미 src/storage/list-query.mjs 가 정렬·필터해 둔 배열이어야
 // 한다 -- 이 함수는 그 순서를 그대로 DOM 순서로 옮길 뿐이다.
 export function renderMemoList(

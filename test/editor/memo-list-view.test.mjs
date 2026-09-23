@@ -6,7 +6,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   renderMemoList,
+  renderMemoListError,
   EMPTY_LIST_MESSAGE,
+  LIST_ERROR_MESSAGE,
 } from "../../src/editor/memo-list-view.mjs";
 
 function memo(id, overrides = {}) {
@@ -81,6 +83,32 @@ test("카드를 클릭하면 onOpen 이 그 메모 id 로 정확히 한 번 불�
   });
   container.querySelector('[data-memo-id="b"]').click();
   assert.deepEqual(opened, ["b"]);
+});
+
+// coder-task.md §2 (P2-1): renderMemoListError 는 renderMemoList 와
+// 별개 함수다 -- adapter -> mount 쪽의 catch 배선은 memo-list-mount.test.mjs
+// 가 재고, 여기서는 순수 DOM 모양(문구·재시도 요소·구별 축)만 잰다.
+test("실패 문구가 GLOSSARY 고정 문구 그대로 뜨고, 그 요소 자체가 재시도 가능한 버튼이다", () => {
+  const container = document.createElement("div");
+  let retried = 0;
+  renderMemoListError(container, { onRetry: () => retried++ });
+
+  const errorEl = container.querySelector(".memo-list-error");
+  assert.ok(errorEl, "실패 요소가 있어야 한다");
+  assert.equal(errorEl.tagName, "BUTTON");
+  assert.equal(errorEl.textContent, LIST_ERROR_MESSAGE);
+  assert.equal(container.querySelector(".memo-list-empty"), null);
+
+  errorEl.click();
+  assert.equal(retried, 1, "재시도 요소를 누르면 onRetry 가 불려야 한다");
+});
+
+test("재렌더: renderMemoListError 를 부르면 이전 카드/빈 상태가 남지 않는다", () => {
+  const container = document.createElement("div");
+  renderMemoList(container, [memo("a")], { onOpen: () => {} });
+  renderMemoListError(container, { onRetry: () => {} });
+  assert.equal(container.querySelectorAll(".memo-card").length, 0);
+  assert.ok(container.querySelector(".memo-list-error"));
 });
 
 // 제목 축(coder-task.md §4) -- 목록 화면은 memo.title 필드를 그대로
