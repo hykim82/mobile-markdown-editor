@@ -45,9 +45,13 @@ function collectInlineSegments(elementNode) {
     } else if ($isLineBreakNode(child)) {
       // Shift+Enter 로 만든 "같은 문단 안 줄바꿈"(HYK-304 E4). 이 노드는
       // TextNode 도 ElementNode 도 아니라서 위 두 분기 어디에도 안 걸리고
-      // 조용히 사라졌었다 -- 원문 줄바꿈 문자 1개로 내보낸다("\n\n" 로 문단을
-      // 나누는 것과 겹치지 않는 표기, restore.mjs 가 그 역할을 한다).
-      segments.push({ text: "\n", bold: false, strikethrough: false });
+      // 조용히 사라졌었다 -- backslash + 줄바꿈 한 글자로 내보낸다(표준
+      // 마크다운의 "하드 줄바꿈" 표기와 같은 모양). 줄바꿈 문자 «하나»만
+      // 썼다면 "\n\n"(문단 나누기, $serializeRootToMarkdown 의 블록
+      // 구분자)과 연속 두 번의 Shift+Enter 에서 정확히 충돌한다 --
+      // backslash 를 앞세우면 몇 번을 연달아 내보내도("\\\n\\\n"…) 그
+      // 사이에 "\n\n"(줄바꿈 두 개가 나란히)가 생기지 않는다.
+      segments.push({ text: "\\\n", bold: false, strikethrough: false });
     } else if ($isElementNode(child)) {
       // 이 조각의 트리거 집합은 인라인 서식(굵게/취소선)만 만든다 -- 다른
       // 인라인 엘리먼트 노드는 나오지 않을 것이나, 나오면 텍스트만 취해

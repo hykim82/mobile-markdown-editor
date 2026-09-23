@@ -124,13 +124,14 @@ function tokenizeInline(text) {
         strikethrough = role === "open";
       }
       i += 2;
-    } else if (text[i] === "\n") {
+    } else if (text[i] === "\\" && text[i + 1] === "\n") {
       // serialize.mjs 가 LineBreakNode 를 내보낸 "같은 문단 안 줄바꿈"
-      // 표기(HYK-304 E4) -- "\n\n"(문단 나누기)은 restoreMarkdownIntoEditor
-      // 가 블록 단위로 먼저 갈라내므로 여기까지는 절대 안 내려온다.
+      // 표기(HYK-304 E4, backslash + 줄바꿈 한 글자). 문단 나누기("\n\n")
+      // 와 목록 항목 경계(bare "\n")는 splitBlockLines 가 이미 걸러내
+      // 여기까지 안 내려온다 -- 여기 남는 "\n" 은 전부 이 escape 뿐이다.
       flush();
       segments.push({ linebreak: true });
-      i += 1;
+      i += 2;
     } else {
       buffer += text[i];
       i += 1;
@@ -153,56 +154,57 @@ function appendInline(parentNode, text) {
   }
 }
 
-// "\n\n"(문단 나누기)로 이미 갈라낸 한 블록 안의 물리 줄들(lines) --
-// lines[0] 만 타입 프리픽스("#"/"- "/"- [ ] ")를 걸치고, 나머지는 모두
-// 그 블록 안에서 일어난 Shift+Enter 줄바꿈의 연속선이다(HYK-304 E4).
-// appendInline 이 그 사이사이의 "\n" 을 LineBreakNode 로 되돌린다.
-function buildBlockNode(lines) {
-  const parsed = parse(lines[0]);
-  const text = [parsed.text, ...lines.slice(1)].join("\n");
+// block.split("\n") 은 backslash 로 escape 된 "\n"(같은 블록/항목 «안»
+// 줄바꿈, HYK-304 E4)까지 전부 갈라 버린다 -- 그 앞 글자가 "\\" 인 "\n" 은
+// escape 의 절반이라 건너뛰고, 정말 그 앞에 "\\" 가 없는 "\n" 만 목록
+// 항목의 경계(또는, 목록이 아니면 이 블록의 유일한 물리 줄 끝)로 본다.
+// "\n\n"(문단 나누기)은 이미 restoreMarkdownIntoEditor 가 바깥에서 먼저
+// 갈라냈으므로 여기 들어오는 block 문자열 안에는 절대 안 남는다.
+function splitBlockLines(block) {
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i < block.length; i += 1) {
+    if (block[i] === "\n" && block[i - 1] !== "\\") {
+      lines.push(block.slice(start, i));
+      start = i + 1;
+    }
+  }
+  lines.push(block.slice(start));
+  return lines;
+}
+
+// 한 줄(line) 은 이미 splitBlockLines 가 항목/블록 경계로 확정한 것 --
+// 그 안에 남은 "\\\n" 은 전부 그 항목/블록 "안" 줄바꿈이라 parse() 가
+// 걷어낸 나머지 그대로(escape 포함) appendInline 에 넘기면 tokenizeInline
+// 이 되돌린다.
+function buildBlockNode(line) {
+  const parsed = parse(line);
   if (parsed.type === "heading") {
     const node = $createHeadingNode(`h${parsed.level}`);
-    appendInline(node, text);
+    appendInline(node, parsed.text);
     return node;
   }
   const node = $createParagraphNode();
-  appendInline(node, text);
+  appendInline(node, parsed.text);
   return node;
 }
 
-function isListStartLine(line) {
+function isListLine(line) {
   const type = parse(line).type;
   return type === "bullet" || type === "checkbox";
 }
 
-// 목록 항목 하나는 "- "/"- [ ] " 로 시작하는 줄에서 시작해, 다음 그런
-// 줄이 나오기 전까지의 뒤이은 줄들은 전부 "그 항목 안" 줄바꿈이다(3R
-// P2-3 -- 항목 경계와 항목 안 줄바꿈을 같은 "\n" 하나로 표기하므로,
-// 항목 시작 여부로만 경계를 가른다).
-function groupListItemLines(lines) {
-  const items = [];
-  for (const line of lines) {
-    if (isListStartLine(line)) {
-      items.push([line]);
-    } else {
-      items[items.length - 1].push(line);
-    }
-  }
-  return items;
-}
-
-function buildListNode(itemLineGroups) {
-  const first = parse(itemLineGroups[0][0]);
+function buildListNode(lines) {
+  const first = parse(lines[0]);
   const listType = first.type === "checkbox" ? "check" : "bullet";
   const list = $createListNode(listType);
-  for (const lineGroup of itemLineGroups) {
-    const parsed = parse(lineGroup[0]);
-    const text = [parsed.text, ...lineGroup.slice(1)].join("\n");
+  for (const line of lines) {
+    const parsed = parse(line);
     const item =
       listType === "check"
         ? $createListItemNode(parsed.checked)
         : $createListItemNode();
-    appendInline(item, text);
+    appendInline(item, parsed.text);
     list.append(item);
   }
   return list;
@@ -215,11 +217,13 @@ export function restoreMarkdownIntoEditor(editor, body) {
       root.clear();
       if (body.length === 0) return;
       for (const block of body.split("\n\n")) {
-        const lines = block.split("\n");
-        if (isListStartLine(lines[0])) {
-          root.append(buildListNode(groupListItemLines(lines)));
+        const lines = splitBlockLines(block);
+        if (lines.every(isListLine)) {
+          root.append(buildListNode(lines));
         } else {
-          root.append(buildBlockNode(lines));
+          for (const line of lines) {
+            root.append(buildBlockNode(line));
+          }
         }
       }
     },
