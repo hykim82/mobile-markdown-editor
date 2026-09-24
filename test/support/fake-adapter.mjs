@@ -9,6 +9,8 @@ export function createFakeAdapter() {
   const rows = new Map();
   let failuresLeft = 0;
   let failureToThrow = null;
+  let listFailuresLeft = 0;
+  let listFailureToThrow = null;
 
   return {
     async put(memo) {
@@ -23,6 +25,12 @@ export function createFakeAdapter() {
       return memo ? { ...memo } : undefined;
     },
     async list() {
+      if (listFailuresLeft > 0) {
+        listFailuresLeft -= 1;
+        throw (
+          listFailureToThrow ?? new Error("fake-adapter: forced list failure")
+        );
+      }
       return [...rows.values()].map((memo) => ({ ...memo }));
     },
     async remove(id) {
@@ -33,6 +41,12 @@ export function createFakeAdapter() {
     forceNextPutFailures(times, error) {
       failuresLeft = times;
       failureToThrow = error ?? null;
+    },
+    // coder-task.md §2(P2-1): 목록 조회(저장 계층) 실패를 결정적으로
+    // 재현하는 훅 -- forceNextPutFailures 와 같은 모양.
+    forceNextListFailures(times, error) {
+      listFailuresLeft = times;
+      listFailureToThrow = error ?? null;
     },
   };
 }

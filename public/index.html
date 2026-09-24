@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1"
     />
-    <title>에디터 -- 라이브 렌더링 (HYK-304)</title>
+    <title>모바일 마크다운 에디터 (HYK-304)</title>
     <style>
       :root {
         --color-bg: #fafaf8;
@@ -34,6 +34,90 @@
         font-weight: 600;
         color: var(--color-text-muted);
         margin: 0 0 12px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      #list-screen .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+      #list-screen .topbar h1 {
+        font-size: 22px;
+        font-weight: 600;
+        color: var(--color-text-primary);
+        margin: 0;
+      }
+      #list-root .memo-card {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: var(--color-bg-elevated);
+        border: 1px solid var(--color-border);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 8px;
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+      }
+      #list-root .memo-card-title {
+        font-size: var(--font-size-body);
+        color: var(--color-text-primary);
+        margin-bottom: 4px;
+        overflow-wrap: anywhere;
+      }
+      #list-root .memo-card-meta {
+        font-size: 13px;
+        color: var(--color-text-muted);
+      }
+      #list-root .memo-list-empty {
+        color: var(--color-text-muted);
+        padding: 32px 8px;
+        text-align: center;
+      }
+      #list-root .memo-list-error {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        color: #d14343;
+        padding: 32px 8px;
+        text-align: center;
+        font: inherit;
+        min-height: 44px;
+        cursor: pointer;
+      }
+      #new-memo-button {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        width: 56px;
+        height: 56px;
+        min-height: 44px;
+        border-radius: 28px;
+        background: var(--color-accent);
+        color: #ffffff;
+        border: none;
+        font-size: 28px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      #editor-screen .topbar {
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      #back-to-list-button {
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        font-size: 15px;
+        min-height: 44px;
+        padding: 0 8px 0 0;
+        cursor: pointer;
       }
       #editor-root {
         min-height: 40vh;
@@ -149,14 +233,25 @@
     </style>
   </head>
   <body>
-    <h1>에디터(라이브 렌더링)</h1>
-    <div id="editor-root" contenteditable="true"></div>
-    <div id="save-notice" hidden></div>
-    <button id="notion-copy-button" type="button">노션 복사</button>
-    <div id="notion-copy-toast" hidden></div>
-    <div class="raw-section">
-      <h1>지금 원문은 이것입니다(개발용 표시 -- 저장·복사 아님)</h1>
-      <pre id="raw-panel"></pre>
+    <div id="list-screen">
+      <div class="topbar">
+        <h1>메모</h1>
+      </div>
+      <div id="list-root" class="list"></div>
+      <button id="new-memo-button" type="button" aria-label="새 메모">+</button>
+    </div>
+    <div id="editor-screen" hidden>
+      <div class="topbar">
+        <button id="back-to-list-button" type="button">‹ 목록</button>
+      </div>
+      <div id="editor-root" contenteditable="true"></div>
+      <div id="save-notice" hidden></div>
+      <button id="notion-copy-button" type="button">노션 복사</button>
+      <div id="notion-copy-toast" hidden></div>
+      <div class="raw-section">
+        <h1>지금 원문은 이것입니다(개발용 표시 -- 저장·복사 아님)</h1>
+        <pre id="raw-panel"></pre>
+      </div>
     </div>
     <script type="module" src="/dist/app.js"></script>
   </body>
