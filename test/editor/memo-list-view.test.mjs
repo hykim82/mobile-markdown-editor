@@ -9,7 +9,9 @@ import {
   renderMemoListError,
   EMPTY_LIST_MESSAGE,
   LIST_ERROR_MESSAGE,
+  UNTITLED_MEMO_PLACEHOLDER,
 } from "../../src/editor/memo-list-view.mjs";
+import { deriveTitleFromBody } from "../../src/storage/title.mjs";
 
 function memo(id, overrides = {}) {
   return {
@@ -123,4 +125,96 @@ test("제목 축: 카드 제목은 memo.title 을 변형 없이 그대로 보여
   renderMemoList(container, [memo("a", { title })], { onOpen: () => {} });
   const titleEl = container.querySelector(".memo-card-title");
   assert.equal(titleEl.textContent, title);
+});
+
+// 이름 없는 카드 축(coder-task.md §2, E3 검토 P2-9) -- 첫 줄이 공백뿐인
+// 메모는 title.mjs 의 deriveTitleFromBody 가 이미 trim() 해 저장 시점에
+// memo.title === "" 이 된다(그 사실 자체는 memo-store.test.mjs/title.mjs
+// 의 책임이라 여기서 다시 재지 않는다). 이 파일은 그 "빈 제목"이 목록
+// 화면에 "시각만 있는 이름 없는 카드"로 남지 않고 임시 문구를 보이는지를
+// 잰다 -- 그래서 아래 4종은 전부 memo.title 을 이미 "" 로 심는다(실제
+// deriveTitleFromBody 가 공백류를 어떻게 접든, 렌더러 입장에선 "빈
+// 문자열을 받았을 때"만 안다).
+
+// 공백 축: 스페이스만 / 탭만 / 개행만 / 전각 공백(보이지 않는 글자)만인
+// 첫 줄 -- title.mjs 의 trim() 이 전부 "" 로 접으므로(경계 축: 아래
+// 참고) 렌더러가 보는 입력은 네 경우 모두 동일하게 memo.title === "" 다.
+for (const [label, rawFirstLine] of [
+  ["스페이스만", "   "],
+  ["탭만", "\t\t"],
+  ["개행만", "\n"],
+  ["전각 공백만(보이지 않는 글자)", "\u3000\u3000"],
+]) {
+  test(`공백 축(${label}): 첫 줄이 공백뿐이라 title이 ""인 메모는 카드에 임시 문구를 보인다`, () => {
+    // 렌더러가 실제로 받는 값은 항상 deriveTitleFromBody(rawFirstLine + ...) 의
+    // 결과인 "" 다 -- 아래는 그 파생이 실제로 ""로 접히는지를 같은 자리에서
+    // 값으로 재확인해 둔다(경계 축과 겹치는 목적).
+    assert.equal(
+      deriveTitleFromBody(rawFirstLine),
+      "",
+      `deriveTitleFromBody(${JSON.stringify(rawFirstLine)}) 는 "" 여야 한다(경계 축 전제)`,
+    );
+
+    const container = document.createElement("div");
+    renderMemoList(container, [memo("blank-1", { title: "" })], {
+      onOpen: () => {},
+    });
+    const titleEl = container.querySelector(".memo-card-title");
+    assert.ok(
+      titleEl,
+      "카드 자체는 여전히 있어야 한다(빈 줄이 아니라 카드 하나)",
+    );
+    assert.equal(
+      titleEl.textContent,
+      UNTITLED_MEMO_PLACEHOLDER,
+      "제목이 빈 카드는 임시 문구를 보여야 한다(시각만 있는 이름 없는 카드 금지)",
+    );
+    assert.notEqual(
+      titleEl.textContent,
+      "",
+      "카드 제목 자리가 빈 문자열로 남아 있으면 안 된다",
+    );
+  });
+}
+
+// 경계 축: title.mjs 의 deriveTitleFromBody 관점에서 "빈 문자열"과
+// "공백뿐"이 같은 길로 가는지를 값으로 잰다 -- 둘 다 trim() 을 거쳐
+// 똑같이 "" 가 된다(같은 길, 갈리지 않음). coder-task.md §2-1 "둘이
+// 갈리면 그 사실을 적어라"의 반대 증거: 갈리지 않는다는 것 자체가 값이다.
+test('경계 축: 빈 문자열 첫 줄과 공백뿐 첫 줄은 title 파생에서 같은 길(둘 다 "")로 간다', () => {
+  assert.equal(deriveTitleFromBody(""), "");
+  assert.equal(deriveTitleFromBody("   "), "");
+  assert.equal(deriveTitleFromBody("\t"), "");
+  assert.equal(deriveTitleFromBody("\u3000"), "");
+  // 그래서 렌더러 쪽에서도 두 경우가 같은 카드 모양(임시 문구)으로 나온다.
+  const container = document.createElement("div");
+  renderMemoList(
+    container,
+    [memo("empty-title", { title: "" }), memo("blank-title", { title: "" })],
+    { onOpen: () => {} },
+  );
+  const titles = [...container.querySelectorAll(".memo-card-title")].map(
+    (el) => el.textContent,
+  );
+  assert.deepEqual(titles, [
+    UNTITLED_MEMO_PLACEHOLDER,
+    UNTITLED_MEMO_PLACEHOLDER,
+  ]);
+});
+
+// 무해 축: 제목이 있는 메모는 이 수리로 하나도 안 바뀐다 -- 위 "제목 축"
+// 시험(줄 120)이 이미 이걸 재고 있지만, 여기서도 명시로 한 번 더 값으로
+// 박아 둔다(전/후 비교가 이 결과 파일 §4-6 의 요구다).
+test("무해 축: 제목이 있는 메모는 그대로다(임시 문구로 바뀌지 않음)", () => {
+  const container = document.createElement("div");
+  renderMemoList(
+    container,
+    [memo("has-title", { title: "평범한 메모 제목" })],
+    {
+      onOpen: () => {},
+    },
+  );
+  const titleEl = container.querySelector(".memo-card-title");
+  assert.equal(titleEl.textContent, "평범한 메모 제목");
+  assert.notEqual(titleEl.textContent, UNTITLED_MEMO_PLACEHOLDER);
 });
