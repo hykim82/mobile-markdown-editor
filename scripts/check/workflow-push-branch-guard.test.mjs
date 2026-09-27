@@ -9,7 +9,13 @@
 // 한 개만 실제 fixture git repo 로 end-to-end 를 잰다).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  readFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -206,4 +212,32 @@ test("CLI: 실제 origin/HEAD 가 없는 fixture repo(일반적인 CI actions/ch
     assert.equal(result.status, 1);
     assert.match(result.out, /git remote set-head origin -a/);
   });
+});
+
+// --- P2-A(검토 2R): CI 축이 비어 있던 문제(HYK-304 §8-1 재발 형태)의 두 번째
+// 방벽 -- ⓑ 선택지. 이 저장소의 «실물» .github/workflows/enforce.yml 을
+// 직접 읽어 push.branches 가 기본 가지를 덮는지 값으로 잰다. 위의 다른
+// 시험들과 달리 runWorkflowPushBranchGuard()/resolveDefaultBranchFn 을 전혀
+// 부르지 않는다 -- git 이나 origin remote 상태에 «전혀» 기대지 않으므로
+// (actions/checkout 이 origin/HEAD 를 못 세우는 CI 환경 특유의 문제와 무관)
+// enforce.yml 자체가 push.branches 를 다시 master 로 되돌리는 실수만 나면
+// git 환경과 무관하게 이 시험 하나로 빨개진다. `main` 은 이 저장소의 실제
+// 기본 가지 이름을 리터럴로 박은 것 -- 바로 그 리터럴이 바뀌는 사고
+// (§8-1: main 인데 master 로 오탈)를 잡는 게 이 시험의 목적이므로, git
+// 으로 "지금" 기본 가지를 재조회하면 같은 실수가 이 시험도 함께 속인다.
+test("P2-A: 실물 .github/workflows/enforce.yml 의 push 트리거가 이 저장소 기본 가지(main)를 덮는다 -- git/CI 환경 의존 0", () => {
+  const enforceYmlPath = fileURLToPath(
+    new URL("../../.github/workflows/enforce.yml", import.meta.url),
+  );
+  const text = readFileSync(enforceYmlPath, "utf8");
+  const { hasPush, branches } = parseWorkflowPushBranches(text);
+  assert.equal(
+    hasPush,
+    true,
+    "enforce.yml 의 on: 에 push 트리거가 있어야 한다",
+  );
+  assert.ok(
+    branches === null || branches.includes("main"),
+    `enforce.yml 의 push.branches 는 "main" 을 포함하거나(또는 branches 자체가 없어 모든 가지를 매치)해야 한다 -- 실측: ${JSON.stringify(branches)}`,
+  );
 });
