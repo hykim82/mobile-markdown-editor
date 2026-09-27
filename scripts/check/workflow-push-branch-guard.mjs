@@ -139,6 +139,7 @@ export function defaultResolveDefaultBranch(cwd) {
       return {
         branch,
         source: "git symbolic-ref refs/remotes/origin/HEAD",
+        usedFallback: false,
       };
     }
   } catch {
@@ -147,7 +148,43 @@ export function defaultResolveDefaultBranch(cwd) {
   return {
     branch: HARDCODED_FALLBACK_BRANCH,
     source: `hardcoded fallback ("${HARDCODED_FALLBACK_BRANCH}") -- git symbolic-ref refs/remotes/origin/HEAD 를 못 읽음(origin remote 미추적 등)`,
+    usedFallback: true,
   };
+}
+
+// P2-2(review-1R-원문.md §9): actions/checkout(fetch-depth:0 이어도)은
+// refs/remotes/origin/HEAD 를 세우지 않아, 이 가드를 CI 에서 그대로
+// 돌리면 조용히 하드코딩 폴백("main")으로 내려가고, 그 결과가 우연히
+// 맞아도 "무엇을 근거로 초록인지" 로그에 안 남는다(HYK-304 §8-1과 같은
+// 모양의 "조용한 성공"). 폴백으로 내려간 것 자체를 이 가드의 독립 실패
+// 사유로 승격한다 -- 실제 기본 가지를 검증하지 못한 채 낸 초록은 이
+// 가드가 존재하는 이유(기본 가지 오검출을 기계로 잡기)를 못 지킨다.
+function buildFallbackFailure({
+  workflowPath,
+  defaultBranch,
+  defaultBranchSource,
+}) {
+  return {
+    ok: false,
+    reason:
+      `workflow-push-branch-guard: 기본 가지를 git 에서 읽지 못해 ${defaultBranchSource} -- ` +
+      `이 폴백만으로는 ${workflowPath} 의 push 트리거가 실제 저장소 기본 가지를 덮는지 확인할 수 없다 ` +
+      `(HYK-304 §8-1 재발 형태를 놓칠 수 있다). 로컬: git clone 이 아니라 origin/HEAD 가 없는 얕은 체크아웃이면 ` +
+      `'git remote set-head origin -a' 로 세운 뒤 다시 커밋하라.`,
+    defaultBranch,
+    defaultBranchSource,
+    hasPush: null,
+    branches: null,
+    usedFallback: true,
+  };
+}
+
+// P2-3(review-1R-원문.md §9-ⓑ): branches 가 빈 배열이면 .join(", ") 이 빈
+// 문자열이라 "push.branches()"처럼 괄호가 빈 채 나와 "무엇이 비었는지"
+// 문면만 봐서는 알 수 없다 -- "항목이 비어 있다"를 따로 말한다.
+function formatBranchesLabel(branches) {
+  if (branches === null || branches.length === 0) return "(항목 없음)";
+  return branches.join(", ");
 }
 
 export function runWorkflowPushBranchGuard({
@@ -167,8 +204,20 @@ export function runWorkflowPushBranchGuard({
     };
   }
 
-  const { branch: defaultBranch, source: defaultBranchSource } =
-    resolveDefaultBranchFn(cwd);
+  const {
+    branch: defaultBranch,
+    source: defaultBranchSource,
+    usedFallback,
+  } = resolveDefaultBranchFn(cwd);
+
+  if (usedFallback) {
+    return buildFallbackFailure({
+      workflowPath,
+      defaultBranch,
+      defaultBranchSource,
+    });
+  }
+
   const { hasPush, branches } = parseWorkflowPushBranches(text);
 
   if (!hasPush) {
@@ -181,6 +230,7 @@ export function runWorkflowPushBranchGuard({
       defaultBranchSource,
       hasPush,
       branches,
+      usedFallback,
     };
   }
 
@@ -188,22 +238,26 @@ export function runWorkflowPushBranchGuard({
     return {
       ok: false,
       reason:
-        `workflow-push-branch-guard: ${workflowPath} 의 push.branches(${branches.join(", ")}) 가 ` +
+        `workflow-push-branch-guard: ${workflowPath} 의 push.branches(${formatBranchesLabel(branches)}) 가 ` +
         `저장소 기본 가지(${defaultBranch})를 포함하지 않는다 -- ${defaultBranch} 에 병합돼도 CI 가 안 돈다(HYK-304 §8-1, default branch source: ${defaultBranchSource})`,
       defaultBranch,
       defaultBranchSource,
       hasPush,
       branches,
+      usedFallback,
     };
   }
 
   return {
     ok: true,
-    reason: `workflow-push-branch-guard: ${workflowPath} 의 push 트리거가 기본 가지(${defaultBranch})를 포함한다`,
+    reason:
+      `workflow-push-branch-guard: ${workflowPath} 의 push 트리거가 기본 가지(${defaultBranch})를 포함한다 ` +
+      `(default branch source: ${defaultBranchSource})`,
     defaultBranch,
     defaultBranchSource,
     hasPush,
     branches,
+    usedFallback,
   };
 }
 
