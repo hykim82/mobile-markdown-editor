@@ -129,4 +129,38 @@ else
   echo "pre-commit hook: live-harness-scratch-guard script or node runtime not found -- skipping live-.harness-scratch gate for this commit (fail-open, same posture as gitleaks-missing above; CI's live-harness-scratch-guard mirror still blocks a real violation)." >&2
 fi
 
+# --- Step 5 (HYK-304 §8-1/§9, P2-4): workflow-push-branch-guard on every
+# commit (not changed-files-scoped like steps 2-4 above -- .github/workflows/
+# enforce.yml's push-trigger coverage is a standing property of the repo, not
+# something only worth checking when that one file itself changes). Chained
+# after live-harness-scratch-guard, same posture: earlier steps' exit codes
+# are preserved in $status regardless of what happens here. Wired here
+# rather than in enforce.yml (CI) because actions/checkout does not set
+# refs/remotes/origin/HEAD even with fetch-depth:0, so a CI-side run of this
+# guard would almost always hit the (now fail-closed, P2-2) hardcoded-branch
+# fallback path -- a normal `git clone` (what every local checkout is) sets
+# that ref automatically, so the local pre-commit hook can verify against
+# the real remote state instead of a guess. ---
+pbg_script="$root/scripts/check/workflow-push-branch-guard.mjs"
+if [ ! -f "$pbg_script" ]; then
+  common_dir=$(git rev-parse --git-common-dir) || common_dir=""
+  if [ -n "$common_dir" ]; then
+    case "$common_dir" in
+      /*|[A-Za-z]:*) : ;;
+      *) common_dir="$root/$common_dir" ;;
+    esac
+    main_root=${common_dir%/.git}
+    main_pbg_script="$main_root/scripts/check/workflow-push-branch-guard.mjs"
+    [ -f "$main_pbg_script" ] && pbg_script="$main_pbg_script"
+  fi
+fi
+
+if [ -n "$NODE" ] && [ -f "$pbg_script" ]; then
+  "$NODE" "$pbg_script" --cwd "$root"
+  pbg_status=$?
+  [ "$pbg_status" -ne 0 ] && status="$pbg_status"
+else
+  echo "pre-commit hook: workflow-push-branch-guard script or node runtime not found -- skipping push-branch-coverage gate for this commit (fail-open, same posture as gitleaks-missing above)." >&2
+fi
+
 exit "$status"
