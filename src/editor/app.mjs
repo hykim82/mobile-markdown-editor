@@ -137,13 +137,28 @@ function main() {
   // 입력 가능) 아래 두 비동기 작업(목록 조회·초기 복원 확인)을 기다리지
   // 않는다 -- 둘 다 fire-and-forget 이고, 화면 전환만 그 결과에 뒤따른다.
   list.refresh();
-  store.initialRestoreReady.then(() => {
-    // restoreCurrentMemo(mountStorage 내부)는 pointer 가 가리키는 메모가
-    // 없거나 이미 삭제됐으면 pointer 를 비운다(storage-mount.mjs) -- 그
-    // 부작용이 끝난 뒤라 readCurrentMemoId() 로 "복원할 것이 있었는가"를
-    // 그대로 판단할 수 있다.
-    showScreen(elements.screens, readCurrentMemoId() ? "editor" : "list");
-  });
+  store.initialRestoreReady
+    .then(() => {
+      // restoreCurrentMemo(mountStorage 내부)는 pointer 가 가리키는 메모가
+      // 없거나 이미 삭제됐으면 pointer 를 비운다(storage-mount.mjs) -- 그
+      // 부작용이 끝난 뒤라 readCurrentMemoId() 로 "복원할 것이 있었는가"를
+      // 그대로 판단할 수 있다.
+      showScreen(elements.screens, readCurrentMemoId() ? "editor" : "list");
+    })
+    .catch((error) => {
+      // review-1R P1-1: restoreCurrentMemo 가 adapter.get 실패 등으로
+      // 이 프라미스를 거부하면(storage-mount.mjs) 위 then 이 한 번도 안
+      // 불려 두 화면이 계속 hidden 인 채(백지)로 남았다. 실패해도 "무엇
+      // 이든" 보이게 목록 화면으로 떨어뜨린다 -- list.refresh() 는 위에서
+      // 이미 별도로 불려 있으므로(fire-and-forget), 그게 실패한 경우엔
+      // 목록 화면 자체가 실패 UI(불러오기 실패 · 다시, memo-list-view.mjs)
+      // 를 보여준다.
+      console.error(
+        "[app] initial restore failed -- falling back to list screen",
+        error,
+      );
+      showScreen(elements.screens, "list");
+    });
 }
 
 main();
