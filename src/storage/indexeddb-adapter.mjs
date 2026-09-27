@@ -59,8 +59,20 @@ function runTransaction(db, mode, run) {
 
 export function createIndexedDbAdapter({ dbName = DEFAULT_DB_NAME } = {}) {
   let dbPromise = null;
+  // 검토 2R P2-C: 거부된 dbPromise 를 캐시하면 "다시"를 눌러도(=connect()를
+  // 다시 불러도) 같은 실패한 Promise 를 그대로 돌려줘 영원히 실패한다 --
+  // 성공만 캐시하고, 실패하면 다음 connect() 호출이 새로 여는 것을 볼 수
+  // 있게 dbPromise 를 비운다. 실패를 캐치한 뒤 다시 던지므로 지금 이
+  // 실패를 기다리던 호출자들은 정상적으로 reject 를 받는다 -- 그 호출자들
+  // 수만큼 openDatabase() 를 다시 부르지는 않는다(동시 호출은 이 하나의
+  // 실패한 시도를 공유한다), 그래서 폭주하지 않는다.
   function connect() {
-    if (!dbPromise) dbPromise = openDatabase(dbName);
+    if (!dbPromise) {
+      dbPromise = openDatabase(dbName).catch((err) => {
+        dbPromise = null;
+        throw err;
+      });
+    }
     return dbPromise;
   }
 
