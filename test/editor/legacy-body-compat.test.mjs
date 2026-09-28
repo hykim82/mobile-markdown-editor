@@ -41,7 +41,10 @@ import { createFakeAdapter } from "../support/fake-adapter.mjs";
 import { writeCurrentMemoId } from "../../src/storage/current-memo-pointer.mjs";
 
 // review.md §1-2 의 8개 표본 -- "저장돼 있던 body" 열 그대로.
-const LEGACY_FIXTURES = {
+// HYK-304-legacy-cover-width-1: memo-navigation.test.mjs(2번 입구,
+// openMemoInEditor)가 "같은 표본으로 두 입구를 잰다"를 위해 재사용하도록
+// export 만 추가한다(coder-task.md §1 -- 픽스처를 새로 만들지 않는다).
+export const LEGACY_FIXTURES = {
   B1: "C:\\Users\\han\\memo.md",
   B2: "끝에 백슬래시\\",
   B3: "a\\\\b",

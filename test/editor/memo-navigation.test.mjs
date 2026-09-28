@@ -8,6 +8,7 @@ import "../support/jsdom-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $getRoot, $createParagraphNode, $createTextNode } from "lexical";
+import { $isListNode, $isListItemNode } from "@lexical/list";
 import { makeProductEditor } from "../support/make-editor.mjs";
 import { serializeEditorToMarkdown } from "../../src/editor/serialize.mjs";
 import {
@@ -20,6 +21,13 @@ import {
   writeCurrentMemoId,
   readCurrentMemoId,
 } from "../../src/storage/current-memo-pointer.mjs";
+// HYK-304-legacy-cover-width-1(coder-task.md §1): P2-3 "덮개 폭" 지적
+// -- 2번 입구(openMemoInEditor)는 legacy-body-compat.test.mjs 의 8개
+// 고정점 표본 중 B1 하나만 덮는다. 새 픽스처를 상상해 만들지 않고 그
+// 파일의 LEGACY_FIXTURES 를 그대로 재사용해 "같은 표본으로 두 입구를
+// 잰다"를 값으로 세운다(그 파일에 export 가 없어 export 키워드 1개만
+// 최소로 추가했다).
+import { LEGACY_FIXTURES } from "./legacy-body-compat.test.mjs";
 
 function makeRestoreState() {
   return {
@@ -188,4 +196,81 @@ test("초기 로드: 포인터가 가리키는 메모가 이미 삭제돼 있으
   await restoreCurrentMemo(editor, store, adapter, restoreState);
 
   assert.equal(readCurrentMemoId(), null);
+});
+
+// HYK-304-legacy-cover-width-1(P2-3 "덮개 폭" 후속): 위 B1 표본 하나만으로는
+// "고정점 표본"(legacy-body-compat.test.mjs 머리 주석 -- 복원 중 글자를
+// 잃고도 재직렬화가 우연히 저장 원문과 같아지는 B3·B5·B6·B8)에서 2번
+// 입구가 구조까지 지키는지 잰 적이 없었다. legacy-body-compat.test.mjs 의
+// B5/B6 구조 단정(§ B5(목록 항목이 역슬래시로 끝남)/B6(체크박스))을 그대로
+// 본떠 openMemoInEditor 경로로도 같은 모양으로 잰다 -- 두 입구의 단정이
+// 같은 모양이어야 입구가 갈리는 날 비교가 된다.
+test("B5(목록 항목이 역슬래시로 끝남, 고정점 표본)를 openMemoInEditor(목록에서 열기)로 열어도 항목이 2개로 남는다(합쳐지지 않는다)", async () => {
+  const adapter = createFakeAdapter();
+  await adapter.put({
+    id: "legacy-open-b5",
+    title: "제목",
+    body: LEGACY_FIXTURES.B5,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  });
+  const { editor } = makeProductEditor();
+  const store = createMemoStore(adapter);
+  const restoreState = makeRestoreState();
+
+  await openMemoInEditor(
+    editor,
+    store,
+    adapter,
+    restoreState,
+    "legacy-open-b5",
+  );
+
+  editor.getEditorState().read(() => {
+    const list = $getRoot()
+      .getChildren()
+      .find((node) => $isListNode(node));
+    assert.ok(list, "목록 노드가 있어야 한다");
+    const items = list.getChildren().filter($isListItemNode);
+    assert.equal(items.length, 2, "항목 2개가 그대로 남아야 한다");
+    assert.equal(items[0].getTextContent(), "항목1\\");
+    assert.equal(items[1].getTextContent(), "항목2");
+  });
+});
+
+test("B6(체크박스 항목이 역슬래시로 끝남, 고정점 표본)를 openMemoInEditor(목록에서 열기)로 열어도 항목 2개 + 체크 상태가 그대로 남는다", async () => {
+  const adapter = createFakeAdapter();
+  await adapter.put({
+    id: "legacy-open-b6",
+    title: "제목",
+    body: LEGACY_FIXTURES.B6,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  });
+  const { editor } = makeProductEditor();
+  const store = createMemoStore(adapter);
+  const restoreState = makeRestoreState();
+
+  await openMemoInEditor(
+    editor,
+    store,
+    adapter,
+    restoreState,
+    "legacy-open-b6",
+  );
+
+  editor.getEditorState().read(() => {
+    const list = $getRoot()
+      .getChildren()
+      .find((node) => $isListNode(node));
+    assert.ok(list, "목록 노드가 있어야 한다");
+    const items = list.getChildren().filter($isListItemNode);
+    assert.equal(items.length, 2, "항목 2개가 그대로 남아야 한다");
+    assert.equal(items[0].getTextContent(), "할일1\\");
+    assert.equal(items[0].getChecked(), true);
+    assert.equal(items[1].getTextContent(), "할일2");
+    assert.equal(items[1].getChecked(), false);
+  });
 });
