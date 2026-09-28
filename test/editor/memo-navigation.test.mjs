@@ -14,7 +14,10 @@ import {
   openMemoInEditor,
   restoreCurrentMemo,
 } from "../../src/editor/storage-mount.mjs";
-import { createMemoStore } from "../../src/storage/memo-store.mjs";
+import {
+  createMemoStore,
+  CURRENT_BODY_FORMAT,
+} from "../../src/storage/memo-store.mjs";
 import { createFakeAdapter } from "../support/fake-adapter.mjs";
 import {
   writeCurrentMemoId,
@@ -188,4 +191,84 @@ test("초기 로드: 포인터가 가리키는 메모가 이미 삭제돼 있으
   await restoreCurrentMemo(editor, store, adapter, restoreState);
 
   assert.equal(readCurrentMemoId(), null);
+});
+
+// coder-task.md(HYK-304-legacy-open-cover-1) §1-필수1칸: 옛 형식 레코드를
+// "목록에서 카드를 눌러" 여는 입구(openMemoInEditor)도 restoreCurrentMemo
+// (앱을 열 때의 초기 복원 입구)와 마찬가지로 legacy 옵션을 걸어야 한다.
+// applyRecordToEditor(storage-mount.mjs)의 isLegacyRecord 판정 원문:
+//   function isLegacyRecord(record) {
+//     return record.bodyFormat !== CURRENT_BODY_FORMAT;
+//   }
+// 즉 bodyFormat 필드가 없거나 CURRENT_BODY_FORMAT("escaped-v1")과
+// 다르면 옛 형식이다. 픽스처는 legacy-body-compat.test.mjs 의 B1(실제
+// 역슬래시 2개가 든 윈도우 경로 문자열)을 그대로 가져온다 -- "역슬래시가
+// 두 개로 보인다"는 회귀 모양을 상상이 아니라 그 문서가 지목한 실제
+// 문자로 잰다.
+test("목록에서 옛 형식(bodyFormat 없음) 레코드를 openMemoInEditor 로 열면 재직렬화가 저장 원문과 바이트 동일하다(legacy 복원)", async () => {
+  const id = "legacy-via-list-1";
+  const body = "C:\\Users\\han\\memo.md"; // legacy-body-compat.test.mjs B1
+  writeCurrentMemoId(null);
+  const adapter = createFakeAdapter();
+  // ⛔bodyFormat 필드를 일부러 안 넣는다 -- main(dac26cf)이 저장해 뒀던
+  // 진짜 옛 레코드를 흉내 낸다(그 시절엔 이 필드 자체가 없었다).
+  await adapter.put({
+    id,
+    title: "제목",
+    body,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  });
+  const { editor } = makeProductEditor();
+  const store = createMemoStore(adapter);
+  const restoreState = makeRestoreState();
+
+  await openMemoInEditor(editor, store, adapter, restoreState, id);
+
+  assert.equal(
+    serializeEditorToMarkdown(editor, { legacy: true }),
+    body,
+    "legacy 재직렬화는 저장 원문과 바이트가 같아야 한다(보이는 글자 불변식)",
+  );
+  assert.equal(
+    restoreState.autosaveBlocked,
+    false,
+    "legacy 로 정확히 복원됐으므로 안전판이 걸리면 안 된다",
+  );
+});
+
+// 대조군(있으면 좋은 1칸): 현재 형식(bodyFormat === CURRENT_BODY_FORMAT)
+// 레코드는 openMemoInEditor 로 열어도 legacy=false 로 다뤄져야 한다 --
+// 위 시험과 짝을 이뤄 isLegacyRecord 판정이 "레코드에 따라 갈린다"는
+// 것을 값으로 고정한다.
+test("목록에서 현재 형식(bodyFormat=CURRENT_BODY_FORMAT) 레코드를 openMemoInEditor 로 열면 legacy=false 로 다뤄진다(대조군)", async () => {
+  const id = "current-via-list-1";
+  // 현재 형식(escaped-v1)에서 저장 원문의 backslash 2개는 "보이는 글자"
+  // backslash 1개를 뜻한다(serialize.mjs escapeBackslashes 단사 규칙) --
+  // 그래서 이 픽스처는 실제 두 글자(\\)를 담는다.
+  const body = "역슬래시\\\\한개";
+  writeCurrentMemoId(null);
+  const adapter = createFakeAdapter();
+  await adapter.put({
+    id,
+    title: "제목",
+    body,
+    bodyFormat: CURRENT_BODY_FORMAT,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  });
+  const { editor } = makeProductEditor();
+  const store = createMemoStore(adapter);
+  const restoreState = makeRestoreState();
+
+  await openMemoInEditor(editor, store, adapter, restoreState, id);
+
+  assert.equal(
+    serializeEditorToMarkdown(editor),
+    body,
+    "현재 형식 규칙(legacy=false)으로 왕복해도 바이트가 같아야 한다",
+  );
+  assert.equal(restoreState.autosaveBlocked, false);
 });
