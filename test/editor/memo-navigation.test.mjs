@@ -15,19 +15,29 @@ import {
   openMemoInEditor,
   restoreCurrentMemo,
 } from "../../src/editor/storage-mount.mjs";
-import { createMemoStore } from "../../src/storage/memo-store.mjs";
+import {
+  createMemoStore,
+  CURRENT_BODY_FORMAT,
+} from "../../src/storage/memo-store.mjs";
 import { createFakeAdapter } from "../support/fake-adapter.mjs";
 import {
   writeCurrentMemoId,
   readCurrentMemoId,
 } from "../../src/storage/current-memo-pointer.mjs";
-// HYK-304-legacy-cover-width-1(coder-task.md §1): P2-3 "덮개 폭" 지적
-// -- 2번 입구(openMemoInEditor)는 legacy-body-compat.test.mjs 의 8개
-// 고정점 표본 중 B1 하나만 덮는다. 새 픽스처를 상상해 만들지 않고 그
-// 파일의 LEGACY_FIXTURES 를 그대로 재사용해 "같은 표본으로 두 입구를
-// 잰다"를 값으로 세운다(그 파일에 export 가 없어 export 키워드 1개만
-// 최소로 추가했다).
-import { LEGACY_FIXTURES } from "./legacy-body-compat.test.mjs";
+// HYK-304-legacy-cover-width-1(coder-task.md §1) P2-1 수리(HYK-304-
+// fixture-module-1 · ⛔검토자 실측으로 정정): 예전 이 자리의 주석은
+// "2번 입구(openMemoInEditor)는 legacy-body-compat.test.mjs 의 8개
+// 고정점 표본 중 B1 하나만 덮는다"고 적었는데, 그 문면이 틀렸다 --
+// B1 은 "고정점 표본"이 아니다(고정점 = B3·B5·B6·B8, legacy-body-
+// compat.test.mjs 머리 주석의 정의: 복원 중 글자를 잃고도 재직렬화가
+// 우연히 저장 원문과 같아지는 표본). B1 이 고정점이 아닌 이유는 --
+// B1 이 손상되면 바이트가 달라져 안전판(restoreState.autosaveBlocked)이
+// 스스로 발동하기 때문이다(검토자 실측: 변이 아래에서
+// autosaveBlocked=true). 즉 목록 입구의 고정점 표본은 이 라운드
+// 전까지 «0개»였고, 이제 아래 B5·B6 둘로 늘었다(coder-task.md §3
+// P2-3 "덮개 폭" 수리) -- 고정점에서는 안전판이 못 잡으므로 구조
+// 단정이 유일한 파수꾼이다.
+import { LEGACY_FIXTURES } from "./legacy-fixtures.mjs";
 
 function makeRestoreState() {
   return {
@@ -198,6 +208,89 @@ test("초기 로드: 포인터가 가리키는 메모가 이미 삭제돼 있으
   assert.equal(readCurrentMemoId(), null);
 });
 
+// HYK-304-fixture-module-1 §7(⭐PR #12 흡수 -- 책임자 판정, PR #12 는
+// base 충돌로 병합되지 않았고 이 브랜치가 그 두 칸을 바이트 동일로
+// 흡수한다): coder-task.md(HYK-304-legacy-open-cover-1) §1-필수1칸 원문
+// 그대로 -- 옛 형식 레코드를 "목록에서 카드를 눌러" 여는 입구
+// (openMemoInEditor)도 restoreCurrentMemo(앱을 열 때의 초기 복원 입구)
+// 와 마찬가지로 legacy 옵션을 걸어야 한다.
+// applyRecordToEditor(storage-mount.mjs)의 isLegacyRecord 판정 원문:
+//   function isLegacyRecord(record) {
+//     return record.bodyFormat !== CURRENT_BODY_FORMAT;
+//   }
+// 즉 bodyFormat 필드가 없거나 CURRENT_BODY_FORMAT("escaped-v1")과
+// 다르면 옛 형식이다. 픽스처는 legacy-body-compat.test.mjs 의 B1(실제
+// 역슬래시 2개가 든 윈도우 경로 문자열)을 그대로 가져온다 -- "역슬래시가
+// 두 개로 보인다"는 회귀 모양을 상상이 아니라 그 문서가 지목한 실제
+// 문자로 잰다.
+test("목록에서 옛 형식(bodyFormat 없음) 레코드를 openMemoInEditor 로 열면 재직렬화가 저장 원문과 바이트 동일하다(legacy 복원)", async () => {
+  const id = "legacy-via-list-1";
+  const body = "C:\\Users\\han\\memo.md"; // legacy-body-compat.test.mjs B1
+  writeCurrentMemoId(null);
+  const adapter = createFakeAdapter();
+  // ⛔bodyFormat 필드를 일부러 안 넣는다 -- main(dac26cf)이 저장해 뒀던
+  // 진짜 옛 레코드를 흉내 낸다(그 시절엔 이 필드 자체가 없었다).
+  await adapter.put({
+    id,
+    title: "제목",
+    body,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  });
+  const { editor } = makeProductEditor();
+  const store = createMemoStore(adapter);
+  const restoreState = makeRestoreState();
+
+  await openMemoInEditor(editor, store, adapter, restoreState, id);
+
+  assert.equal(
+    serializeEditorToMarkdown(editor, { legacy: true }),
+    body,
+    "legacy 재직렬화는 저장 원문과 바이트가 같아야 한다(보이는 글자 불변식)",
+  );
+  assert.equal(
+    restoreState.autosaveBlocked,
+    false,
+    "legacy 로 정확히 복원됐으므로 안전판이 걸리면 안 된다",
+  );
+});
+
+// 대조군(있으면 좋은 1칸): 현재 형식(bodyFormat === CURRENT_BODY_FORMAT)
+// 레코드는 openMemoInEditor 로 열어도 legacy=false 로 다뤄져야 한다 --
+// 위 시험과 짝을 이뤄 isLegacyRecord 판정이 "레코드에 따라 갈린다"는
+// 것을 값으로 고정한다.
+test("목록에서 현재 형식(bodyFormat=CURRENT_BODY_FORMAT) 레코드를 openMemoInEditor 로 열면 legacy=false 로 다뤄진다(대조군)", async () => {
+  const id = "current-via-list-1";
+  // 현재 형식(escaped-v1)에서 저장 원문의 backslash 2개는 "보이는 글자"
+  // backslash 1개를 뜻한다(serialize.mjs escapeBackslashes 단사 규칙) --
+  // 그래서 이 픽스처는 실제 두 글자(\\)를 담는다.
+  const body = "역슬래시\\\\한개";
+  writeCurrentMemoId(null);
+  const adapter = createFakeAdapter();
+  await adapter.put({
+    id,
+    title: "제목",
+    body,
+    bodyFormat: CURRENT_BODY_FORMAT,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  });
+  const { editor } = makeProductEditor();
+  const store = createMemoStore(adapter);
+  const restoreState = makeRestoreState();
+
+  await openMemoInEditor(editor, store, adapter, restoreState, id);
+
+  assert.equal(
+    serializeEditorToMarkdown(editor),
+    body,
+    "현재 형식 규칙(legacy=false)으로 왕복해도 바이트가 같아야 한다",
+  );
+  assert.equal(restoreState.autosaveBlocked, false);
+});
+
 // HYK-304-legacy-cover-width-1(P2-3 "덮개 폭" 후속): 위 B1 표본 하나만으로는
 // "고정점 표본"(legacy-body-compat.test.mjs 머리 주석 -- 복원 중 글자를
 // 잃고도 재직렬화가 우연히 저장 원문과 같아지는 B3·B5·B6·B8)에서 2번
@@ -225,6 +318,24 @@ test("B5(목록 항목이 역슬래시로 끝남, 고정점 표본)를 openMemoI
     adapter,
     restoreState,
     "legacy-open-b5",
+  );
+
+  // HYK-304-fixture-module-1 §3(P2-3 "신규 2칸에 1번 입구가 가진 단정
+  // 두 종을 더한다" -- legacy-body-compat.test.mjs 의 표본 루프 문면을
+  // 본뜬다): ⓐ재직렬화를 legacy 로 고정한 바이트 단정. B5 는 고정점
+  // 표본이라 바이트가 같다는 것만으로는 "항목이 안 합쳐졌다"를 보장하지
+  // 않으므로(아래 구조 단정이 그 축을 잡는다) 이 단정은 별도 축이다.
+  assert.equal(
+    serializeEditorToMarkdown(editor, { legacy: true }),
+    LEGACY_FIXTURES.B5,
+    "legacy 재직렬화는 저장 원문과 바이트가 같아야 한다",
+  );
+  // ⓑ B5·B6 은 2번 입구에서 안전판이 걸리지 않는다는 사실을 시험 안에
+  // 못박는다(이전엔 검토 문서에만 있었다).
+  assert.equal(
+    restoreState.autosaveBlocked,
+    false,
+    "legacy 로 정확히 복원됐으므로 안전판이 걸리면 안 된다",
   );
 
   editor.getEditorState().read(() => {
@@ -259,6 +370,18 @@ test("B6(체크박스 항목이 역슬래시로 끝남, 고정점 표본)를 ope
     adapter,
     restoreState,
     "legacy-open-b6",
+  );
+
+  // HYK-304-fixture-module-1 §3(P2-3) -- B5 와 같은 두 축(ⓐⓑ).
+  assert.equal(
+    serializeEditorToMarkdown(editor, { legacy: true }),
+    LEGACY_FIXTURES.B6,
+    "legacy 재직렬화는 저장 원문과 바이트가 같아야 한다",
+  );
+  assert.equal(
+    restoreState.autosaveBlocked,
+    false,
+    "legacy 로 정확히 복원됐으므로 안전판이 걸리면 안 된다",
   );
 
   editor.getEditorState().read(() => {
