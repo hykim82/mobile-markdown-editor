@@ -99,5 +99,13 @@ jobs:
       - name: live-harness-scratch-guard -- changed-files live-worktree-.harness-scratch pattern scan (HYK-394, mirrors local pre-commit)
         run: node scripts/check/live-harness-scratch-guard.mjs --mode ci --base-sha "${{ steps.quality_base.outputs.sha }}"
 
+      # Repo-wide (전수), not changed-files: the drift this blocks (a chained
+      # `new URL(...).pathname` reverting into a filesystem path) can land in any
+      # scripts/ or test/ file, and the scan is cheap (~180 files). The check is
+      # static on purpose -- on POSIX the runtime tests cannot tell the reverted
+      # shape from the wrapper (HYK-304 P2-1). fail-closed, no continue-on-error.
+      - name: pathname-filepath-guard -- new URL(...).pathname used as a filesystem path, repo-wide scan of scripts/ and test/ (HYK-304 P2-1 lock)
+        run: node scripts/check/pathname-filepath-guard.mjs
+
       - name: gitleaks secret scan
         run: gitleaks detect --source . --redact
