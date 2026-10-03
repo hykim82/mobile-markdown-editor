@@ -34,9 +34,9 @@ import {
 // B1 이 손상되면 바이트가 달라져 안전판(restoreState.autosaveBlocked)이
 // 스스로 발동하기 때문이다(검토자 실측: 변이 아래에서
 // autosaveBlocked=true). 즉 목록 입구의 고정점 표본은 이 라운드
-// 전까지 «0개»였고, 이제 아래 B5·B6 둘로 늘었다(§1 P2-3 "덮개 폭"
-// 수리) -- 고정점에서는 안전판이 못 잡으므로 구조 단정이 유일한
-// 파수꾼이다.
+// 전까지 «0개»였고, 이제 아래 B5·B6 둘로 늘었다(coder-task.md §3
+// P2-3 "덮개 폭" 수리) -- 고정점에서는 안전판이 못 잡으므로 구조
+// 단정이 유일한 파수꾼이다.
 import { LEGACY_FIXTURES } from "./legacy-fixtures.mjs";
 
 function makeRestoreState() {
