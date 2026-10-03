@@ -202,6 +202,44 @@ test('경계 축: 빈 문자열 첫 줄과 공백뿐 첫 줄은 title 파생에�
   ]);
 });
 
+// 경계 축(검토 1R P2-1): "제목이 있는데 앞에 공백이 붙은 경우"는 위 공백
+// 축(첫 줄이 공백뿐)과 다른 길이다 -- trim() 이 앞뒤 공백만 걷어내고
+// 제목 글자는 그대로 남기므로 "" 가 아니다. 동작은 이미 옳다(검토자
+// 실측값과 동일), 이 시험은 그 덮개 구멍만 메운다.
+for (const [label, rawFirstLine] of [
+  ["스페이스", "   제목이 있다"],
+  ["탭", "\t제목이 있다"],
+  ["전각 공백(보이지 않는 글자)", "　제목이 있다"],
+]) {
+  test(`경계 축(${label} 뒤 제목): 첫 줄 앞에 공백이 있어도 title 은 공백만 걷어낸 제목 글자다("" 로 접히지 않는다)`, () => {
+    assert.equal(
+      deriveTitleFromBody(rawFirstLine),
+      "제목이 있다",
+      `deriveTitleFromBody(${JSON.stringify(rawFirstLine)}) 는 앞 공백만 걷어낸 "제목이 있다" 여야 한다`,
+    );
+
+    const container = document.createElement("div");
+    renderMemoList(
+      container,
+      [memo("leading-ws-title", { title: "제목이 있다" })],
+      {
+        onOpen: () => {},
+      },
+    );
+    const titleEl = container.querySelector(".memo-card-title");
+    assert.equal(
+      titleEl.textContent,
+      "제목이 있다",
+      "제목이 있는 카드는 임시 문구가 아니라 그 제목 글자를 그대로 보여야 한다",
+    );
+    assert.notEqual(
+      titleEl.textContent,
+      UNTITLED_MEMO_PLACEHOLDER,
+      "앞에 공백만 있을 뿐 제목이 있으므로 임시 문구(이름 없는 카드)로 보이면 안 된다",
+    );
+  });
+}
+
 // 무해 축: 제목이 있는 메모는 이 수리로 하나도 안 바뀐다 -- 위 "제목 축"
 // 시험(줄 120)이 이미 이걸 재고 있지만, 여기서도 명시로 한 번 더 값으로
 // 박아 둔다(전/후 비교가 이 결과 파일 §4-6 의 요구다).

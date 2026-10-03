@@ -19,10 +19,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      # HYK-304 P2-A (검토 2R): workflow-push-branch-guard.mjs 는 지금까지
+      # hooks/pre-commit 에만 배선돼 "훅이 설치된 개발 기계"에서만 돌았다 --
+      # 새 클론이나 이 CI 자체에서 push 트리거의 기본 가지 오검출(§8-1과
+      # 같은 모양, 예: main -> master 오탈)이 재발해도 아무도 못 봤다.
+      # actions/checkout(fetch-depth:0 이어도) 은 refs/remotes/origin/HEAD 를
+      # 세우지 않아(scripts/check/workflow-push-branch-guard.mjs:155-161
+      # 참고), 이 줄 없이 가드를 그대로 부르면 조용히 하드코딩 폴백으로
+      # 내려간다 -- 그 폴백 자체를 가드가 이미 독립 실패로 승격해 두었으므로
+      # (P2-2), 여기서 실제 원격 기본 가지를 세워 그 폴백을 피한다.
+      - name: Resolve origin/HEAD for workflow-push-branch-guard (actions/checkout does not set it, HYK-304 P2-A)
+        run: git remote set-head origin -a
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: workflow-push-branch-guard -- verify enforce.yml's push trigger covers the real default branch (HYK-304 P2-A)
+        run: node scripts/check/workflow-push-branch-guard.mjs
 
       - name: Install pinned quality tooling (eslint/prettier, HYK-148)
         run: npm ci

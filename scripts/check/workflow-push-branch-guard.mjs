@@ -128,10 +128,18 @@ export function parseWorkflowPushBranches(text) {
 // 폴백으로 내려간다 -- 그 한계는 반환값의 `source` 에 그대로 남긴다.
 export function defaultResolveDefaultBranch(cwd) {
   try {
+    // P2-D(review-2R 원문 §…): execFileSync 는 stdio 를 명시하지 않으면
+    // 자식의 stderr 를 부모 stderr 로 그대로 흘린다(Node 문서: exec 계열
+    // sync 함수의 stdio 기본값은 stderr 만 예외적으로 부모에 상속). origin/HEAD
+    // 가 없는 흔한 경우(고립 클론 등)에 git 이 내는 "fatal: ref ... is not
+    // a symbolic ref" 가 그 경로로 그대로 새 나가 사람이 "가드가 터졌다"로
+    // 읽는다 -- 아래에서 stderr 를 파이프로 가둬 화면에 흘리지 않는다.
+    // 실패 사실 자체는 죽지 않는다: buildFallbackFailure() 가 usedFallback
+    // 경로에서 "기본 가지를 못 읽어 폴백을 쓴다"를 이름으로 계속 말한다.
     const out = execFileSync(
       "git",
       ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-      { cwd, encoding: "utf8" },
+      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     ).trim();
     // out 은 "origin/main" 모양이다 -- 첫 세그먼트(remote 이름)만 뗀다.
     const branch = out.split("/").slice(1).join("/");
