@@ -4,16 +4,23 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   resolveChangedFiles,
   runQualityCheck,
   parseCliArgs,
 } from "./quality-check.mjs";
 
-const QUALITY_CHECK_PATH = new URL(
-  "./quality-check.mjs",
-  import.meta.url,
-).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+// Named (not inlined at the call site) so the synthetic-URL regression test
+// below exercises this file's actual script-path resolution, not a
+// hand-copied stand-in that could silently drift from it.
+function resolveScriptPath(url) {
+  return fileURLToPath(url);
+}
+
+const QUALITY_CHECK_PATH = resolveScriptPath(
+  new URL("./quality-check.mjs", import.meta.url),
+);
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -301,6 +308,31 @@ test("CLI: empty-scope run prints a distinct [quality-check:empty] marker on std
     );
     assert.match(out, /\[quality-check:empty\]/);
   });
+});
+
+// HYK-304: `resolveScriptPath` (the real function this file uses to turn
+// import.meta.url into a spawnable script path, above) must decode a file:
+// URL's path segments, not merely strip the URL scheme. A `.pathname` read
+// leaves percent-encoding in place for any non-ASCII segment, which is
+// exactly what broke the two tests above on a worktree checked out under a
+// Korean-named directory (Cannot find module '...%EB%AA%A8...'), and matches
+// the same class of defect recorded at isolated-suite-runner.mjs:46-52
+// ("S6": a literal "~" surviving a `.pathname` read on Windows' 8.3
+// short-name temp paths). This test uses a synthetic URL instead of the
+// real worktree path so the guard also runs -- and would also fail -- on an
+// ASCII-only CI checkout, not only on a non-ASCII host.
+test("resolveScriptPath: a file: URL with a non-ASCII path segment decodes with no percent-encoding surviving (CI-portable guard for HYK-304)", () => {
+  const nonAsciiSegment = "모바일마크다운에디터";
+  const synthetic = new URL(
+    `file:///C:/Users/${encodeURIComponent(nonAsciiSegment)}/quality-check.mjs`,
+  );
+  // Sanity check: the raw .pathname (what the old `.pathname.replace(...)`
+  // idiom read from) still carries the percent-encoding here.
+  assert.match(synthetic.pathname, /%[0-9A-Fa-f]{2}/);
+
+  const resolved = resolveScriptPath(synthetic);
+  assert.doesNotMatch(resolved, /%[0-9A-Fa-f]{2}/);
+  assert.ok(resolved.includes(nonAsciiSegment));
 });
 
 // --- HYK-393 2R: value-axis contract (REVIEW P1-1). Table: flag x value
