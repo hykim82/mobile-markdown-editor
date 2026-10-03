@@ -39,21 +39,15 @@ import {
 } from "../../src/storage/memo-store.mjs";
 import { createFakeAdapter } from "../support/fake-adapter.mjs";
 import { writeCurrentMemoId } from "../../src/storage/current-memo-pointer.mjs";
-
-// review.md §1-2 의 8개 표본 -- "저장돼 있던 body" 열 그대로.
-// HYK-304-legacy-cover-width-1: memo-navigation.test.mjs(2번 입구,
-// openMemoInEditor)가 "같은 표본으로 두 입구를 잰다"를 위해 재사용하도록
-// export 만 추가한다(coder-task.md §1 -- 픽스처를 새로 만들지 않는다).
-export const LEGACY_FIXTURES = {
-  B1: "C:\\Users\\han\\memo.md",
-  B2: "끝에 백슬래시\\",
-  B3: "a\\\\b",
-  B4: "a\\\\\\b",
-  B5: "- 항목1\\\n- 항목2",
-  B6: "- [x] 할일1\\\n- [ ] 할일2",
-  B7: "수식 \\alpha 와 \\beta",
-  B8: "a\\\\\\\\b",
-};
+// HYK-304-fixture-module-1(coder-task.md §1 P2-2 수리): 이 8개 표본은
+// review.md §1-2 표를 그대로 옮긴 것이다(값은 전혀 바뀌지 않았다). 예전엔
+// 이 파일이 직접 정의+export 했고, memo-navigation.test.mjs 는 "같은
+// 표본으로 두 입구를 잰다"를 위해 이 *.test.mjs 파일을 그대로 import 해
+// 재사용했다 -- 그 import 의 side effect 로 이 파일의 11개 test() 가
+// memo-navigation.test.mjs 단독 실행에서도 한 번 더 등록돼 6→19칸으로
+// 부풀었다. 이제 두 파일이 공용 비-시험 모듈(legacy-fixtures.mjs)에서
+// 함께 가져온다 -- 러너가 시험으로 집지 않으므로 중복 등록이 없다.
+import { LEGACY_FIXTURES } from "./legacy-fixtures.mjs";
 
 function makeRestoreState() {
   return {
