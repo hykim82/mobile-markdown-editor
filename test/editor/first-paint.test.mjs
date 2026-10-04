@@ -53,9 +53,12 @@ function attachHiddenObserver(dom, el) {
   return { obs, transitions };
 }
 
-// 포인터가 메모를 가리키는 경우(부팅 후 에디터로 가야 하는 경우) --
-// E3 검토자가 실측한 그 시나리오와 동일하다.
-test("깜빡임: 포인터가 있어도 import 직후엔 두 화면 다 숨겨져 있고, 결정 후 에디터만 정확히 한 번 나타난다", async () => {
+// 포인터가 메모를 가리키는 경우 -- 한용 확정 ㄱ(HYK-304-home-list-
+// updatedat-1): 앱을 열면 포인터와 무관하게 첫 화면은 목록이다. 예전엔
+// 이 자리에서 에디터가 뜬 것이 E3 검토자가 실측한 깜빡임 시나리오였고,
+// 이제는 그 반대 방향(목록이 한 번만 나타나고 에디터는 끝까지 숨김)을
+// 같은 관측 장치로 잰다.
+test("깜빡임: 포인터가 있어도 import 직후엔 두 화면 다 숨겨져 있고, 결정 후 목록만 정확히 한 번 나타난다", async () => {
   let baseline;
   let listObs;
   let editorObs;
@@ -83,30 +86,26 @@ test("깜빡임: 포인터가 있어도 import 직후엔 두 화면 다 숨겨�
     "import 직후(동기): 두 화면 다 숨겨져 있어야 한다(첫 화면 결정 전에는 무엇도 그려지지 않아야 함)",
   );
 
-  await waitFor(() => editorScreen.hidden === false);
-  assert.equal(
-    listScreen.hidden,
-    true,
-    "결정 후: list-screen 은 계속 숨겨져 있어야 한다",
-  );
+  await waitFor(() => listScreen.hidden === false);
   assert.equal(
     editorScreen.hidden,
-    false,
-    "결정 후: editor-screen 만 보여야 한다",
+    true,
+    "결정 후: editor-screen 은 포인터가 있어도 계속 숨겨져 있어야 한다",
   );
+  assert.equal(listScreen.hidden, false, "결정 후: list-screen 만 보여야 한다");
 
   listObs.obs.disconnect();
   editorObs.obs.disconnect();
 
   assert.deepEqual(
-    listObs.transitions,
+    editorObs.transitions,
     [],
-    "list-screen 의 hidden 값은 한 번도 실제로 바뀌면 안 된다(깜빡임이면 여기서 false->true 전환이 잡힌다)",
+    "editor-screen 의 hidden 값은 한 번도 실제로 바뀌면 안 된다",
   );
   assert.deepEqual(
-    editorObs.transitions,
+    listObs.transitions,
     [{ wasHidden: true, isHidden: false }],
-    "editor-screen 의 hidden 값은 정확히 1회만(hidden->보임) 바뀌어야 한다",
+    "list-screen 의 hidden 값은 정확히 1회만(hidden->보임) 바뀌어야 한다",
   );
 });
 

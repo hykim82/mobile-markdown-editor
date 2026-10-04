@@ -9,10 +9,7 @@ import { mountStorage, openMemoInEditor } from "./storage-mount.mjs";
 import { mountNotionCopy } from "./notion-copy.mjs";
 import { mountMemoList } from "./memo-list-mount.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
-import {
-  readCurrentMemoId,
-  writeCurrentMemoId,
-} from "../storage/current-memo-pointer.mjs";
+import { writeCurrentMemoId } from "../storage/current-memo-pointer.mjs";
 
 function applyDesignTokens() {
   const root = document.documentElement;
@@ -109,6 +106,14 @@ function main() {
   const adapter = createIndexedDbAdapter();
   const editor = mountEditor(elements.editorRoot);
   mountRawPanel(editor, elements.rawPanel);
+  // 한용 확정 ㄱ(HYK-304-home-list-updatedat-1): 앱을 열면 첫 화면은 항상
+  // 목록이다. 마지막 메모 포인터는 시작 시 비운다 -- mountStorage 안의
+  // restoreCurrentMemo 가 이 동기 시점에 포인터를 읽으므로 여기서 지우면
+  // 그 복원은 아무것도 불러오지 않는다. 포인터를 살려 두면 복원이 목록에서
+  // 카드를 누른 뒤에 끝나 그 메모를 옛 메모로 덮어쓸 수 있다(경합). 메모
+  // 데이터(IndexedDB)는 그대로이고, 포인터는 열려 있는 메모를 적는 용도로만
+  // 남는다(openMemoInEditor·자동저장이 다시 쓴다).
+  writeCurrentMemoId(null);
   const store = mountStorage(editor, elements.saveNotice, adapter);
   mountNotionCopy(editor, store, {
     button: elements.copyButton,
@@ -125,31 +130,11 @@ function main() {
 
   // PRD §5b "입력이 목록 로딩을 안 기다린다": mountStorage 가 이미
   // registerUpdateListener 를 동기로 등록했으므로(에디터는 지금부터
-  // 입력 가능) 아래 두 비동기 작업(목록 조회·초기 복원 확인)을 기다리지
-  // 않는다 -- 둘 다 fire-and-forget 이고, 화면 전환만 그 결과에 뒤따른다.
+  // 입력 가능) 목록 조회를 기다리지 않는다 -- fire-and-forget 이고, 화면은
+  // 목록을 동기로 연다(PRD §6 "메모 목록(홈)"). 포인터를 이미 비웠으므로
+  // 초기 복원(initialRestoreReady)은 아무 일도 하지 않아 기다릴 것이 없다.
   list.refresh();
-  store.initialRestoreReady
-    .then(() => {
-      // restoreCurrentMemo(mountStorage 내부)는 pointer 가 가리키는 메모가
-      // 없거나 이미 삭제됐으면 pointer 를 비운다(storage-mount.mjs) -- 그
-      // 부작용이 끝난 뒤라 readCurrentMemoId() 로 "복원할 것이 있었는가"를
-      // 그대로 판단할 수 있다.
-      showScreen(elements.screens, readCurrentMemoId() ? "editor" : "list");
-    })
-    .catch((error) => {
-      // review-1R P1-1: restoreCurrentMemo 가 adapter.get 실패 등으로
-      // 이 프라미스를 거부하면(storage-mount.mjs) 위 then 이 한 번도 안
-      // 불려 두 화면이 계속 hidden 인 채(백지)로 남았다. 실패해도 "무엇
-      // 이든" 보이게 목록 화면으로 떨어뜨린다 -- list.refresh() 는 위에서
-      // 이미 별도로 불려 있으므로(fire-and-forget), 그게 실패한 경우엔
-      // 목록 화면 자체가 실패 UI(불러오기 실패 · 다시, memo-list-view.mjs)
-      // 를 보여준다.
-      console.error(
-        "[app] initial restore failed -- falling back to list screen",
-        error,
-      );
-      showScreen(elements.screens, "list");
-    });
+  showScreen(elements.screens, "list");
 }
 
 main();

@@ -204,6 +204,16 @@ export function mountStorage(
       updateSaveNotice(notice, "restore-mismatch");
       return;
     }
+    // ⭐HYK-304-home-list-updatedat-1 칸 ⓑ: 커서만 움직여도 이 리스너가
+    // 온다. 저장 원문과 같으면 "수정"이 아니므로 건너뛴다(updatedAt 을
+    // 바꾸지 않는다). 옛 형식 메모는 legacy 규칙으로 쓰인 원문이라, 새
+    // 규칙으로 직렬화하면 커서만 움직여도 원문이 조용히 달라진다 -- 그래서
+    // 옛 형식이면 legacy 규칙으로 비교한다. 실제로 고치면 두 규칙 어느 쪽
+    // 으로도 저장 원문과 같아질 수 없으므로, 평소처럼 새 규칙으로 저장된다.
+    const legacy = store.isLegacyMemo();
+    if (serializeEditorToMarkdown(editor, { legacy }) === store.getBody()) {
+      return;
+    }
     const body = serializeEditorToMarkdown(editor);
     store.onContentChange(body).then(() => {
       writeCurrentMemoId(store.getMemoId());

@@ -15,7 +15,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bootApp, waitFor } from "../support/app-harness.mjs";
 import { createIndexedDbAdapter } from "../../src/storage/indexeddb-adapter.mjs";
-import { writeCurrentMemoId } from "../../src/storage/current-memo-pointer.mjs";
+import {
+  readCurrentMemoId,
+  writeCurrentMemoId,
+} from "../../src/storage/current-memo-pointer.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const indexHtmlPath = join(here, "..", "..", "public", "index.html");
@@ -134,9 +137,10 @@ test("배선 4: '+' 버튼을 누르면 빈 에디터로 전환된다", async ()
   assert.equal(document.getElementById("raw-panel").textContent, "");
 });
 
-// 번호 5(권장 · 필수 아님) -- 부팅 시 첫 화면 선택
-// (initialRestoreReady.then(... readCurrentMemoId() ? "editor" : "list")).
-test("배선 5(권장): 포인터가 메모를 가리키고 있으면 부팅 직후 곧장 에디터 화면으로 뜬다", async () => {
+// 번호 5 -- 부팅 시 첫 화면은 포인터와 무관하게 목록이다(한용 확정 ㄱ,
+// HYK-304-home-list-updatedat-1). 포인터가 가리키던 메모는 부팅 때 비워져
+// 에디터에도 올라오지 않는다(app.mjs main 의 writeCurrentMemoId(null)).
+test("배선 5: 포인터가 메모를 가리키고 있어도 부팅 직후 첫 화면은 목록이고, 포인터는 비워진다", async () => {
   const dom = await bootApp({
     seed: async () => {
       await seedMemo("pointed-1", "가리켜진 메모");
@@ -145,13 +149,10 @@ test("배선 5(권장): 포인터가 메모를 가리키고 있으면 부팅 직
   });
   const { document } = dom.window;
 
-  await waitFor(
-    () => document.getElementById("editor-screen").hidden === false,
-  );
-  assert.equal(document.getElementById("list-screen").hidden, true);
-  await waitFor(
-    () => document.getElementById("raw-panel").textContent === "가리켜진 메모",
-  );
+  await waitFor(() => document.getElementById("list-screen").hidden === false);
+  assert.equal(document.getElementById("editor-screen").hidden, true);
+  assert.equal(document.getElementById("raw-panel").textContent, "");
+  assert.equal(readCurrentMemoId(), null);
 });
 
 // 번호 6 -- grabElements() 가 찾는 DOM id 와 public/index.html 실물의
