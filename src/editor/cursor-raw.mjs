@@ -40,10 +40,11 @@ import { $isHeadingNode } from "@lexical/rich-text";
 import { $isListNode } from "@lexical/list";
 import {
   $serializeBlockToMarkdown,
+  $serializeNodesToMarkdown,
   $serializeRawLineToMarkdown,
 } from "./serialize.mjs";
 import { $blockToNodes } from "./restore.mjs";
-import { rawKeysOf } from "./raw-registry.mjs";
+import { rawKeysOf, softJoinKeysOf } from "./raw-registry.mjs";
 
 export const CURSOR_RAW_TAG = "cursor-raw";
 
@@ -115,6 +116,9 @@ function $rawifyBlock(editor, block) {
     const text = unescapeBackslashes(line);
     if (text.length > 0) paragraph.append($createTextNode(text));
   });
+  // 혼합 목록의 둘째 이후 묶음이었다면 이어 붙는 표지도 새 단락으로 옮긴다.
+  const softJoin = softJoinKeysOf(editor);
+  if (softJoin.delete(block.getKey())) softJoin.add(paragraph.getKey());
   block.replace(paragraph);
   rawKeysOf(editor).add(paragraph.getKey());
   paragraph.selectEnd();
@@ -128,17 +132,25 @@ function $rawifyBlock(editor, block) {
 // 판정은 삽입한 노드를 실제 자리에서 다시 직렬화해 본다(노드의 체크 상태는
 // 부모 목록이 있어야 읽히므로 분리된 노드로는 판정할 수 없다).
 function $unrawLine(editor, node) {
+  const softJoin = softJoinKeysOf(editor);
   const raw = $serializeRawLineToMarkdown(node);
-  const created = $blockToNodes(raw);
+  const created = $blockToNodes(raw, editor);
   for (const next of created) {
     node.insertBefore(next);
   }
-  const rebuilt = created
-    .map((next) => $serializeBlockToMarkdown(next))
-    .join("\n\n");
-  if (rebuilt !== raw) {
-    for (const next of created) next.remove();
+  const rebuilt = $serializeNodesToMarkdown(created, { softJoin });
+  // 종류가 섞인 원문(노드가 여럿)은 접지 않는다 -- P1-1 판정을 그대로 둔다.
+  // 복원(restore)은 이제 혼합 목록을 올바르게 나누지만, 펼친 줄을 접는 쪽은
+  // 사용자가 원문에서 친 그대로 두는 편이 화면과 저장을 같게 지킨다.
+  if (rebuilt !== raw || created.length > 1) {
+    for (const next of created) {
+      next.remove();
+      softJoin.delete(next.getKey());
+    }
     return;
+  }
+  if (softJoin.delete(node.getKey()) && created.length > 0) {
+    softJoin.add(created[0].getKey());
   }
   node.remove();
   rawKeysOf(editor).delete(node.getKey());
