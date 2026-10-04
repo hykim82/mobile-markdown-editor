@@ -1,5 +1,5 @@
-// coder-task.md §0-1-② "두 화면 오가기 -- 목록에서 메모를 고르면
-// 에디터로". storage-mount.mjs 의 openMemoInEditor 가 그 전환의 데이터
+// "두 화면 오가기 -- 목록에서 메모를 고르면 에디터로"(HYK-304 라운드
+// 과제). storage-mount.mjs 의 openMemoInEditor 가 그 전환의 데이터
 // 쪽 절반(목록 카드 클릭 -> 에디터에 그 메모가 뜬다 / "+" -> 빈 에디터)을
 // 맡는다. mountStorage 를 통째로 쓰지 않고 openMemoInEditor 를 직접
 // 재는 이유는 restore-autosave-safety-net.test.mjs 와 같다 -- fake
@@ -24,7 +24,7 @@ import {
   writeCurrentMemoId,
   readCurrentMemoId,
 } from "../../src/storage/current-memo-pointer.mjs";
-// HYK-304-legacy-cover-width-1(coder-task.md §1) P2-1 수리(HYK-304-
+// HYK-304-legacy-cover-width-1 라운드 P2-1 수리(HYK-304-
 // fixture-module-1 · ⛔검토자 실측으로 정정): 예전 이 자리의 주석은
 // "2번 입구(openMemoInEditor)는 legacy-body-compat.test.mjs 의 8개
 // 고정점 표본 중 B1 하나만 덮는다"고 적었는데, 그 문면이 틀렸다 --
@@ -250,6 +250,15 @@ test("목록에서 옛 형식(bodyFormat 없음) 레코드를 openMemoInEditor �
     serializeEditorToMarkdown(editor, { legacy: true }),
     body,
     "legacy 재직렬화는 저장 원문과 바이트가 같아야 한다(보이는 글자 불변식)",
+  );
+  // 왕복 외 축(검토자 C2): 위 왕복 단정은 body 가 무엇이든
+  // 성립하므로 고정물 값이 바뀌어도 빨갛지 않았다(LEGACY_FIXTURES.B1 을
+  // "MUTATED-B1" 로 바꿔 실측 초록). 이 한 줄이 B1 의 실제 글자(역슬래시 3개 ·
+  // 끝 "memo.md")를 값으로 못 박는다. 기존 단정은 지우지 않았다.
+  assert.equal(
+    serializeEditorToMarkdown(editor, { legacy: true }),
+    "C:\\Users\\han\\memo.md",
+    "B1 고정물의 실제 글자가 그대로 복원돼야 한다(고정물 값 변이를 잡는다)",
   );
   assert.equal(
     restoreState.autosaveBlocked,
