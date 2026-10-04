@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -139,6 +145,37 @@ test("KNOWN MISS: a one-hop flow through a local variable is not reported (docum
   assert.deepEqual(scanSource(src), []);
 });
 
+test("INTENDED MISS: a bare named import (import { join }) is not a path callee (HYK-304 P2-5)", () => {
+  // Only the qualified path.join / path.resolve are in PATH_CALLEES. Matching
+  // the bare name would also match every `x.join(...)` method call (the callee
+  // tail is taken after the last dot), so widening it is a separate decision.
+  const src = [
+    `import { join } from "node:path";`,
+    `join(new URL("./d", import.meta.url).pathname, "e");`,
+    ``,
+  ].join("\n");
+  assert.deepEqual(scanSource(src), []);
+});
+
+test("INTENDED MISS: a .pathname inside a template-literal placeholder is not reported (HYK-304 P2-5)", () => {
+  // Template bodies are masked like string literals, so a `${...}` placeholder
+  // is never seen as code. Un-masking placeholders would also re-scan prose
+  // that sits inside template strings, so this stays a documented boundary.
+  const src =
+    'readFileSync(`${new URL("./a", import.meta.url).pathname}/x.json`, "utf8");\n';
+  assert.deepEqual(scanSource(src), []);
+});
+
+test("an assignment written inside a fileURLToPath(...) argument list is still reported (HYK-304 P2-1)", () => {
+  // The wrapper exemption used to accept this. The raw .pathname is still bound
+  // to a *_PATH name, so the wrapper must not hide it.
+  const hits = scanSource(
+    `fileURLToPath(X_PATH = new URL("./q.mjs", import.meta.url).pathname);\n`,
+  );
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].kind, "assign");
+});
+
 test("maskNonCode keeps length and newlines so line numbers survive masking", () => {
   const src = `const a = "x\\ny"; // tail\n/* c\n d */ const b = 2;\n`;
   const masked = maskNonCode(src);
@@ -158,6 +195,39 @@ test("the real repo is clean with the shipped allowlist (no violations, no stale
   assert.deepEqual(result.violations, []);
   assert.deepEqual(result.stale, []);
   assert.ok(result.files.length > 0);
+});
+
+test("src/ is in the scan scope: a Node script under src/ (dev-server.mjs shape) is scanned (HYK-304 P2-2)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pathname-guard-src-"));
+  try {
+    mkdirSync(join(dir, "src", "editor"), { recursive: true });
+    writeFileSync(
+      join(dir, "src", "editor", "dev-server.mjs"),
+      `readFileSync(new URL("./x.json", import.meta.url).pathname, "utf8");\n`,
+    );
+    const result = scanRepo(dir, []);
+    assert.deepEqual(result.files, ["src/editor/dev-server.mjs"]);
+    assert.equal(result.violations.length, 1);
+    assert.equal(result.violations[0].file, "src/editor/dev-server.mjs");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("enforce.yml pins this guard as a fail-closed CI step with the exact command (HYK-304 P2-3)", () => {
+  const yml = readFileSync(
+    join(REPO_ROOT, ".github", "workflows", "enforce.yml"),
+    "utf8",
+  );
+  // The step block runs from its name line to the next step (`- name:`).
+  const block =
+    /- name: pathname-filepath-guard[\s\S]*?(?=\n\s+- name:|\s*$)/.exec(yml);
+  assert.ok(block, "enforce.yml must contain the pathname-filepath-guard step");
+  assert.match(
+    block[0],
+    /\n\s+run: node scripts\/check\/pathname-filepath-guard\.mjs\s*$/,
+  );
+  assert.doesNotMatch(block[0], /\n\s+continue-on-error:/);
 });
 
 test("scanRepo: a stale allowlist entry is reported, and a matching entry suppresses a violation", () => {

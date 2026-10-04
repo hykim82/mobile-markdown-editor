@@ -33,10 +33,10 @@ import {
 // 우연히 저장 원문과 같아지는 표본). B1 이 고정점이 아닌 이유는 --
 // B1 이 손상되면 바이트가 달라져 안전판(restoreState.autosaveBlocked)이
 // 스스로 발동하기 때문이다(검토자 실측: 변이 아래에서
-// autosaveBlocked=true). 즉 목록 입구의 고정점 표본은 이 라운드
-// 전까지 «0개»였고, 이제 아래 B5·B6 둘로 늘었다(coder-task.md §3
-// P2-3 "덮개 폭" 수리) -- 고정점에서는 안전판이 못 잡으므로 구조
-// 단정이 유일한 파수꾼이다.
+// autosaveBlocked=true). 즉 목록 입구의 고정점 표본은 HYK-304-
+// legacy-cover-width-1 라운드 전까지 «0개»였고, 그 라운드가 아래
+// B5·B6 의 구조 단정을 더했다(P2-3 "덮개 폭" 수리). 고정점에서는
+// 안전판이 못 잡으므로 구조 단정이 유일한 파수꾼이다.
 import { LEGACY_FIXTURES } from "./legacy-fixtures.mjs";
 
 function makeRestoreState() {
@@ -225,7 +225,9 @@ test("초기 로드: 포인터가 가리키는 메모가 이미 삭제돼 있으
 // 문자로 잰다.
 test("목록에서 옛 형식(bodyFormat 없음) 레코드를 openMemoInEditor 로 열면 재직렬화가 저장 원문과 바이트 동일하다(legacy 복원)", async () => {
   const id = "legacy-via-list-1";
-  const body = "C:\\Users\\han\\memo.md"; // legacy-body-compat.test.mjs B1
+  // 픽스처는 공용 LEGACY_FIXTURES.B1 하나다(HYK-304 P2-4: 예전엔 이 자리에
+  // 같은 바이트를 다시 적어 고정물이 둘이었다).
+  const body = LEGACY_FIXTURES.B1;
   writeCurrentMemoId(null);
   const adapter = createFakeAdapter();
   // ⛔bodyFormat 필드를 일부러 안 넣는다 -- main(dac26cf)이 저장해 뒀던

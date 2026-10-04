@@ -10,14 +10,18 @@
 // so the Linux CI also cannot tell the two shapes apart at runtime. This
 // static scan is therefore the only CI-side anchor for that drift.
 //
-// What this PROVES: for every .mjs/.js/.cjs file under scripts/ and test/,
-// a `new URL(...)` expression whose result is chained to `.pathname` is
+// What this PROVES: for every .mjs/.js/.cjs file under scripts/, test/ and
+// src/, a `new URL(...)` expression whose result is chained to `.pathname` is
 // reported when that value flows into one of two places:
 //   (a) an assignment to an identifier shaped `*Path` or `*_PATH`
 //   (b) a DIRECT argument of execFileSync / execFile / spawn / spawnSync /
 //       readFileSync / writeFileSync / existsSync / import() / path.join /
 //       path.resolve
-// A chain wrapped in fileURLToPath(...) is accepted.
+// A chain whose direct call is fileURLToPath(...) is accepted (that call is
+// not a path callee). An assignment written INSIDE a fileURLToPath(...)
+// argument list is still reported (HYK-304 P2-1: the old exemption hid it).
+// src/ is in scope because dev-server.mjs there is a Node script, not a
+// browser file (HYK-304 P2-2).
 //
 // What this DOES NOT prove (see the "정직 한계" entries in the round report):
 //   - One-hop flows are missed on purpose: `const p = new URL(...).pathname;
@@ -42,9 +46,8 @@ import { fileURLToPath } from "node:url";
 // allowlist entries would silently widen the gate).
 export const ALLOWLIST = [];
 
-const SCAN_DIRS = ["scripts", "test"];
+const SCAN_DIRS = ["scripts", "test", "src"];
 const SCAN_EXT_RE = /\.(mjs|js|cjs)$/;
-const SAFE_WRAPPER = "fileURLToPath";
 const FS_CALLEES = new Set([
   "execFileSync",
   "execFile",
@@ -215,7 +218,6 @@ function classifyFlow(masked, exprStart) {
   const before = masked.slice(0, exprStart).replace(/\s+$/, "");
   const assign = ASSIGN_TARGET_RE.exec(before);
   const callee = directCalleeOf(masked, exprStart);
-  if (callee && callee.split(".").pop() === SAFE_WRAPPER) return null;
   if (assign && PATH_NAME_RE.test(assign[1])) {
     return { kind: "assign", callee: null };
   }
