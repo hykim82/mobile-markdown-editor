@@ -22,6 +22,7 @@ import {
 } from "lexical";
 import { $isHeadingNode } from "@lexical/rich-text";
 import { $isListNode, $isListItemNode } from "@lexical/list";
+import { rawKeysOf } from "./raw-registry.mjs";
 
 const LIST_MARKER = "-";
 
@@ -56,7 +57,14 @@ function escapeBackslashes(text) {
 // LineBreakNode 스킵) -- storage-mount.mjs 가 bodyFormat 마커 없는
 // 레코드(= main 이 저장한 옛 메모)에 이 옵션을 건다. legacy=false(기본)는
 // 지금까지의 새 규칙(단사 escape + 줄바꿈 마커) 그대로다.
-function collectInlineSegments(elementNode, { legacy = false } = {}) {
+// rawLines(HYK-304-cursor-raw-restore-1): 커서가 들어가 원문으로 펼쳐진 줄
+// (raw-line)에서만 켠다. 그 줄은 목록 항목 사이 줄바꿈을 LineBreak 노드로
+// 들고 있는데, 여기서는 그것을 하드 줄바꿈 마커("\\\n")가 아니라 원문 그대로
+// 목록 항목 경계("\n")로 내보내야 저장 원문이 바뀌지 않는다.
+function collectInlineSegments(
+  elementNode,
+  { legacy = false, rawLines = false } = {},
+) {
   const segments = [];
   for (const child of elementNode.getChildren()) {
     if ($isTextNode(child)) {
@@ -69,6 +77,10 @@ function collectInlineSegments(elementNode, { legacy = false } = {}) {
       });
     } else if ($isLineBreakNode(child)) {
       if (legacy) continue; // main 이 실제로 하던 그대로: 조용히 버린다.
+      if (rawLines) {
+        segments.push({ text: "\n", bold: false, strikethrough: false });
+        continue;
+      }
       // Shift+Enter 로 만든 "같은 문단 안 줄바꿈"(HYK-304 E4). 이 노드는
       // TextNode 도 ElementNode 도 아니라서 위 두 분기 어디에도 안 걸리고
       // 조용히 사라졌었다 -- backslash + 줄바꿈 한 글자로 내보낸다(표준
@@ -126,6 +138,29 @@ function serializeInline(elementNode, options) {
   return wrapByMarks(collectInlineSegments(elementNode, options), 0);
 }
 
+// 커서 진입으로 펼쳐진 줄의 원문 -- 텍스트는 원문 글자(역슬래시는 풀린
+// 상태)이므로 escape 규칙은 그대로 적용한다. 굵게·취소선은 사용자가 원문을
+// 치다 트리거를 완성했을 때 생긴 서식이라 그 서식도 마커로 되돌려 내보낸다
+// (저장 원문 = 화면 원문).
+// 줄바꿈은 펼친 줄의 종류로 갈린다(HYK-304-cursor-raw-restore-2 · P2-1):
+// - 목록이면 LineBreak 는 항목 경계다 -- 원문 그대로 "\n" 으로 낸다.
+// - 그 밖(제목·글)이면 사용자가 원문 안에서 Shift+Enter 로 친 줄바꿈이다 --
+//   하드 줄바꿈 escape("\\\n")로 낸다. 맨 "\n" 으로 내면 저장 원문이 블록을
+//   쪼개고, 다시 열면 같은 모양으로 복원되지 않는다(바이트가 되돌아오지 않음).
+export function $serializeRawLineToMarkdown(node) {
+  return serializeInline(node, { rawLines: $isRawListLine(node) });
+}
+
+// 펼친 줄의 첫 줄이 목록 항목 표지("- ")로 시작하면 목록 원문이다.
+function $isRawListLine(node) {
+  return /^- /.test(node.getTextContent().split("\n")[0]);
+}
+
+// 최상위 블록 하나를 원문으로 -- 커서 진입 때 펼칠 원문을 만든다.
+export function $serializeBlockToMarkdown(node) {
+  return serializeBlock(node, {});
+}
+
 function serializeListItem(item, listType, marker, options) {
   const body = serializeInline(item, options);
   if (listType === "check") {
@@ -162,13 +197,21 @@ function serializeBlock(node, options) {
 // 내보내 안전판(§1-⑷)의 "복원 직후 재직렬화 == 저장 원문" 비교가
 // 레거시 레코드에서도 유효하게 남도록 쓴다 -- collectInlineSegments
 // 문단 참고.
-export function $serializeRootToMarkdown(options) {
+export function $serializeRootToMarkdown(options = {}) {
+  const rawKeys = options.rawKeys ?? new Set();
   return $getRoot()
     .getChildren()
-    .map((node) => serializeBlock(node, options))
+    .map((node) =>
+      rawKeys.has(node.getKey())
+        ? $serializeRawLineToMarkdown(node)
+        : serializeBlock(node, options),
+    )
     .join("\n\n");
 }
 
 export function serializeEditorToMarkdown(editor, options) {
-  return editor.getEditorState().read(() => $serializeRootToMarkdown(options));
+  const rawKeys = rawKeysOf(editor);
+  return editor
+    .getEditorState()
+    .read(() => $serializeRootToMarkdown({ ...options, rawKeys }));
 }

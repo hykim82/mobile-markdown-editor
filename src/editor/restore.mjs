@@ -302,6 +302,23 @@ function buildListNode(lines, options) {
 // 해독은 이 라운드(HYK-304-linebreak-2) 가 도입한 규칙이라, 그 규칙이
 // 없던 시절 body 에 걸면 "\n" 바로 앞의 평범한 backslash 를 줄바꿈
 // escape 로 오해해 항목 경계를 삼킨다(REVIEW-r2.md §1-2 P1 그 자체).
+// 블록 하나(= "\n\n" 으로 갈린 덩어리)를 노드 배열로 만든다 -- 목록이면
+// 목록 노드 하나, 아니면 줄마다 한 노드. restoreMarkdownIntoEditor 와
+// 커서 진입 원문 복원(cursor-raw.mjs)이 같은 규칙을 공유하려고 뺐다.
+function blockToNodes(block, options, legacy) {
+  const lines = legacy ? block.split("\n") : splitBlockLines(block);
+  if (lines.every(isListLine)) {
+    return [buildListNode(lines, options)];
+  }
+  return lines.map((line) => buildBlockNode(line, options));
+}
+
+// 커서가 나가 원문 줄을 다시 서식으로 바꿀 때 쓴다 -- serialize.mjs 의
+// $serializeRawLineToMarkdown 이 낸 원문 한 덩어리의 역함수.
+export function $blockToNodes(block) {
+  return blockToNodes(block, {}, false);
+}
+
 export function restoreMarkdownIntoEditor(editor, body, options = {}) {
   const { legacy = false } = options;
   editor.update(
@@ -310,14 +327,7 @@ export function restoreMarkdownIntoEditor(editor, body, options = {}) {
       root.clear();
       if (body.length === 0) return;
       for (const block of body.split("\n\n")) {
-        const lines = legacy ? block.split("\n") : splitBlockLines(block);
-        if (lines.every(isListLine)) {
-          root.append(buildListNode(lines, options));
-        } else {
-          for (const line of lines) {
-            root.append(buildBlockNode(line, options));
-          }
-        }
+        root.append(...blockToNodes(block, options, legacy));
       }
     },
     { discrete: true },

@@ -6,6 +6,7 @@
 // 시험 대상이라 부수효과 없는 이 파일로 분리한다.
 import { serializeEditorToMarkdown } from "./serialize.mjs";
 import { restoreMarkdownIntoEditor } from "./restore.mjs";
+import { CURSOR_RAW_TAG } from "./cursor-raw.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
 import {
   createMemoStore,
@@ -186,8 +187,13 @@ export function mountStorage(
   // 리스너는 restoreState.applying(= restoreCurrentMemo 자신의 update)일
   // 때 맨 위에서 돌아가므로, userEdited 가 true 로 서는 유일한 경로는
   // restore 가 만들지 않은 update -- 즉 실제 사용자 입력이다.
-  editor.registerUpdateListener(() => {
+  // ⭐커서 진입 원문 복원(cursor-raw.mjs)의 펼침·접힘 갱신은 저장 원문을
+  // 바꾸지 않는다(serialize 가 펼친 줄도 원문 그대로 낸다) -- 그래서 저장을
+  // 건너뛴다. 사용자가 펼친 줄에 실제로 친 글자는 태그가 없는 갱신이라
+  // 평소대로 저장된다.
+  editor.registerUpdateListener(({ tags }) => {
     if (restoreState.applying) return;
+    if (tags.has(CURSOR_RAW_TAG)) return;
     if (!restoreState.done) restoreState.userEdited = true;
     if (restoreState.autosaveBlocked) {
       console.error(
