@@ -2,13 +2,9 @@
 // 에 이어 HYK-304-storage-1 이 저장·자동저장을, 이 라운드(HYK-304-
 // memo-list-1)가 메모 목록(홈) 화면과 두 화면 오가기를 붙인다 --
 // PRD §6/§7/§8, coder-task.md §0.
-import { createEditor } from "lexical";
-import { registerMarkdownShortcuts } from "@lexical/markdown";
-import { registerRichText } from "@lexical/rich-text";
 import tokens from "../../spec/design-tokens.json";
-import { PRODUCT_TRANSFORMERS, PRODUCT_NODES } from "./transformers.mjs";
 import { serializeEditorToMarkdown } from "./serialize.mjs";
-import { EDITOR_THEME } from "./theme.mjs";
+import { createProductEditor } from "./product-editor.mjs";
 import { mountStorage, openMemoInEditor } from "./storage-mount.mjs";
 import { mountNotionCopy } from "./notion-copy.mjs";
 import { mountMemoList } from "./memo-list-mount.mjs";
@@ -43,19 +39,14 @@ function applyDesignTokens() {
   );
 }
 
+// 결선은 product-editor.mjs 한 곳이다(시험 헬퍼와 같은 함수를 부른다).
 function mountEditor(container) {
-  const editor = createEditor({
+  return createProductEditor(container, {
     namespace: "mobile-markdown-editor",
     onError: (error) => {
       throw error;
     },
-    nodes: PRODUCT_NODES,
-    theme: EDITOR_THEME,
   });
-  editor.setRootElement(container);
-  registerRichText(editor);
-  registerMarkdownShortcuts(editor, PRODUCT_TRANSFORMERS);
-  return editor;
 }
 
 function mountRawPanel(editor, panel) {

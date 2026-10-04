@@ -1,28 +1,17 @@
 // 공용 테스트 헬퍼 -- jsdom-env.mjs 를 먼저 import 한 테스트 파일에서만
 // 쓴다(lexical 이 import 시점에 브라우저 DOM 전역을 요구하기 때문).
-import { createEditor } from "lexical";
-import { registerMarkdownShortcuts } from "@lexical/markdown";
-import { registerRichText } from "@lexical/rich-text";
-import {
-  PRODUCT_TRANSFORMERS,
-  PRODUCT_NODES,
-} from "../../src/editor/transformers.mjs";
-import { EDITOR_THEME } from "../../src/editor/theme.mjs";
+import { createProductEditor } from "../../src/editor/product-editor.mjs";
 import { makeEditableRoot } from "./jsdom-env.mjs";
 
+// 결선은 app.mjs 와 같은 createProductEditor 를 쓴다(복제하지 않는다).
 export function makeProductEditor() {
-  const editor = createEditor({
+  const root = makeEditableRoot();
+  const editor = createProductEditor(root, {
     namespace: "test-editor",
     onError: (error) => {
       throw error;
     },
-    nodes: PRODUCT_NODES,
-    theme: EDITOR_THEME,
   });
-  const root = makeEditableRoot();
-  editor.setRootElement(root);
-  registerRichText(editor);
-  registerMarkdownShortcuts(editor, PRODUCT_TRANSFORMERS);
   return { editor, root };
 }
 
