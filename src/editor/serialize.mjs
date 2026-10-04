@@ -139,11 +139,21 @@ function serializeInline(elementNode, options) {
 }
 
 // 커서 진입으로 펼쳐진 줄의 원문 -- 텍스트는 원문 글자(역슬래시는 풀린
-// 상태)이므로 escape 규칙은 그대로 적용하고, 줄바꿈만 raw 규칙으로 본다.
-// 굵게·취소선은 사용자가 원문을 치다 트리거를 완성했을 때 생긴 서식이라
-// 그 서식도 마커로 되돌려 내보낸다(저장 원문 = 화면 원문).
+// 상태)이므로 escape 규칙은 그대로 적용한다. 굵게·취소선은 사용자가 원문을
+// 치다 트리거를 완성했을 때 생긴 서식이라 그 서식도 마커로 되돌려 내보낸다
+// (저장 원문 = 화면 원문).
+// 줄바꿈은 펼친 줄의 종류로 갈린다(HYK-304-cursor-raw-restore-2 · P2-1):
+// - 목록이면 LineBreak 는 항목 경계다 -- 원문 그대로 "\n" 으로 낸다.
+// - 그 밖(제목·글)이면 사용자가 원문 안에서 Shift+Enter 로 친 줄바꿈이다 --
+//   하드 줄바꿈 escape("\\\n")로 낸다. 맨 "\n" 으로 내면 저장 원문이 블록을
+//   쪼개고, 다시 열면 같은 모양으로 복원되지 않는다(바이트가 되돌아오지 않음).
 export function $serializeRawLineToMarkdown(node) {
-  return serializeInline(node, { rawLines: true });
+  return serializeInline(node, { rawLines: $isRawListLine(node) });
+}
+
+// 펼친 줄의 첫 줄이 목록 항목 표지("- ")로 시작하면 목록 원문이다.
+function $isRawListLine(node) {
+  return /^- /.test(node.getTextContent().split("\n")[0]);
 }
 
 // 최상위 블록 하나를 원문으로 -- 커서 진입 때 펼칠 원문을 만든다.

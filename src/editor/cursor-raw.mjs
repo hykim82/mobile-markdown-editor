@@ -14,8 +14,12 @@
 //   커서가 있는 동안 바로 원문으로 되돌아가지 않는다(IME 시험이 이 경로를 잰다).
 // - 펼치기·접기는 CURSOR_RAW_TAG 로 표시하고(저장 리스너가 이 갱신을 건너뛴다),
 //   HISTORIC_TAG 도 함께 단다. 마크다운 단축키 리스너는 이 태그가 붙은 갱신을
-//   건너뛴다 -- 없으면 펼친 "# " 이 단축키에 걸려 다시 헤딩이 되고, 그 헤딩을
-//   또 펼치는 무한 갱신이 된다(ime-composition 시험이 실제로 그 무한 갱신을 냈다).
+//   건너뛴다 -- 없으면 펼친 "# " 이 단축키에 걸려 다시 헤딩이 될 수 있다.
+//   ⚠️정정(HYK-304-cursor-raw-restore-2 · P3-1): 예전엔 "그 헤딩을 또 펼치는
+//   무한 갱신이 된다(ime-composition 시험이 실제로 냈다)"고 적었으나, 지금 코드
+//   에서는 재현되지 않는다 -- 진입 판정이 재펼침을 이미 막는다(실측: 태그를 빼면
+//   빈 제목 1글자 자리 시험 ⓕ 1건만 빨개지고 ime-composition 은 초록). 그래서
+//   이 태그는 ⓕ 시험이 지키는 방어선이고, 제거 대상이 아니다.
 // - 한글 조합(IME) 중에는 판정하지 않는다(PRD §8 "한글 조합 깨짐").
 // - 펼친 줄 안에서 사용자가 트리거를 완성하면(예: "- " 입력) 그 줄은 서식으로
 //   바뀌고 커서가 계속 있는 한 서식으로 남는다(다시 나갔다 들어오면 원문으로 펼친다).
@@ -116,10 +120,25 @@ function $rawifyBlock(editor, block) {
   paragraph.selectEnd();
 }
 
+// 접기는 원문을 바이트 그대로 되살릴 때만 한다(HYK-304-cursor-raw-restore-2 ·
+// P1-1). 사용자가 원문에서 목록 항목 종류를 섞어 놓으면(예: "- 목록" 아래
+// "- [ ] 둘") 목록 노드 하나가 첫 줄 종류를 전 항목에 강요해 글자가 바뀐다.
+// 그 경우 접지 않고 원문 그대로 둔다 -- 화면과 저장이 같은 글자를 보이게
+// 하는 것이 접는 것보다 우선이다(PRD §5.1⑤ 원문 손실 없음).
+// 판정은 삽입한 노드를 실제 자리에서 다시 직렬화해 본다(노드의 체크 상태는
+// 부모 목록이 있어야 읽히므로 분리된 노드로는 판정할 수 없다).
 function $unrawLine(editor, node) {
-  const nodes = $blockToNodes($serializeRawLineToMarkdown(node));
-  for (const created of nodes) {
-    node.insertBefore(created);
+  const raw = $serializeRawLineToMarkdown(node);
+  const created = $blockToNodes(raw);
+  for (const next of created) {
+    node.insertBefore(next);
+  }
+  const rebuilt = created
+    .map((next) => $serializeBlockToMarkdown(next))
+    .join("\n\n");
+  if (rebuilt !== raw) {
+    for (const next of created) next.remove();
+    return;
   }
   node.remove();
   rawKeysOf(editor).delete(node.getKey());
