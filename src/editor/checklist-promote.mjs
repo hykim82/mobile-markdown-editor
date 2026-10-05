@@ -18,7 +18,11 @@ import { softJoinKeysOf } from "./raw-registry.mjs";
 
 // PRD §5.2 문면: "[ ] " / "[x] " (뒤 공백 필수). 체크박스 모양이 아닌 "[y] "
 // 는 일치하지 않아 불릿으로 남는다(경계 2).
-const CHECK_PREFIX = /^\[( |x)\] /i;
+// ⭐대소문자 구분(HYK-304-checkbox-in-list-2 · 1R 검토 P1-1): "[X] " 는 이 판정
+// 밖이다. 복원기(markdown-parser.mjs CHECKBOX_RE)와 저장기(serialize.mjs)가
+// 모두 소문자 "[x]" 만 체크로 알아보므로, 여기서 대문자를 체크로 바꾸면 저장
+// 원문 "- [X] 할일" 이 복원 중 "- [x] 할일" 로 바뀌어 왕복이 깨진다.
+const CHECK_PREFIX = /^\[( |x)\] /;
 
 // 떼어 낸 접두어만큼 커서를 당긴다 -- 글자 위치는 그대로 두고 앞쪽 기호만 뺀다.
 function $shiftSelectionAfterStrip(textNode, removedLength) {
@@ -39,11 +43,16 @@ function $shiftSelectionAfterStrip(textNode, removedLength) {
 function $splitItemIntoCheckList(editor, item, list, checked) {
   const softJoin = softJoinKeysOf(editor);
   const following = item.getNextSiblings();
+  // ⭐소속 상속(HYK-304-checkbox-in-list-2 · 1R 검토 P3-2 · P3-4): 원래 목록이
+  // 앞 묶음에 이어 붙는 묶음이었다면, 그 목록이 빈 채로 사라질 때 체크 목록이
+  // 그 자리를 물려받아야 저장 때 줄바꿈 하나로 이어진다. 목록이 남으면 체크
+  // 목록은 새 묶음이라 이어 붙는다. 사라진 목록의 키는 집합에서 지운다.
+  const wasJoined = softJoin.has(list.getKey());
   const checkList = $createListNode("check");
   list.insertAfter(checkList);
   checkList.append(item);
   item.setChecked(checked);
-  if (list.getChildrenSize() > 0) softJoin.add(checkList.getKey());
+  if (list.getChildrenSize() > 0 || wasJoined) softJoin.add(checkList.getKey());
 
   if (following.length > 0) {
     const tail = $createListNode("bullet");
@@ -54,6 +63,7 @@ function $splitItemIntoCheckList(editor, item, list, checked) {
 
   if (list.getChildrenSize() === 0) {
     list.remove();
+    softJoin.delete(list.getKey());
   }
 }
 
@@ -62,6 +72,11 @@ export function registerChecklistPromotion(editor) {
     // 한글 조합 중에는 판정하지 않는다(PRD §5.3 ②) -- 조합이 끝나면 같은
     // 글자가 다시 더러워지므로 그때 판정된다.
     if (editor.isComposing()) return;
+
+    // ⭐서식 있는 글자 노드(굵게·취소선)는 접두어가 아니다(1R 검토 P1-1): 저장 원문
+    // "- **[ ] b**" 는 목록 항목 첫 글자가 굵은 "[ ] b" 라서 여기 걸리면 마커가
+    // 바깥에서 안쪽으로 옮겨진다("- [ ] **b**"). 체크 접두어는 서식 없는 글자여야 한다.
+    if (textNode.getFormat() !== 0) return;
 
     const item = textNode.getParent();
     if (!$isListItemNode(item) || item.getFirstChild() !== textNode) return;

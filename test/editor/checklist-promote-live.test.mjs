@@ -264,6 +264,11 @@ test('왕복: 타이핑으로 만든 체크박스는 저장 원문 "- [ ] 할일
   typeText(editor, "[ ] 할일");
   await settle();
 
+  // 변별력(P3-1): 원문만 보면 결선을 떼도 "- [ ] 할일" 이 같아 초록이다 --
+  // 화면 구조가 체크 목록이어야 전환이 실제로 일어났다고 판정한다.
+  assert.deepEqual(summarize(editor), [
+    { kind: "check", items: [{ text: "할일", checked: false }] },
+  ]);
   assert.equal(serializeEditorToMarkdown(editor), "- [ ] 할일");
 });
 
@@ -274,7 +279,7 @@ test("왕복: 가운데 줄 체크 전환 뒤 저장 원문이 그 한 줄만 �
       const root = lexical.$getRoot();
       root.clear();
       const list = $createListNode("bullet");
-      for (const label of ["사과", "[ ] 배", "감"]) {
+      for (const label of ["사과", "배", "감"]) {
         const item = $createListItemNode();
         item.append(lexical.$createTextNode(label));
         list.append(item);
@@ -283,6 +288,19 @@ test("왕복: 가운데 줄 체크 전환 뒤 저장 원문이 그 한 줄만 �
     },
     { discrete: true },
   );
+  // 둘째 항목 글자를 "[ ] 배" 로 바꿔 승격을 실제로 태운다(P3-1 변별력: 구조 단언).
+  editor.update(
+    () => {
+      const list = lexical.$getRoot().getFirstChild();
+      list.getChildren()[1].getFirstChild().setTextContent("[ ] 배");
+    },
+    { discrete: true },
+  );
+  assert.deepEqual(summarize(editor), [
+    { kind: "bullet", items: [{ text: "사과", checked: undefined }] },
+    { kind: "check", items: [{ text: "배", checked: false }] },
+    { kind: "bullet", items: [{ text: "감", checked: undefined }] },
+  ]);
 
   const body = "- 사과\n- [ ] 배\n- 감";
   assert.equal(serializeEditorToMarkdown(editor), body);
