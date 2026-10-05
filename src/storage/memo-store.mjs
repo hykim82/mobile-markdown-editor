@@ -112,6 +112,11 @@ async function handleContentChange(state, adapter, config, body) {
     await clearToEmpty(state, adapter, config);
     return;
   }
+  // HYK-304-home-list-updatedat-1: 커서만 움직여도 에디터 update 가 와서
+  // 여기로 같은 원문이 들어온다. 원문이 그대로면 "수정"이 아니므로
+  // updatedAt 을 바꾸지 않고 저장도 걸지 않는다 -- 안 그러면 글을 고치지
+  // 않았는데도 목록 최신 수정순에서 메모가 맨 위로 올라온다(PRD §6).
+  if (body === state.memo.body) return;
   state.memo.body = body;
   // body 는 항상 지금 이 순간의 serializeEditorToMarkdown(새 규칙)이 만든
   // 값이다(storage-mount.mjs 의 리스너가 그렇게만 부른다) -- 그러니 옛
@@ -163,6 +168,11 @@ export function createMemoStore(adapter, options = {}) {
       setStatus(state, config, "idle");
     },
     getMemoId: () => state.memo?.id ?? null,
+    // 옛 형식 메모인가(bodyFormat 이 현재 형식이 아니다). 메모가 없으면
+    // 새 규칙이다. storage-mount.mjs 가 "바뀌지 않았는가" 비교에 쓸 직렬화
+    // 규칙(legacy)을 고를 때만 읽는다 -- 값을 옮겨 적기만 하는 필드다.
+    isLegacyMemo: () =>
+      state.memo !== null && state.memo.bodyFormat !== CURRENT_BODY_FORMAT,
     getStatus: () => state.status,
     // PRD §7 "본문(마크다운 원문)" 필드 그 자체 -- 노션 복사(coder-task.md
     // §1-⑴)는 이 값을 읽지, 에디터를 다시 직렬화하지 않는다. state.memo.body
