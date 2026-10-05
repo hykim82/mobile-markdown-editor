@@ -157,10 +157,15 @@ test("INTENDED MISS: a bare named import (import { join }) is not a path callee 
   assert.deepEqual(scanSource(src), []);
 });
 
-test("INTENDED MISS: a .pathname inside a template-literal placeholder is not reported (HYK-304 P2-5)", () => {
+test("INTENDED MISS (경계 기술뿐 · 잠금 아님): a .pathname inside a template-literal placeholder is not reported (HYK-304 P2-5)", () => {
   // Template bodies are masked like string literals, so a `${...}` placeholder
   // is never seen as code. Un-masking placeholders would also re-scan prose
   // that sits inside template strings, so this stays a documented boundary.
+  // ⚠️ This test is NOT a lock on the placeholder branch. Measured by the
+  // HYK-304 followup-2 reviewer: removing the backtick branch of skipLiteralAt,
+  // or ending the literal at the placeholder start, both leave this test green.
+  // It only records the boundary as it stands; widening the detection to cover
+  // placeholders is a separate decision (it would re-scan template prose).
   const src =
     'readFileSync(`${new URL("./a", import.meta.url).pathname}/x.json`, "utf8");\n';
   assert.deepEqual(scanSource(src), []);

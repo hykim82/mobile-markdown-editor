@@ -18,8 +18,13 @@
 //       readFileSync / writeFileSync / existsSync / import() / path.join /
 //       path.resolve
 // A chain whose direct call is fileURLToPath(...) is accepted (that call is
-// not a path callee). An assignment written INSIDE a fileURLToPath(...)
-// argument list is still reported (HYK-304 P2-1: the old exemption hid it).
+// not a path callee). That acceptance is NOT a hole for the variable form
+// `const X_PATH = fileURLToPath(new URL(...).pathname)`: the bare `.pathname`
+// string has no scheme, so fileURLToPath throws ERR_INVALID_URL at runtime --
+// that shape fails loudly and never yields a quietly wrong path (checked on
+// node 26; the CI node version is not re-checked here). An assignment written
+// INSIDE a fileURLToPath(...) argument list is still reported (HYK-304 P2-1:
+// the old exemption hid it).
 // src/ is in scope because dev-server.mjs there is a Node script, not a
 // browser file (HYK-304 P2-2).
 //
