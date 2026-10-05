@@ -22,7 +22,7 @@ import {
 } from "lexical";
 import { $isHeadingNode } from "@lexical/rich-text";
 import { $isListNode, $isListItemNode } from "@lexical/list";
-import { rawKeysOf } from "./raw-registry.mjs";
+import { rawKeysOf, softJoinKeysOf } from "./raw-registry.mjs";
 
 const LIST_MARKER = "-";
 
@@ -197,21 +197,47 @@ function serializeBlock(node, options) {
 // 내보내 안전판(§1-⑷)의 "복원 직후 재직렬화 == 저장 원문" 비교가
 // 레거시 레코드에서도 유효하게 남도록 쓴다 -- collectInlineSegments
 // 문단 참고.
-export function $serializeRootToMarkdown(options = {}) {
+// ⭐이어 붙이는 줄(HYK-304-mixed-list-fix-1): 혼합 목록의 둘째 이후 묶음은
+// softJoin 에 적혀 있고, 바로 앞 노드도 목록(또는 원문으로 펼친 목록 줄)일
+// 때만 줄바꿈 하나로 이어 낸다. 그 밖(문단·제목 뒤)에 줄을 붙이면 다시 열
+// 때 목록이 깨지므로 빈 줄을 유지한다.
+function $isContinuableList(node, rawKeys) {
+  if ($isListNode(node)) return true;
+  return rawKeys.has(node.getKey()) && $isRawListLine(node);
+}
+
+// 노드 목록을 원문 한 덩어리로 -- 최상위 블록 사이 구분자를 여기서 정한다.
+// restore 의 블록 나누기("\n\n")와 짝이 맞아야 왕복 바이트가 같다.
+// cursor-raw 의 접기 검사도 이 함수를 그대로 써서 같은 규칙을 공유한다.
+export function $serializeNodesToMarkdown(nodes, options = {}) {
   const rawKeys = options.rawKeys ?? new Set();
-  return $getRoot()
-    .getChildren()
-    .map((node) =>
-      rawKeys.has(node.getKey())
-        ? $serializeRawLineToMarkdown(node)
-        : serializeBlock(node, options),
-    )
-    .join("\n\n");
+  const softJoin = options.softJoin ?? new Set();
+  let markdown = "";
+  nodes.forEach((node, index) => {
+    const text = rawKeys.has(node.getKey())
+      ? $serializeRawLineToMarkdown(node)
+      : serializeBlock(node, options);
+    if (index > 0) {
+      const prev = nodes[index - 1];
+      const joined =
+        softJoin.has(node.getKey()) &&
+        $isContinuableList(prev, rawKeys) &&
+        $isContinuableList(node, rawKeys);
+      markdown += joined ? "\n" : "\n\n";
+    }
+    markdown += text;
+  });
+  return markdown;
+}
+
+export function $serializeRootToMarkdown(options = {}) {
+  return $serializeNodesToMarkdown($getRoot().getChildren(), options);
 }
 
 export function serializeEditorToMarkdown(editor, options) {
   const rawKeys = rawKeysOf(editor);
+  const softJoin = softJoinKeysOf(editor);
   return editor
     .getEditorState()
-    .read(() => $serializeRootToMarkdown({ ...options, rawKeys }));
+    .read(() => $serializeRootToMarkdown({ ...options, rawKeys, softJoin }));
 }

@@ -33,6 +33,7 @@ import {
 import { $createHeadingNode } from "@lexical/rich-text";
 import { $createListNode, $createListItemNode } from "@lexical/list";
 import { parse } from "../markdown-parser.mjs";
+import { softJoinKeysOf } from "./raw-registry.mjs";
 
 // text 안에서 marker(2글자)가 서로 겹치지 않게 나오는 시작 위치를 순서대로
 // 모은다 -- computeMarkerRoles 가 "이 등장의 다음 같은 마커가 어디인가"를
@@ -278,9 +279,11 @@ function isListLine(line) {
   return type === "bullet" || type === "checkbox";
 }
 
-function buildListNode(lines, options) {
-  const first = parse(lines[0]);
-  const listType = first.type === "checkbox" ? "check" : "bullet";
+function listKindOf(line) {
+  return parse(line).type === "checkbox" ? "check" : "bullet";
+}
+
+function buildListNode(lines, listType, options) {
   const list = $createListNode(listType);
   for (const line of lines) {
     const parsed = parse(line);
@@ -294,6 +297,30 @@ function buildListNode(lines, options) {
   return list;
 }
 
+// ⭐혼합 목록(HYK-304-mixed-list-fix-1 · 선재 결함 수리): 목록 노드 하나는
+// 종류(불릿/체크) 하나만 담는다. 예전에는 첫 줄의 종류를 전 항목에 강요해
+// "- 목록" 아래 "- [ ] 체크"는 체크 표식이 사라지고("- 체크"), "- [ ] 체크"
+// 아래 "- 목록"은 없던 체크 상자가 생겼다. 이제 같은 종류가 이어지는 줄끼리
+// 목록 노드 하나로 묶는다. 둘째 이후 묶음은 softJoin 에 적어 저장 때 줄바꿈
+// 하나로 이어 내게 한다(serialize.mjs $serializeNodesToMarkdown).
+function buildListNodes(lines, options, softJoin) {
+  const runs = [];
+  for (const line of lines) {
+    const kind = listKindOf(line);
+    const last = runs[runs.length - 1];
+    if (last && last.kind === kind) {
+      last.lines.push(line);
+    } else {
+      runs.push({ kind, lines: [line] });
+    }
+  }
+  return runs.map((run, index) => {
+    const list = buildListNode(run.lines, run.kind, options);
+    if (index > 0) softJoin.add(list.getKey());
+    return list;
+  });
+}
+
 // options.legacy(HYK-304-linebreak-3 · REVIEW-r2.md §1-5 선택지 ⓐ):
 // bodyFormat 마커 없는 레코드(= main/dac26cf 가 저장한 옛 메모, storage-
 // mount.mjs 가 고른다)는 그 시절 물리 줄 나누기(`block.split("\n")`,
@@ -305,18 +332,19 @@ function buildListNode(lines, options) {
 // 블록 하나(= "\n\n" 으로 갈린 덩어리)를 노드 배열로 만든다 -- 목록이면
 // 목록 노드 하나, 아니면 줄마다 한 노드. restoreMarkdownIntoEditor 와
 // 커서 진입 원문 복원(cursor-raw.mjs)이 같은 규칙을 공유하려고 뺐다.
-function blockToNodes(block, options, legacy) {
+function blockToNodes(block, options, legacy, softJoin) {
   const lines = legacy ? block.split("\n") : splitBlockLines(block);
   if (lines.every(isListLine)) {
-    return [buildListNode(lines, options)];
+    return buildListNodes(lines, options, softJoin);
   }
   return lines.map((line) => buildBlockNode(line, options));
 }
 
 // 커서가 나가 원문 줄을 다시 서식으로 바꿀 때 쓴다 -- serialize.mjs 의
-// $serializeRawLineToMarkdown 이 낸 원문 한 덩어리의 역함수.
-export function $blockToNodes(block) {
-  return blockToNodes(block, {}, false);
+// $serializeRawLineToMarkdown 이 낸 원문 한 덩어리의 역함수. 혼합 목록이면
+// 목록 노드가 여럿 나올 수 있다(그 연결은 editor 의 softJoin 에 적힌다).
+export function $blockToNodes(block, editor) {
+  return blockToNodes(block, {}, false, softJoinKeysOf(editor));
 }
 
 export function restoreMarkdownIntoEditor(editor, body, options = {}) {
@@ -325,9 +353,11 @@ export function restoreMarkdownIntoEditor(editor, body, options = {}) {
     () => {
       const root = $getRoot();
       root.clear();
+      const softJoin = softJoinKeysOf(editor);
+      softJoin.clear();
       if (body.length === 0) return;
       for (const block of body.split("\n\n")) {
-        root.append(...blockToNodes(block, options, legacy));
+        root.append(...blockToNodes(block, options, legacy, softJoin));
       }
     },
     { discrete: true },
