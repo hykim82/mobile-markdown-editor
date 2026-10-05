@@ -162,7 +162,7 @@ test("INTENDED MISS (경계 기술뿐 · 잠금 아님): a .pathname inside a te
   // is never seen as code. Un-masking placeholders would also re-scan prose
   // that sits inside template strings, so this stays a documented boundary.
   // ⚠️ This test is NOT a lock on the placeholder branch. Measured by the
-  // HYK-304 followup-2 reviewer: removing the backtick branch of skipLiteralAt,
+  // reviewer of PR #17 (the round that followup-2 then repaired): removing the backtick branch of skipLiteralAt,
   // or ending the literal at the placeholder start, both leave this test green.
   // It only records the boundary as it stands; widening the detection to cover
   // placeholders is a separate decision (it would re-scan template prose).

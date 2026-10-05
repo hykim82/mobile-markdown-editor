@@ -166,6 +166,7 @@ export function mountStorage(
   adapter = createIndexedDbAdapter(),
   restoreOptions = {},
 ) {
+  const logFn = restoreOptions.logFn ?? ((...args) => console.error(...args));
   const store = createMemoStore(adapter, {
     onStatusChange: (status) => updateSaveNotice(notice, status),
   });
@@ -233,6 +234,13 @@ export function mountStorage(
       if (restoreState.autosaveBlocked) {
         updateSaveNotice(notice, "restore-mismatch");
       }
+    })
+    // ⭐HYK-304 vacuous-guard-fix-1: 저장 읽기(adapter.get)가 거부돼도 이 프라미스가
+    // 거부로 새지 않게 여기서 받는다 -- 소비처(app.mjs)가 .catch 를 달지 않아도
+    // unhandledRejection 이 나지 않게 하는 마지막 문이다. 실패한 복원은 메모를
+    // 열지 못한 것이므로 로그만 남기고 화면 처리는 목록 쪽(list.refresh)에 맡긴다.
+    .catch((err) => {
+      logFn("[storage] initial restore failed -- memo not restored", err);
     })
     .finally(() => {
       restoreState.done = true;
