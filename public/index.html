@@ -193,6 +193,42 @@
       .editor-strikethrough {
         text-decoration: line-through;
       }
+      /* 단축키바(PRD §5.3). 자판 위 엄지존 -- 화면 하단에 고정한다. 칩은 bg.elevated ·
+         눌림 명도↓ · ≥44px 다. 바 아래로 본문이 가려지지 않게 에디터 화면에 여백을 준다. */
+      #editor-screen {
+        padding-bottom: 72px;
+      }
+      #shortcut-bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        gap: 6px;
+        padding: 8px 16px;
+        background: var(--color-bg);
+        border-top: 1px solid var(--color-border);
+      }
+      .shortcut-chip {
+        flex: 1 1 0;
+        min-width: 0;
+        min-height: 44px;
+        padding: 0 4px;
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        background: var(--color-bg-elevated);
+        color: var(--color-text-primary);
+        font: inherit;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      .shortcut-chip:active {
+        background: var(--color-border);
+      }
+      .shortcut-chip:focus-visible {
+        outline: 2px solid var(--color-accent);
+        outline-offset: 2px;
+      }
       #save-notice {
         margin-top: 8px;
         padding: 8px 12px;
@@ -265,6 +301,7 @@
         <button id="back-to-list-button" type="button">‹ 목록</button>
       </div>
       <div id="editor-root" contenteditable="true"></div>
+      <div id="shortcut-bar" role="toolbar" aria-label="서식 단축키"></div>
       <div id="save-notice" hidden></div>
       <button id="notion-copy-button" type="button">노션 복사</button>
       <div id="notion-copy-toast" hidden></div>
