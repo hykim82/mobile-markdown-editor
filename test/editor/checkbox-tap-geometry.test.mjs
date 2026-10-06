@@ -118,6 +118,27 @@ test("탭 덮개는 자기 줄의 첫 줄 상자 안에만 있다 -- 이웃 줄�
   );
 });
 
+// 가로 띠(left·width)는 글리프 밖까지 뻗어야 한다 -- 좁아지면 44px 탭 띠가 글리프 폭(1.2em)으로
+// 붕괴한다(HYK-304-overlay-horizontal-1 · PR #27 검토 M8: left 0 · width 0 이면 전건 초록이었다).
+// 값은 em 으로 읽는다(글꼴 크기와 무관하게 글리프 1.2em 기준으로 잰다).
+test("탭 덮개의 가로 띠는 글리프 왼쪽 밖까지 뻗는다 -- 좁아지면 빨갛다(M8)", () => {
+  const css = readFileSync(CSS_PATH, "utf8");
+  const after = ruleBody(css, "#editor-root li[aria-checked]::after");
+  assert.ok(after, "덮개(::after) 규칙이 있어야 한다");
+  const left = after.match(/(?:^|[\s;])left:\s*(-?\d+(?:\.\d+)?)em\s*;/);
+  const width = after.match(/(?:^|[\s;])width:\s*(\d+(?:\.\d+)?)em\s*;/);
+  assert.ok(left, "덮개 left 는 em 값이어야 한다");
+  assert.ok(width, "덮개 width 는 em 값이어야 한다");
+  assert.ok(
+    Number(left[1]) <= -1.4,
+    "덮개는 글리프 왼쪽으로 1.4em 이상 뻗어야 한다(M8 변이: left 0 → 44px 띠가 20px 글리프로 붕괴)",
+  );
+  assert.ok(
+    Number(width[1]) >= 2.6,
+    "덮개 가로 폭은 2.6em 이상이어야 한다(M8 변이: width 0 → 탭 띠가 사라진다)",
+  );
+});
+
 test("체크칸 글리프의 px 너비는 CSS 원문에 있다 -- 탭 판정이 NaN 으로 빗나가지 않게", () => {
   const css = readFileSync(CSS_PATH, "utf8");
   const before = ruleBody(css, "#editor-root li[aria-checked]::before");
