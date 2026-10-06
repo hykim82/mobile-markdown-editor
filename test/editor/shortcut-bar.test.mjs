@@ -141,37 +141,31 @@ test("조합 중 칩 탭은 아무것도 넣지 않는다, 조합 확정 뒤에�
   assert.equal(markdownOf(editor), "-");
 });
 
-test("칩으로 넣은 문법은 그 뒤 타이핑한 공백에서 §5.2 트리거가 발화한다(⑤의 실측 부분)", async () => {
-  // 실측 사실(결과 파일에 적는다): 칩이 넣은 `#` 자체는 헤딩 트리거가 아니다
-  // (HEADING 정규식은 `#` 뒤 공백을 요구한다). 사용자가 공백을 한 글자 더
-  // 치면 그때 발화한다. 이 시험은 그 경로를 고정한다.
-  const { editor, container } = setupEditor("");
-  tap(container, "제목");
-  assert.equal(
-    editor
-      .getEditorState()
-      .read(() => lexical.$getRoot().getFirstChild().getType()),
-    "paragraph",
-    "칩 `#` 한 번으로는 헤딩이 되지 않는다",
-  );
-  editor.update(
-    () => {
-      const selection = lexical.$getSelection();
-      selection.insertText(" ");
-    },
-    { discrete: true },
-  );
-  // 변이로 발화가 끊기면 다음 update 가 영영 안 온다 -- 기다림에 상한을 둔다.
-  await Promise.race([
-    waitForNextUpdate(editor),
-    new Promise((resolve) => setTimeout(resolve, 50)),
-  ]);
-  assert.equal(
-    editor
-      .getEditorState()
-      .read(() => lexical.$getRoot().getFirstChild().getType()),
-    "heading",
-  );
+test("블록 3종은 칩 탭 직후 서식이 된다 -- 마지막 공백을 칩이 흘린다(RA, 라 실측)", async () => {
+  // 실측 사실(결과 파일에 적는다): 본문 `#` 만 넣으면 헤딩 트리거가 발화하지 않는다
+  // (HEADING 정규식은 `#` 뒤 공백을 요구). 칩이 공백 한 글자를 별도 update 로
+  // 흘리면 트리거가 스스로 발화한다. 변이로 공백 입력을 빼면 이 시험이 빨개진다.
+  const cases = [
+    ["제목", "heading"],
+    ["목록", "list"],
+    ["체크박스", "list"],
+  ];
+  for (const [label, type] of cases) {
+    const { editor, container } = setupEditor("");
+    tap(container, label);
+    // 변이로 발화가 끊기면 다음 update 가 영영 안 온다 -- 기다림에 상한을 둔다.
+    await Promise.race([
+      waitForNextUpdate(editor),
+      new Promise((resolve) => setTimeout(resolve, 50)),
+    ]);
+    assert.equal(
+      editor
+        .getEditorState()
+        .read(() => lexical.$getRoot().getFirstChild().getType()),
+      type,
+      `칩 "${label}" 탭 직후 서식이 되어야 한다`,
+    );
+  }
 });
 
 test("단축키바 칩은 44px 이상이다(④) -- 실제 스타일시트 값을 읽는다", () => {

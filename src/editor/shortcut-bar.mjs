@@ -5,12 +5,19 @@
 // 매핑은 PRD §5.3 문면 그대로다(임의 추가 0). 굵게만 커서 위치가 정해져 있다
 // ("커서 가운데") -- caret 은 삽입된 문자열 안에서의 오프셋이다.
 import { $getSelection, $isRangeSelection } from "lexical";
-
+//
+// 블록 3종(제목·목록·체크박스)은 본문을 넣은 뒤 마지막 공백 한 글자를 칩이 별도
+// 입력 이벤트로 흘린다(space: true). §5.2 트리거(@lexical/markdown 의
+// registerMarkdownShortcuts)는 "앵커가 한 글자 움직인 업데이트"에서만 발화하므로,
+// 공백 없이 본문만 넣으면 서식이 되지 않는다(HYK-304-shortcut-bar-2R, 실측).
+// ⚠️ 이 발화 성질은 @lexical/markdown 내부 동작이다 -- 판본 0.51.0 에 고정돼
+// 있다(package-lock.json). 판본이 올라가면 조용히 깨질 수 있고, 그때는 칩 시험
+// "탭 직후 블록 3종은 서식이 된다"가 가장 먼저 빨개진다.
 export const SHORTCUT_CHIPS = Object.freeze([
-  { label: "제목", text: "#" },
-  { label: "목록", text: "-" },
+  { label: "제목", text: "#", space: true },
+  { label: "목록", text: "-", space: true },
   { label: "굵게", text: "** **", caret: 3 },
-  { label: "체크박스", text: "- [ ]" },
+  { label: "체크박스", text: "- [ ]", space: true },
   { label: "취소선", text: "~~ ~~" },
 ]);
 
@@ -36,6 +43,12 @@ export function insertChip(editor, chip) {
     },
     { discrete: true },
   );
+  if (applied && chip.space) {
+    // 마지막 공백은 별도 update 한 글자 입력으로 흘린다 -- 트리거는 그 입력에서 발화한다.
+    editor.update(() => {
+      $getSelection().insertText(" ");
+    });
+  }
   return applied;
 }
 
