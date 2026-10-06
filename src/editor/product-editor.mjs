@@ -9,6 +9,7 @@ import { PRODUCT_TRANSFORMERS, PRODUCT_NODES } from "./transformers.mjs";
 import { EDITOR_THEME } from "./theme.mjs";
 import { registerCursorRaw } from "./cursor-raw.mjs";
 import { registerChecklistPromotion } from "./checklist-promote.mjs";
+import { registerCheckboxTap } from "./checkbox-tap.mjs";
 
 export function createProductEditor(root, { namespace, onError }) {
   const editor = createEditor({
@@ -21,6 +22,7 @@ export function createProductEditor(root, { namespace, onError }) {
   registerRichText(editor);
   registerMarkdownShortcuts(editor, PRODUCT_TRANSFORMERS);
   registerChecklistPromotion(editor);
+  registerCheckboxTap(editor);
   registerCursorRaw(editor);
   return editor;
 }

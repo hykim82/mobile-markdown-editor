@@ -153,11 +153,27 @@
       }
       #editor-root li[aria-checked] {
         list-style: none;
+        position: relative;
       }
+      /* 체크칸 글리프. width 는 px 로 고정해야 한다 -- @lexical/list 의 탭 판정이
+         getComputedStyle(li, '::before').width 를 읽는데, 인라인 ::before 는 그 값이
+         'auto' 라 NaN 이 되어 탭이 전부 빗나간다(HYK-304-checkbox-tap-toggle-1 실측). */
       #editor-root li[aria-checked]::before {
         content: "\2610";
-        margin-right: 0.4em;
+        display: inline-block;
+        width: 1.2em;
+        margin-right: 0.2em;
         color: var(--color-text-muted);
+      }
+      /* 탭 영역 44px(PRD 5b). 글리프 밖으로 뻗는 투명 덮개라 줄 높이·글자 위치는 그대로다.
+         덮개를 누르면 탭 대상은 li 가 된다(가상 요소의 탭은 원소 자신으로 잡힌다). */
+      #editor-root li[aria-checked]::after {
+        content: "";
+        position: absolute;
+        left: -1.4em;
+        top: -0.5em;
+        width: 2.6em;
+        height: 2.6em;
       }
       #editor-root li[aria-checked="true"]::before {
         content: "\2611";
