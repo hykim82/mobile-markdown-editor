@@ -140,6 +140,11 @@ function maskFencedBlocks(content) {
 //      없다 -- §2 가 요구한 「줄 단위로 닫히게」는 이 성질로 자동 성립한다.
 // ⛔진짜(인라인 코드 밖) 여는 표지가 문서 안에서 끝내 못 닫히면 여전히 문서
 // 끝까지 마스킹한다(fail-closed, 바뀌지 않음) -- HYK-449 원래 방향 그대로.
+// ⚠️이월(HYK-209 mask-readers 2R · 검토 P3-1, 2026-10-06): 이 구간 모델은 백틱 「쌍」만
+// 보므로 CommonMark(같은 길이 백틱 런)와 다르다 -- 백틱 3연속 뒤의 한 칸 백틱이 그 사이
+// 전부를 인라인 코드로 만든다. 이 정규식은 HYK-449 정본이고 가림 축 전부가 쓰므로 이
+// 라운드에서 바꾸지 않는다(번짐 범위가 이 파일 전체다). 잠복 모양이며 지금까지 어긋남이
+// 실물에서는 「이득」으로만 작동했다(검토 P3-2 두 파일).
 const INLINE_CODE_SPAN_RE = /`[^`\n]*`/g;
 
 function inlineCodeRanges(content) {
@@ -190,6 +195,93 @@ export function maskQuotedMarkerRegions(content) {
   return maskHtmlComments(maskFencedBlocks(content));
 }
 
+// HYK-411 exit-claim-mask 2차: 닫히지 않은 펜스가 «어느 줄에서 열렸는지」를
+// 돌려준다(없으면 -1). maskFencedBlocks 와 같은 열기·닫기 규칙을 그대로
+// 따른다 -- 규칙을 두 벌 만들면 조용히 어긋난다. 호출자는 이 줄 «이후»를
+// 마스킹하지 않는 판정을 고르기 위해 쓴다(relay-handshake.mjs
+// maskExitClaimRegions).
+export function unclosedFenceOpenLine(content) {
+  const lines = content.split("\n");
+  let fence = null;
+  let openedAt = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fence === null) {
+      const opened = FENCE_OPEN_RE.exec(line);
+      if (!opened) continue;
+      fence = { char: opened[1][0], len: opened[1].length };
+      openedAt = i;
+      continue;
+    }
+    const closer = new RegExp(`^ {0,3}\\${fence.char}{${fence.len},}[ \t\r]*$`);
+    if (closer.test(line)) fence = null;
+  }
+  return fence === null ? -1 : openedAt;
+}
+
+// HYK-209 (2026-10-05, 검토 P2-1 수리): 닫히지 않은 HTML 주석의 여는 줄(없으면
+// -1). maskHtmlComments 는 닫히지 않은 <!-- 를 문서 끝까지 가린다(fail-closed)
+// -- 그 뒤의 진짜 빈 dropped_at: 줄이 가려지는 것이 바로 그 자리다. 이 함수는
+// 「가림을 어느 줄에서 끊을지」만 알려준다. 가림 자체(maskQuotedMarkerRegions)는
+// 바꾸지 않는다 -- 그래서 HYK-449 정본을 쓰는 다른 축들은 한 글자도 안 바뀐다.
+// 판정 규칙은 maskQuotedMarkerRegions 와 같은 순서(펜스 먼저 · 인라인 코드
+// 구간 제외)를 그대로 따른다 -- 같은 헬퍼를 이 파일 안에서 재사용한다.
+export function unclosedCommentOpenLine(content) {
+  const fenced = maskFencedBlocks(content);
+  const codeRanges = inlineCodeRanges(fenced);
+  let from = 0;
+  for (;;) {
+    const start = findOutsideInlineCode(fenced, "<!--", from, codeRanges);
+    if (start === -1) return -1;
+    const closeAt = findOutsideInlineCode(fenced, "-->", start + 4, codeRanges);
+    if (closeAt === -1) return fenced.slice(0, start).split("\n").length - 1;
+    from = closeAt + 3;
+  }
+}
+
+// HYK-209: 닫히지 않은 «인용 구간»(펜스 ∪ HTML 주석)의 여는 줄 중 먼저 오는
+// 것(없으면 -1). 빈 dropped_at: 줄 판정이 이 줄 «이후»를 가리지 않도록 쓴다
+// (dispatch-gate-decision.mjs droppedAtScanText). 펜스만 보던 예전 판정
+// (unclosedFenceOpenLine)은 주석이 여전히 진짜 빈 줄을 삼키는 구멍을 남겼다.
+export function unclosedQuoteOpenLine(content) {
+  const fence = unclosedFenceOpenLine(content);
+  const comment = unclosedCommentOpenLine(content);
+  if (fence === -1) return comment;
+  if (comment === -1) return fence;
+  return Math.min(fence, comment);
+}
+
+// HYK-209 (ⓑ 수리): dropped_at 줄을 「가림 뒤 첫 매치」로 찾는 공용 판별. 인용
+// (펜스·HTML 주석) 안의 예시 줄은 진짜 낙하 시각으로 세지 않고, 닫히지 않은 인용
+// 여는 표지 뒤의 진짜 줄은 계속 보인다(fail-closed, ⓐ와 같은 극성). 이 함수가
+// 정본이다 -- dispatch-gate-decision.mjs 와 relay-handshake.mjs 가 import 하고,
+// admission-completion-adapter.mjs 는 고정 sibling 목록 때문에 로컬 복제한다
+// (그 파일 헤더 참조 · droppedAtScanTextLocal). 길이 보존 마스킹이므로 반환 텍스트의
+// match.index 는 원문의 같은 자리다.
+//
+// 닫히지 않은 인용의 열린 표지는 「평문」으로 본다 -- 그 줄의 표지 글자만 공백으로
+// 바꾸고(길이 보존) 다시 가린다. 열린 표지가 없어질 때까지 반복한다(표지 글자가 한
+// 번에 하나씩 사라지므로 반드시 끝난다). 인용이 문서 끝까지 삼키면 진짜 빈 줄이 안
+// 보여 제자리 채움이 빠지고, 열린 표지 뒤를 원문 그대로 두면 그 뒤의 「닫힌」 펜스
+// 예시까지 빈 줄로 보여 예시 본문을 채워 버린다(검토 P2-1 · HYK-209 깊이 방어 probe).
+export const QUOTE_FENCE_OPENER_RE = /^( {0,3})(`{3,}|~{3,})/;
+export function neutralizeQuoteOpenerLine(text, lineIndex) {
+  const lines = text.split("\n");
+  lines[lineIndex] = lines[lineIndex]
+    .replace(QUOTE_FENCE_OPENER_RE, (m) => m.replace(/[`~]/g, " "))
+    .replace(/<!--/g, "    ");
+  return lines.join("\n");
+}
+
+export function droppedAtScanText(text) {
+  let scan = text;
+  for (;;) {
+    const openLine = unclosedQuoteOpenLine(scan);
+    if (openLine === -1) return maskQuotedMarkerRegions(scan);
+    scan = neutralizeQuoteOpenerLine(scan, openLine);
+  }
+}
+
 // HYK-469 3R §2 (책임자 조건 1, HYK-468 4R과 같은 원리): 468 3R이 만든
 // admission-completion-adapter.mjs 로컬 복제(고정 sibling 목록 때문에
 // import 불가 -- 그 파일 헤더 주석 참조)가 이 인라인 코드 마스킹 규칙
@@ -201,12 +293,23 @@ export function maskQuotedMarkerRegions(content) {
 // 같아야 한다 -- maskQuotedMarkerRegions 자신은 admission에서 의도적으로
 // 다른 이름(maskQuotedMarkerRegionsLocal)으로 복제돼 있으므로 이 묶음에
 // 넣지 않는다(넣으면 정당한 이름 차이가 "예외 0" 계약을 깬다).
+// HYK-209 mask-readers (2026-10-06, 검토 P2-1 수리): 닫히지 않은 인용 판별의
+// 다섯 선언(펜스·주석·인용 줄 판별과 여는 표지 중화·정규식)도 같은 묶음에 넣는다.
+// admission-completion-adapter.mjs 로컬 복제와 이름이 같고 본문이 바이트 동일하다
+// (복제 쪽 droppedAtScanTextLocal 은 이 다섯을 그대로 쓴다). droppedAtScanText 자신은
+// 넣지 않는다 -- 복제 쪽 이름이 droppedAtScanTextLocal 로 달라 「같은 이름 · 같은 본문」
+// 계약에 맞지 않는다(그 1건은 이름 차이가 있어 묶음 바깥에 둔다).
 export const RULE_FUNCTIONS = {
   INLINE_CODE_SPAN_RE,
   inlineCodeRanges,
   isInsideAnyRange,
   findOutsideInlineCode,
   maskHtmlComments,
+  unclosedFenceOpenLine,
+  unclosedCommentOpenLine,
+  unclosedQuoteOpenLine,
+  neutralizeQuoteOpenerLine,
+  QUOTE_FENCE_OPENER_RE,
 };
 
 const ISSUE_ID_RE = /^(HYK-\d+)/;

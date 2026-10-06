@@ -41,7 +41,17 @@ function formatKstMinute(nowMs) {
 export const STAMP_DROPPED_AT_REASON = Object.freeze({
   CALLER_SUPPLIED_TIME_REJECTED: "CALLER_SUPPLIED_TIME_REJECTED",
   STAMPED: "STAMPED",
+  // HYK-209 깊이 방어 (검토 P3-3): 시계가 유효한 KST 날짜를 만들지 못하면
+  // (NaN·Infinity·숫자가 아님·Date 범위 밖) 쓰레기 값을 찍지 않고 거부한다.
+  CLOCK_INVALID: "CLOCK_INVALID",
 });
+
+// 시계 값이 formatKstMinute 로 유효한 날짜가 되는지 판정한다. 검사하는 것은
+// 「formatKstMinute 가 실제로 쓸 Date 가 유효한가」 하나다.
+function isValidKstClockMs(nowMs) {
+  if (!Number.isFinite(nowMs)) return false;
+  return !Number.isNaN(new Date(nowMs + 9 * 60 * 60 * 1000).getTime());
+}
 
 // stampDroppedAt({ callerSuppliedAt, nowFn }) -> { ok, reasonCode, reason?, value?, nowMs? }
 //
@@ -63,6 +73,13 @@ export function stampDroppedAt({
     };
   }
   const nowMs = nowFn();
+  if (!isValidKstClockMs(nowMs)) {
+    return {
+      ok: false,
+      reasonCode: STAMP_DROPPED_AT_REASON.CLOCK_INVALID,
+      reason: `stamp-dropped-at refuses an invalid machine clock (got ${String(nowMs)}) -- writing 'NaN-NaN-NaN NaN:NaN KST' into a task file is never acceptable (HYK-209 P3-3)`,
+    };
+  }
   return {
     ok: true,
     reasonCode: STAMP_DROPPED_AT_REASON.STAMPED,

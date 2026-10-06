@@ -5,7 +5,7 @@ description: Use when this project's goals, intent, or hard constraints have new
 
 # Capture Context
 
-Installed for `solo-full` at `C:/Users/Administrator/Documents/모바일마크다운에디터`. This is a capture-assist tool —
+Installed for `solo-full` at `C:/Users/Administrator/orca/workspaces/모바일마크다운에디터/hyk209-editor-reinstall-2`. This is a capture-assist tool —
 it lowers the friction of keeping `PROJECT-CONTEXT.md` current; it does not
 replace human judgment about what belongs there. See "Honest limits" below
 before relying on it.
@@ -21,13 +21,13 @@ before relying on it.
       `UserPromptSubmit` hook command that invokes `context-inject.mjs` and
       read the `--context <path>` argument baked into that command string.
       For this install, that is typically
-      `D:/문서관리/에디터-관제실/PROJECT-CONTEXT.md` when a control room path was
+      `D:/문서관리/하네스-관제실/PROJECT-CONTEXT.md` when a control room path was
       configured (`solo-full`), or absent/omitted for `team-local` (which has
       no control room) — but re-read the actual hook config each time rather
       than trusting this note, since it is per-clone and can change.
    2. **(b)** If no `--context` argument is found, use the
       `HARNESS_CONTEXT_PATH` environment variable if set.
-   3. **(c)** Otherwise, default to `C:/Users/Administrator/Documents/모바일마크다운에디터/.harness/PROJECT-CONTEXT.md`.
+   3. **(c)** Otherwise, default to `C:/Users/Administrator/orca/workspaces/모바일마크다운에디터/hyk209-editor-reinstall-2/.harness/PROJECT-CONTEXT.md`.
    State the resolved absolute path to the human explicitly before doing
    anything else — this is the single most important step, since acting on
    the wrong card silently defeats the whole point.
@@ -74,7 +74,7 @@ before relying on it.
 7. **Self-check the result.** Run, against the resolved card path from step 1:
 
    ```sh
-   node C:/Users/Administrator/Documents/모바일마크다운에디터/scripts/check/context-inject.mjs --mode user-prompt-submit --context <resolved-path>
+   node C:/Users/Administrator/orca/workspaces/모바일마크다운에디터/hyk209-editor-reinstall-2/scripts/check/context-inject.mjs --mode user-prompt-submit --context <resolved-path>
    ```
 
    Confirm exit code `0` and report that confirmation to the human. This is

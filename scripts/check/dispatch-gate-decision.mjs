@@ -35,6 +35,7 @@ import {
   loadLedger,
   writeLedger,
   maskQuotedMarkerRegions,
+  droppedAtScanText,
 } from "./reject-streak.mjs";
 // HYK-257-done-stamp-2 §2 범위2 ⓑ: the ONE real, already-production-wired
 // anchor for a machine dropped_at stamp -- 관제실 dispatch-worker.ps1
@@ -133,6 +134,17 @@ import {
   writeChainLedger,
   checkAppendOnly,
 } from "./reject-streak-chain.mjs";
+// HYK-460 축 C (coder-task.md §C): 미등록 좌석(런처 미경유) 경고 -- 1단계
+// (경고만, 거부 없음). ⛔새 REJECT_* 상태를 만들지 않는다 -- 이 축은
+// `decisions`/`combined.allow`에 참여하지 않고, runDispatchGateDecision이
+// 그 결과 메시지를 `lines`에만 덧붙인다(아래 호출부 주석 참고). 이 파일을
+// 고정 파일 목록으로 격리 clone하는 mutation 시험(hyk241-oneb-gate-
+// mutation.test.mjs 등)의 고정 목록에도 이 import를 추가했다(다른
+// sibling import들과 같은 이유).
+import {
+  evaluateSeatOriginWarningForWorktree,
+  SEAT_ORIGIN_WARN_REASON,
+} from "./seat-origin-warn.mjs";
 
 const REJECT_STREAK_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -305,6 +317,11 @@ function parseArgs(argv) {
     // 안전측(레코드 없음 취급)으로 물러날 수 있다).
     else if (argv[i] === "--admission-ledger-path")
       out.admissionLedgerPath = argv[++i];
+    // HYK-460 축 C: arg-with-env-fallback(resolveSeatOriginWarnFacts 아래가
+    // env 폴백을 읽는다) -- --dispatch-receipt-path와 같은 관례.
+    else if (argv[i] === "--pane-key") out.paneKey = argv[++i];
+    else if (argv[i] === "--seat-registry-path")
+      out.seatRegistryPath = argv[++i];
     else out._.push(argv[i]);
   }
   return out;
@@ -504,6 +521,7 @@ function evaluatePrecondition(taskPath, ledgerPath) {
   const precondition = checkGatePreconditions({
     taskIdMatchCount,
     taskIdFormatValid,
+    droppedAtEmptyLineCount: findEmptyDroppedAtLines(taskText).length,
     ledgerExists,
     ledgerLoadOk: loaded?.ok ?? false,
     ledgerLoadReason: loaded?.reason,
@@ -682,7 +700,9 @@ function deriveRoleFromTaskPath(taskPath) {
 // doneAt 추출은 이 축(§2-1의 "이름표 없음/깨짐" 판별) 대상이 아니고,
 // 지시서 §2-2가 "다른 축의 기존 동작을 깨뜨리지 마라"고 명시했다.
 const CONSUMPTION_TASK_ID_RE_G = /^task_id:[ \t]*(\S+)/gim;
-const CONSUMPTION_DROPPED_AT_RE = /^dropped_at:\s*(.+)$/im;
+// HYK-209 깊이 방어: `[ \t]*\S` 로 통일(relay-handshake.mjs DROPPED_AT_RE 와 동일).
+// `\s*` 는 개행을 넘어 빈 값 줄의 «다음 줄»을 값으로 읽는다.
+const CONSUMPTION_DROPPED_AT_RE = /^dropped_at:[ \t]*(\S.*)$/im;
 const CONSUMPTION_DONE_RE_G = /^>>>\s*DONE:.*@\s*(.+?)\s*$/gim;
 // HYK-457: CONSUMPTION_HEAD_COMMIT_RE_G used to live here, for the sole use
 // of confirmRunnerGreenUnreachableAtHead -- both moved to
@@ -936,6 +956,50 @@ function resolveDispatchReceiptPath(args, env) {
     return args.dispatchReceiptPath;
   if (isNonEmptyString(env.DISPATCH_RECEIPT_PATH))
     return env.DISPATCH_RECEIPT_PATH;
+  return null;
+}
+
+// HYK-460 축 C: same arg-with-env-fallback shape as
+// resolveDispatchReceiptPath immediately above. paneKey falls back to
+// ORCA_PANE_KEY(런처가 이미 매 좌석에 심어 주는 env -- worker-dispatch-
+// rule.md §1이 이 값을 신뢰 근거로 쓰는 바로 그 변수); registryPath falls
+// back to HARNESS_SEAT_REGISTRY_PATH(관제실이 향후 넘길 수 있는 값, 이
+// 저장소는 그 절대경로를 하드코딩하지 않는다 -- seat-origin-registry.mjs
+// 자신의 관례와 동일).
+function resolveSeatOriginWarnFacts(args, taskPath, env) {
+  const paneKey = isNonEmptyString(args.paneKey)
+    ? args.paneKey
+    : isNonEmptyString(env.ORCA_PANE_KEY)
+      ? env.ORCA_PANE_KEY
+      : null;
+  const registryPath = isNonEmptyString(args.seatRegistryPath)
+    ? args.seatRegistryPath
+    : isNonEmptyString(env.HARNESS_SEAT_REGISTRY_PATH)
+      ? env.HARNESS_SEAT_REGISTRY_PATH
+      : null;
+  const worktree = isNonEmptyString(args.expectRepoRoot)
+    ? args.expectRepoRoot
+    : dirname(taskPath);
+  return { paneKey, registryPath, worktree };
+}
+
+// Extracted from runDispatchGateDecision (quality-check: eslint complexity
+// 상한 유지 목적, 동작 변경 없음 -- 같은 이유로 이 파일이 이미 여러 helper를
+// 추출한 관례, 예 resolveMissingResultFileGate/evaluatePrecondition).
+// HYK-460 검토 1R P2-3ⓑ (책임자 확정): 이전에는 outcome.warn이 false면
+// (OVERRIDE_VALID 포함) 아무 줄도 남기지 않았다 -- 탈출구가 실제로 쓰여도
+// 배달 로그에 흔적이 0이라, 옆문 2문 시험의 ⑴(감사에서 보이는가)이
+// "아니오"였다(검토자 판정). OVERRIDE_VALID는 경고가 아니므로 여전히
+// warn:false지만, "탈출구를 실제로 썼다"는 사실 자체는 이제 별도로 한
+// 줄 남긴다 -- 이게 "감사에서 보이는가"를 "예"로 만드는 유일한 변경.
+function resolveSeatOriginWarnLine(taskPath, args) {
+  if (!existsSync(taskPath)) return null;
+  const facts = resolveSeatOriginWarnFacts(args, taskPath, process.env);
+  const outcome = evaluateSeatOriginWarningForWorktree(facts);
+  if (outcome.warn) return outcome.message;
+  if (outcome.reason === SEAT_ORIGIN_WARN_REASON.OVERRIDE_VALID) {
+    return outcome.message;
+  }
   return null;
 }
 
@@ -1249,6 +1313,8 @@ function selectArchivedRoundByDispatchId(matches, resolvedDispatchId) {
   return null;
 }
 
+// HYK-209 mask-readers: archive 라운드 판독(가림 뒤 첫 매치)을 시험이 직접 재도록 노출한다.
+export { findArchivedRoundMeta as __probeFindArchivedRoundMeta };
 function findArchivedRoundMeta(
   harnessDir,
   role,
@@ -1283,7 +1349,9 @@ function findArchivedRoundMeta(
     // verbatim later in this archive file's own body.
     const archivedTaskId = resolveHeaderTaskId(content);
     if (!archivedTaskId.ok || archivedTaskId.id !== harnessTaskLabel) continue;
-    const droppedMatch = content.match(CONSUMPTION_DROPPED_AT_RE);
+    const droppedMatch = droppedAtScanText(content).match(
+      CONSUMPTION_DROPPED_AT_RE,
+    );
     if (!droppedMatch) continue;
     matches.push({
       roundNum: Number(m[1]),
@@ -3148,7 +3216,35 @@ function evaluateConsumptionDecision(taskPath, args, env = process.env) {
 // 호출되지 않으므로 dropped_at을 포함해 task 파일 바이트가 조금도
 // 바뀌지 않는다. Best-effort/원자성 계약(throw 없음·exit code 불변)은
 // 이 함수 자신은 그대로 유지한다 -- 바뀐 것은 "언제 부르는가"뿐이다.
-const DROPPED_AT_LINE_RE = /^dropped_at:\s*.+$/im;
+// HYK-209 (2026-10-05): `[ \t]*\S` -- `\s*` used to cross the newline, so an
+// empty `dropped_at:` line read the NEXT line as its value and the stamp was
+// skipped as "already present". A whitespace-only value is empty too.
+const DROPPED_AT_LINE_RE = /^dropped_at:[ \t]*\S.*$/im;
+// HYK-209: a `dropped_at:` line whose value is empty (or whitespace-only).
+// `\r?` keeps CRLF files working. Used by the stamp (fill in place) and by
+// the pre-gate precondition (ambiguous: more than one such line).
+const EMPTY_DROPPED_AT_LINE_G = /^dropped_at:[ \t]*(\r?)$/gm;
+
+// HYK-209 깊이 방어 (검토 P2-1): 빈 줄의 «계수»와 «채움»은 인용·펜스 안의
+// 예시를 세지도 고치지도 않도록 maskQuotedMarkerRegions(HYK-449 정본)로
+// 가린 텍스트에서 찾는다. 마스킹은 길이를 보존하므로(blankKeepingNewlines)
+// 가린 텍스트의 match.index 는 원문의 같은 자리다(HYK-480
+// fillEmptyLegacyKeysInPlace 와 같은 계열). 치환은 항상 원문 기준이다.
+// 닫히지 않은 인용 표지(펜스 여는 줄 · HTML 주석 여는 표지)는 「평문」으로 본다 --
+// 그 줄의 표지 글자만 공백으로 바꾸고(길이 보존) 다시 가린다. 열린 표지가 없어질
+// 때까지 반복한다(표지 글자가 한 번에 하나씩 사라지므로 반드시 끝난다). 이렇게
+// 하는 이유: 인용이 문서 끝까지 삼키면 진짜 빈 줄이 안 보여 제자리 채움이 빠지고
+// 삽입 분기가 줄을 하나 더 끼워 소비가 두 줄을 모호로 본다(검토 P2-1 · HYK-209
+// 깊이 방어 probe 실측). 반대로 열린 표지 뒤를 원문 그대로 두면 그 뒤의 「닫힌」
+// 펜스 예시까지 빈 줄로 보여 예시 본문을 채워 버린다(probe 실측: 인용 줄이 고쳐졌다).
+//
+// ★존재 판정(DROPPED_AT_LINE_RE)도 이 가린 텍스트 위에서 한다(HYK-209 선재 구멍
+// 수리 · 검토 실측): 예전에는 원문 전체에서 찾아서, 인용 안의 「값 있는」 예시가
+// 진짜 빈 줄을 「이미 있음」으로 가렸다. 그러면 빈 줄이 채워지지 않은 채 게이트가
+// ALLOW 로 끝나 소비가 그 예시의 시각을 낙하 시각으로 읽었다.
+function findEmptyDroppedAtLines(text) {
+  return [...droppedAtScanText(text).matchAll(EMPTY_DROPPED_AT_LINE_G)];
+}
 
 // HYK-316-dropped-stamp-1: 삽입 지점 판정용 -- 첫 `task_id:` 줄(값 유무·
 // 형식 무관, 존재 자체만) 바로 뒤에 dropped_at을 끼워 넣는다. 이 저장소·
@@ -3279,11 +3375,51 @@ function bestEffortSnapshotRoundTaskFile(taskPath, taskContent) {
   }
 }
 
+// HYK-209: 빈 `dropped_at:` 줄 «1개»를 제자리에서 채운다(HYK-480
+// fillEmptyLegacyKeysInPlace 와 같은 계열). 줄을 하나 더 끼우면 봉투·소비가
+// 두 줄을 「모호」로 보므로 끼우지 않는다. 기계 스탬프는 ALLOW 뒤에만 찍힌다
+// (HYK-479 §A) -- 그래서 빈 줄이 남은 채 REJECT 된 라운드는 바이트가 그대로다.
+// `match` 는 findEmptyDroppedAtLines 가 가린 텍스트에서 찾은 «유일한» 빈 줄이다
+// (호출부가 개수 1을 확인한다). 그 자리(index)를 원문에서 그대로 치환한다.
+function fillEmptyDroppedAtLine(taskPath, original, match) {
+  const stampedForFill = stampDroppedAt({});
+  if (!stampedForFill.ok) {
+    console.error(
+      `dispatch-gate-decision: dropped_at fill skipped (stampDroppedAt failed: ${stampedForFill.reason}) -- leaving the empty line untouched; consumers fail closed on it`,
+    );
+    return;
+  }
+  const filled =
+    original.slice(0, match.index) +
+    `dropped_at: ${stampedForFill.value}${match[1]}` +
+    original.slice(match.index + match[0].length);
+  writeFileSync(taskPath, filled, "utf8");
+  console.log(
+    `dispatch-gate-decision: dropped_at was EMPTY -- machine-filled in place (HYK-209: an empty line is 'no value', not the next line's text) -- ${taskPath} -> 'dropped_at: ${stampedForFill.value}'`,
+  );
+  bestEffortSnapshotRoundTaskFile(taskPath, filled);
+}
+
 function bestEffortStampDroppedAt(taskPath, args) {
   guardAgainstLiveTaskPathStamp(taskPath, args);
   try {
     const original = readFileSync(taskPath, "utf8");
-    if (!DROPPED_AT_LINE_RE.test(original)) {
+    // HYK-209 선재 구멍 수리: 존재 판정도 가린 텍스트 위에서(인용 안 예시는 「있음」이 아니다).
+    if (!DROPPED_AT_LINE_RE.test(droppedAtScanText(original))) {
+      const emptyLines = findEmptyDroppedAtLines(original);
+      const emptyLineCount = emptyLines.length;
+      if (emptyLineCount > 1) {
+        // Ambiguous: refuse to pick one line. The precondition rejects this
+        // shape before any gate runs, so this branch is a backstop only.
+        console.error(
+          `dispatch-gate-decision: dropped_at stamp refused (${emptyLineCount} empty 'dropped_at:' lines -- cannot tell which one is this round's; leaving the file untouched)`,
+        );
+        return;
+      }
+      if (emptyLineCount === 1) {
+        fillEmptyDroppedAtLine(taskPath, original, emptyLines[0]);
+        return;
+      }
       // HYK-316-dropped-stamp-1: no existing dropped_at: line. Previously
       // this was an unconditional skip (see git history for the old
       // comment); now it's a skip ONLY when the file also lacks a
@@ -3722,6 +3858,14 @@ export function runDispatchGateDecision(argv) {
   }
   const combined = combineGateDecisions(decisions);
 
+  // HYK-460 축 C (§C-3, 책임자 확정 «1단계뿐»): 미등록 좌석 경고는 오직
+  // taskPath가 실재할 때만 의미가 있다(seat-override.md는 그 워크트리
+  // 기준으로 찾는다) -- taskPath 부재 분기(위 if(!existsSync)) 는 애초에
+  // 배달 대상 워크트리를 특정할 수 없어 이 축을 건너뛴다. ⛔이 결과는
+  // `decisions`에 들어가지 않는다 -- combined.allow는 이 축과 무관하게
+  // 이미 위에서 확정됐다(경고가 배달을 막지 않는다는 §C-3의 문면 그대로).
+  const seatOriginWarnLine = resolveSeatOriginWarnLine(taskPath, args);
+
   // HYK-479 §A (469 mask-3 실사고 수리): dropped_at은 이제 「게이트가
   // ALLOW로 «판정한 뒤»에만」 찍는다. combined.allow는 taskPath가 실재할
   // 때만(위 else 분기) 여기 도달하므로 -- taskPath 부재 분기는 항상
@@ -3736,6 +3880,7 @@ export function runDispatchGateDecision(argv) {
   }
 
   const lines = [...combined.reasons];
+  if (seatOriginWarnLine) lines.push(seatOriginWarnLine);
   lines.push(
     combined.allow
       ? "dispatch-gate-decision: ALLOW -- 두 게이트 모두 통과, 배달 진행"

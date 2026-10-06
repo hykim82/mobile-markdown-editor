@@ -34,6 +34,7 @@ test("collectTestFiles: lists *.test.mjs per dir, sorted, joined with the dir pr
     "scripts/relay": ["r.test.mjs"],
     "scripts/relay/adapters": ["ad.test.mjs"],
     "scripts/supervisor": ["s.test.mjs"],
+    "templates/harness-init": ["install-copylist-closure.test.mjs"],
   };
   const readdir = (path) => {
     const key = path.replace(/\\/g, "/").replace(/^\/repo\//, "");
@@ -49,6 +50,7 @@ test("collectTestFiles: lists *.test.mjs per dir, sorted, joined with the dir pr
     "scripts/relay/r.test.mjs",
     "scripts/relay/adapters/ad.test.mjs",
     "scripts/supervisor/s.test.mjs",
+    "templates/harness-init/install-copylist-closure.test.mjs",
   ]);
 });
 

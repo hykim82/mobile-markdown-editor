@@ -8,6 +8,8 @@ import {
   isReviewFamilyRole,
   REJECT_STREAK_REASON_CODE,
   maskQuotedMarkerRegions,
+  unclosedQuoteOpenLine,
+  droppedAtScanText,
 } from "./reject-streak.mjs";
 import {
   archiveRoundEnvelope,
@@ -126,7 +128,10 @@ function hasStructuralPredecessor(lines, idx) {
 // (taskId, droppedAt) key it hands to first-observation.mjs's
 // findFirstObservation -- same reuse-not-reinvent instruction as DONE_RE/
 // isWellFormedDoneTimestamp above.
-export const DROPPED_AT_RE = /^dropped_at:\s*(.+)$/im;
+// HYK-209 (2026-10-05): `[ \t]*` (not `\s*`) -- `\s*` crosses the newline, so
+// an empty `dropped_at:` line made the NEXT line the value. The value must
+// start on the same line; a whitespace-only value counts as empty (`\S`).
+export const DROPPED_AT_RE = /^dropped_at:[ \t]*(\S.*)$/im;
 // HYK-183: 결과 파일에 이 표지가 2개 이상이면 어느 것이 최종인지 결정할
 // 수 없으므로 조용히 하나를 고르지 않고 판정 불가로 멈춘다 (see the file
 // header above for the fuller rationale this constant shares with
@@ -1078,8 +1083,12 @@ function checkFutureSkew({ candidateDate, rawText, field, now }) {
 // future-skew check as part of that resolution (a dropped_at that projects
 // into the future is a config-shape problem, independent of whether a
 // result exists yet at all).
+// HYK-209 mask-readers: 시험이 가림 뒤 첫 매치 판독을 직접 행동 시험하도록 노출한다.
+export { resolveDroppedAt as __probeResolveDroppedAt };
+export { resolveResultDoneMatch as __probeResolveResultDoneMatch };
 function resolveDroppedAt(taskContent, now) {
-  const droppedMatch = taskContent.match(DROPPED_AT_RE);
+  // HYK-209 ⓑ: 가림 뒤 첫 매치(인용 안 예시 시각을 낙하 시각으로 읽지 않는다).
+  const droppedMatch = droppedAtScanText(taskContent).match(DROPPED_AT_RE);
   if (!droppedMatch) {
     return {
       ok: false,
@@ -1776,12 +1785,49 @@ const MEASUREMENT_UNAVAILABLE_OOM_STATUS = "MEASUREMENT_UNAVAILABLE_OOM";
 // coder-task.md 1b_exec_line 그대로: `npm test; echo "exit=$?"`. 표지는
 // 콜론 뒤 인용이 표지로 오인된 과거 함정(HEAD_COMMIT_RE_G 주석 참조)을
 // 반복하지 않도록 칼럼 0의 단독 줄만 인정한다.
+//
+// HYK-411 exit-claim-mask: 2026-09-27 실사고 -- 결과 파일이 `sh
+// hooks/pre-commit`의 출력을 펜스 코드블록(```) «안에 인용»했는데, 그
+// 인용문 안의 `exit=0`도 칼럼 0 단독 줄이라 이 정규식이 «주장»으로
+// 오인했다(HYK-449/HYK-450 이 head_commit:/task_id:/verdict: 축에서 이미
+// 고친 것과 같은 모양의 함정, 이 축만 그 마스킹을 빠뜨리고 있었다).
+// resultClaimsRunnerResults/countRunnerExitClaims 둘 다 판정 «직전»에
+// maskQuotedMarkerRegions(펜스 코드블록 + HTML 주석을 길이 보존 공백으로
+// 지운다, 위 §HYK-449 정의)를 거친다 -- 새 정규식을 만들지 않고 이미 이
+// 파일이 import/re-export 하는 같은 판별식 한 벌을 재사용한다(§HYK-450②
+// 복제 금지 규율 그대로). 코드펜스 «밖»의 진짜 칼럼 0 단독 줄은 마스킹이
+// 손대지 않으므로 계속 그대로 잡힌다.
 const RUNNER_EXIT_CLAIM_RE = /^exit=\d+[ \t]*$/m;
+
+// HYK-411 exit-claim-mask 2차 (ⓑ): 닫히지 않은 펜스는 «문서 끝까지」 마스킹하지
+// 않는다 -- 그러면 진짜 주장이 조용히 안 세어지는 fail-open 이 된다(극성이
+// 뒤집힌 축). 대신 펜스가 열린 줄 «이후»는 마스킹하지 않고 주장으로 센다
+// (옛 동작 = 과차단 쪽과 같은 방향, fail-closed). ⓐ(닫히지 않음 = INVALID)를
+// 고르지 않은 근거(2026-10-06 정정): 원 측정 「2026-10-03 살아 있는 .harness 결과
+// 51건 중 14건이 닫히지 않은 펜스로 끝난다」는 모집단이 사라져 재현할 수 없다(검증
+// 불가). 같은 판별(reject-streak.mjs unclosedFenceOpenLine, CRLF→LF 정규화)로 지금
+// 다시 재면 .harness 10곳 · 결과 파일 11건 중 0건이다 -- 모집단이 달라 14/51 과 직접
+// 비교하지 않는다. 재측정 방법: 워크트리마다 .harness/<역할>.md 를 같은 판별로 센다.
+// 설계 선택(ⓑ)은 수치가 아니라 극성에 근거한다 -- ⓐ였다면 정상 라운드를 판정 불가로
+// 막을 수 있다.
+// 정직한 성격(2026-10-06 실측): 닫히지 않은 «주석» 여는 표지 축은 checkRelayHandshake
+// 전체 경로에서 효과 0이다 -- 완료 표지 존재 판정(resolveResultDoneMatch)이 같은 가림을
+// 먼저 쓰므로, 그 라운드는 주장 축에 닿기 전에 「완료 표지 줄 없음」으로 거부된다(A~D
+// 실측: 닫히지 않은 주석 뒤 두 주장 행 D 는 base·head 모두 거부). 이 축은 깊이 방어이고,
+// 거짓 통과를 고친 것이 아니다.
+// 이 판별은 주장 축 두 곳(resultClaimsRunnerResults · countRunnerExitClaims)
+// 에만 쓰고, 다른 표지 축의 마스킹(maskQuotedMarkerRegions)은 건드리지 않는다.
+function maskExitClaimRegions(content) {
+  const openAt = unclosedQuoteOpenLine(content);
+  if (openAt === -1) return maskQuotedMarkerRegions(content);
+  const lines = content.split("\n");
+  return `${maskQuotedMarkerRegions(lines.slice(0, openAt).join("\n"))}\n${lines.slice(openAt).join("\n")}`;
+}
 
 export function resultClaimsRunnerResults(resultContent) {
   return (
     typeof resultContent === "string" &&
-    RUNNER_EXIT_CLAIM_RE.test(resultContent)
+    RUNNER_EXIT_CLAIM_RE.test(maskExitClaimRegions(resultContent))
   );
 }
 
@@ -1799,7 +1845,9 @@ const RUNNER_EXIT_CLAIM_RE_GLOBAL = new RegExp(
 
 export function countRunnerExitClaims(resultContent) {
   if (typeof resultContent !== "string") return 0;
-  const matches = resultContent.match(RUNNER_EXIT_CLAIM_RE_GLOBAL);
+  const matches = maskExitClaimRegions(resultContent).match(
+    RUNNER_EXIT_CLAIM_RE_GLOBAL,
+  );
   return matches ? matches.length : 0;
 }
 

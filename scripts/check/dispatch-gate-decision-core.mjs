@@ -85,6 +85,7 @@
 // | REJECT_UNKNOWN_EXIT | 위 세 값 밖의 모든 것(시그널 종료 포함) | exitCode가 0/1/2 중 어느 것도 아님 | 거부 |
 // | REJECT_TASK_ID_NOT_UNIQUE | 이슈 식별자를 "유일하게" 읽어내지 못함 | task_id 줄이 0개 또는 2개 이상 | 거부 |
 // | REJECT_TASK_ID_MALFORMED | 유일하지만 형식이 무효 | task_id 줄이 정확히 1개이나 HYK-<digits> 아님 | 거부 |
+// | REJECT_DROPPED_AT_EMPTY_AMBIGUOUS | HYK-209: 값 없는 `dropped_at:` 줄이 2개 이상 | 어느 줄이 이 라운드의 것인지 정할 수 없음(빈 줄 1개는 스탬프가 제자리에서 채운다) | 거부 |
 // | REJECT_LEDGER_MISSING | 원장을 읽을 대상 파일이 없음 | existsSync(ledgerPath) === false | 거부 |
 // | REJECT_LEDGER_CORRUPT | 원장 파일은 있으나 읽기/파싱 실패 | loadLedger().ok === false | 거부 |
 // | REJECT_LEDGER_ENTRY_MALFORMED | 원장은 읽었으나 해당 이슈 항목의 값이 해석 불가 | streak가 유한 음이 아닌 number가 아니거나 history가 배열이 아님(존재할 때) | 거부 |
@@ -108,6 +109,7 @@ export const DISPATCH_GATE_STATE = Object.freeze({
   REJECT_UNKNOWN_EXIT: "REJECT_UNKNOWN_EXIT",
   REJECT_TASK_ID_NOT_UNIQUE: "REJECT_TASK_ID_NOT_UNIQUE",
   REJECT_TASK_ID_MALFORMED: "REJECT_TASK_ID_MALFORMED",
+  REJECT_DROPPED_AT_EMPTY_AMBIGUOUS: "REJECT_DROPPED_AT_EMPTY_AMBIGUOUS",
   REJECT_LEDGER_MISSING: "REJECT_LEDGER_MISSING",
   REJECT_LEDGER_PATH_UNRESOLVABLE: "REJECT_LEDGER_PATH_UNRESOLVABLE",
   REJECT_REPO_MISMATCH: "REJECT_REPO_MISMATCH",
@@ -248,6 +250,7 @@ export function decideFromGateExit({ exitCode, stdout, stderr, label } = {}) {
 export function checkGatePreconditions({
   taskIdMatchCount,
   taskIdFormatValid,
+  droppedAtEmptyLineCount = 0,
   ledgerExists,
   ledgerLoadOk,
   ledgerLoadReason,
@@ -267,6 +270,16 @@ export function checkGatePreconditions({
       allow: false,
       reason:
         "dispatch-gate-decision precondition: task_id 값이 'HYK-<digits>' 형식으로 해석되지 않음 -> 배달 거부(안전측 기본값). 조치: task_id 값을 'HYK-<숫자>...' 형식으로 고쳐라",
+    };
+  }
+  if (droppedAtEmptyLineCount > 1) {
+    // HYK-209: the stamp fills ONE empty `dropped_at:` line in place. With
+    // two or more it cannot tell which one is this round's, so it refuses
+    // here, before any gate runs. Distinct text from the task_id rejects.
+    return {
+      state: DISPATCH_GATE_STATE.REJECT_DROPPED_AT_EMPTY_AMBIGUOUS,
+      allow: false,
+      reason: `dispatch-gate-decision precondition: 'dropped_at:' 줄이 ${droppedAtEmptyLineCount}개이고 값이 비어 있음 -- 어느 줄이 이 라운드의 낙하 시각인지 정할 수 없다 -> 배달 거부(안전측 기본값 -- 빈 줄을 골라 채우지 않는다, HYK-209). 조치: 'dropped_at:' 줄을 하나만 남기거나 값을 채워라`,
     };
   }
   if (ledgerExists !== true) {

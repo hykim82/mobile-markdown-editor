@@ -5,10 +5,10 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as seatEngineModule from "./seat-engine-detect.mjs";
 import {
   detectSeatEngine,
   resolveSeatEngine,
-  roleFallbackEngine,
   runSeatEngineDetectCli,
 } from "./seat-engine-detect.mjs";
 
@@ -71,11 +71,8 @@ test("detectSeatEngine: both markers present (contaminated transcript) -> unknow
   );
 });
 
-test("roleFallbackEngine matches the old dispatch-worker.ps1:57 mapping (backward compatible)", () => {
-  assert.equal(roleFallbackEngine("REVIEW"), "codex");
-  assert.equal(roleFallbackEngine("PM"), "codex");
-  assert.equal(roleFallbackEngine("CODER"), "claude");
-  assert.equal(roleFallbackEngine("VERIFY"), "claude");
+test("HYK-472 2R: the role-fallback export is gone -- nothing can re-guess an engine from the role", () => {
+  assert.equal(seatEngineModule.roleFallbackEngine, undefined);
 });
 
 test("resolveSeatEngine: measured engine wins even when it contradicts the role (the actual bug this round fixes)", () => {
@@ -88,11 +85,24 @@ test("resolveSeatEngine: measured engine wins even when it contradicts the role 
   assert.equal(r.source, "measured-preview");
 });
 
-test("resolveSeatEngine: falls back to role only when the seat has printed no recognizable evidence yet", () => {
+test("HYK-472 2R: unknown measurement is REFUSED -- no engine is chosen, even for a REVIEW role that used to fall back to codex", () => {
   const r = resolveSeatEngine({ previewText: "", role: "REVIEW" });
-  assert.equal(r.engine, "codex");
+  assert.equal(r.refused, true);
+  assert.equal(r.reason, "UNKNOWN_SEAT_ENGINE");
   assert.equal(r.measured, "unknown");
-  assert.equal(r.source, "role-fallback-ambiguous-preview");
+  assert.equal(r.engine, undefined);
+  assert.equal(r.source, undefined);
+  assert.match(r.detail, /NO_ENGINE_MARKER role=REVIEW preview_chars=0/);
+});
+
+test("HYK-472 2R: the refusal names the ambiguity kind (both markers vs none) and the markers it searched for", () => {
+  const both = resolveSeatEngine({
+    previewText: CLAUDE_REVIEW_BANNER + CODEX_REVIEW_BANNER,
+    role: "CODER",
+  });
+  assert.match(both.detail, /^BOTH_ENGINE_MARKERS role=CODER/);
+  assert.match(both.detail, /Sonnet\|Opus\|Fable\|bypass permissions/);
+  assert.match(both.detail, /gpt-5\.6/);
 });
 
 test("resolveSeatEngine: CODER role + codex-looking preview still trusts the measurement", () => {
@@ -162,5 +172,43 @@ test("CLI end-to-end: unreadable file exits non-zero", () => {
       [SCRIPT_PATH, "--preview-file", "C:\\nope\\nope.txt", "--role", "CODER"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
+  });
+});
+
+// HYK-472 2R 거부 경로 (coder-task.md §1 ⓐ-1·2). 종료코드 2 = 이 CLI 의 기존
+// 실패 코드(PREVIEW_FILE_UNREADABLE 과 공유) -- 새 코드를 만들지 않았다.
+// 배달기(dispatch-worker.ps1)는 비0 을 전부 ENGINE_DETECT_FAILED 로 멈춘다.
+test("★CLI refusal: unknown preview -> exit 2, stdout empty, stderr names UNKNOWN_SEAT_ENGINE and role (no engine guessed)", () => {
+  withTempDir((dir) => {
+    const file = join(dir, "preview.txt");
+    writeFileSync(file, "PS C:\\Users\\Administrator>", "utf8");
+    let thrown = null;
+    try {
+      execFileSync(
+        process.execPath,
+        [SCRIPT_PATH, "--preview-file", file, "--role", "REVIEW"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown, "unknown measurement must not exit 0");
+    assert.equal(thrown.status, 2);
+    assert.equal(thrown.stdout, "");
+    assert.match(thrown.stderr, /FAILED reason=UNKNOWN_SEAT_ENGINE/);
+    assert.match(thrown.stderr, /role=REVIEW/);
+  });
+});
+
+test("★CLI refusal (anti-vacuity): the SAME codex banner that resolves OK exits 0 -- so the exit-2 above is caused by unknown, not by the CLI being broken", () => {
+  withTempDir((dir) => {
+    const file = join(dir, "preview.txt");
+    writeFileSync(file, CODEX_REVIEW_BANNER, "utf8");
+    const stdout = execFileSync(
+      process.execPath,
+      [SCRIPT_PATH, "--preview-file", file, "--role", "REVIEW"],
+      { encoding: "utf8" },
+    );
+    assert.equal(JSON.parse(stdout.trim()).engine, "codex");
   });
 });
