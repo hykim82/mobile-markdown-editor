@@ -24,6 +24,14 @@ import { softJoinKeysOf } from "./raw-registry.mjs";
 // 원문 "- [X] 할일" 이 복원 중 "- [x] 할일" 로 바뀌어 왕복이 깨진다.
 const CHECK_PREFIX = /^\[( |x)\] /;
 
+// 커서(캐럿)가 이 글자 노드 안에 있는지 -- 사람이 방금 이 자리에서 친 글자인지 가린다.
+function $isCaretInside(textNode) {
+  const selection = $getSelection();
+  return (
+    $isRangeSelection(selection) && selection.anchor.key === textNode.getKey()
+  );
+}
+
 // 떼어 낸 접두어만큼 커서를 당긴다 -- 글자 위치는 그대로 두고 앞쪽 기호만 뺀다.
 function $shiftSelectionAfterStrip(textNode, removedLength) {
   const selection = $getSelection();
@@ -73,10 +81,14 @@ export function registerChecklistPromotion(editor) {
     // 글자가 다시 더러워지므로 그때 판정된다.
     if (editor.isComposing()) return;
 
-    // ⭐서식 있는 글자 노드(굵게·취소선)는 접두어가 아니다(1R 검토 P1-1): 저장 원문
-    // "- **[ ] b**" 는 목록 항목 첫 글자가 굵은 "[ ] b" 라서 여기 걸리면 마커가
-    // 바깥에서 안쪽으로 옮겨진다("- [ ] **b**"). 체크 접두어는 서식 없는 글자여야 한다.
-    if (textNode.getFormat() !== 0) return;
+    // ⭐꾸민 글자 노드(굵게·취소선) 머리는 「커서가 그 글자 안에 있을 때」만 판정한다
+    // (HYK-304-checkbox-decorated-head-1). 복원(restore)·접기(cursor-raw)도 같은
+    // 트랜스폼을 탄다 -- 저장 원문 "- **[ ] b**" 는 복원 때 굵은 "[ ] b" 노드라서
+    // 서식만 보고 승격하면 마커가 바깥에서 안쪽으로 옮겨져(1R P1-1) 원문이 깨진다.
+    // 커서가 글자 안에 있다는 것은 사람이 그 자리에서 쳤다는 뜻이다(복원·접기가
+    // 커서를 그 글자에 두지 않는다는 것은 checklist-decorated-head 의 B 교차 시험이
+    // 시작·끝 두 자리에서 고정한다). 서식 없는 글자의 판정은 그대로 둔다.
+    if (textNode.getFormat() !== 0 && !$isCaretInside(textNode)) return;
 
     const item = textNode.getParent();
     if (!$isListItemNode(item) || item.getFirstChild() !== textNode) return;
