@@ -7,6 +7,7 @@ import { serializeEditorToMarkdown } from "./serialize.mjs";
 import { createProductEditor } from "./product-editor.mjs";
 import { mountStorage, openMemoInEditor } from "./storage-mount.mjs";
 import { mountNotionCopy } from "./notion-copy.mjs";
+import { mountShortcutBar } from "./shortcut-bar.mjs";
 import { mountMemoList } from "./memo-list-mount.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
 import { writeCurrentMemoId } from "../storage/current-memo-pointer.mjs";
@@ -69,6 +70,7 @@ function grabElements() {
     saveNotice: document.getElementById("save-notice"),
     copyButton: document.getElementById("notion-copy-button"),
     copyToast: document.getElementById("notion-copy-toast"),
+    shortcutBar: document.getElementById("shortcut-bar"),
     listRoot: document.getElementById("list-root"),
     newMemoButton: document.getElementById("new-memo-button"),
     backButton: document.getElementById("back-to-list-button"),
@@ -119,6 +121,7 @@ function main() {
     button: elements.copyButton,
     toast: elements.copyToast,
   });
+  mountShortcutBar(editor, elements.shortcutBar);
 
   const list = mountMemoList(elements.listRoot, adapter, {
     onOpen: (id) =>
