@@ -59,13 +59,17 @@ function longFormTmpdir() {
 }
 
 // Mirrors .github/workflows/enforce.yml's canonical check command exactly:
-// four directories, each non-recursive (scripts/relay/*.test.mjs excludes
+// five directories, each non-recursive (scripts/relay/*.test.mjs excludes
 // scripts/relay/adapters/ -- that's why adapters gets its own entry).
+// templates/harness-init (HYK-209 runner-testdirs-1): the installer's own
+// suites were outside the CI-canonical run until this entry; it holds a
+// single *.test.mjs, so the non-recursive rule needs no further entry.
 export const TEST_DIRS = [
   "scripts/check",
   "scripts/relay",
   "scripts/relay/adapters",
   "scripts/supervisor",
+  "templates/harness-init",
 ];
 
 // Fail-closed (HYK-208 2R, review finding): a directory this runner expects

@@ -123,7 +123,9 @@ export function nextTaskArchiveFileName(role, existingNames) {
   return `${role}-task-r${maxRound + 1}.md`;
 }
 
-const DROPPED_AT_RE_G = /^dropped_at:\s*(.+)$/gim;
+// HYK-209 (2026-10-05): `[ \t]*\S` -- see relay-handshake.mjs DROPPED_AT_RE.
+// An empty `dropped_at:` line must not borrow the next line as its value.
+const DROPPED_AT_RE_G = /^dropped_at:[ \t]*(\S.*)$/gim;
 
 // Metadata-only extraction, mirrors extractDoneAt below (ambiguous -> "unknown"
 // rather than guessing).

@@ -15,9 +15,11 @@
 // 이 모듈은 좌석이 실제로 화면에 찍은 배너 텍스트(orca terminal
 // list/show의 preview 필드)에서 엔진 고유 마커를 찾는다 -- 역할이 무엇을
 // "기대"하는지는 보지 않는다. 마커가 모호하거나(둘 다 매치·둘 다 없음)
-// 아직 아무것도 안 찍힌 갓 생긴 좌석이면(정직 한계, 아래 resolveSeatEngine
-// 주석) 그때만 옛 역할-추정 값으로 폴백한다 -- 이 폴백은 "증거가 있는데도
-// 무시"가 아니라 "증거가 아직 없다"는 별개의 상황이다.
+// 아직 아무것도 안 찍힌 갓 생긴 좌석이면 엔진을 고르지 않고 거부한다(HYK-472
+// 2R: 옛 역할-추정 폴백을 걷어냈다 -- 역할로 추측하면 claude 좌석에 codex
+// 배달 경로가 태워지는 사고가 그대로 난다). 거부는 CLI 종료코드 2(기존 실패
+// 코드)로 나오며, 배달기(관제실 dispatch-worker.ps1)는 그 비0을 fail-closed로
+// 받는다. 기다림은 배달기 쪽 짧은 재시도가 맡는다(패치 문서 참고).
 
 import { readFileSync } from "node:fs";
 
@@ -46,30 +48,42 @@ export function detectSeatEngine(previewText) {
   return "unknown";
 }
 
-// role-fallback은 옛 dispatch-worker.ps1:57 문면 그대로(하위호환) --
-// 실측이 "unknown"일 때만 쓴다. 실측이 claude/codex로 나오면 role과
-// 달라도(바로 이 라운드가 고치는 사고 형태) 실측을 따른다.
-export function roleFallbackEngine(role) {
-  return role === "REVIEW" || role === "PM" ? "codex" : "claude";
-}
+export const UNKNOWN_SEAT_ENGINE_REASON = "UNKNOWN_SEAT_ENGINE";
 
+// 실측이 claude/codex 로 나오면 role 과 달라도 실측을 따른다(HYK-472 1R 이
+// 고친 사고 형태). 실측이 unknown 이면 엔진을 고르지 않는다 -- role 로 추측
+// 하던 옛 폴백(role-fallback-ambiguous-preview)은 2R 에서 걷어냈다: 프로덕션
+// 호출자가 없었고, 남겨 두면 다음 호출자가 조용히 다시 쓸 수 있는 문이었다.
 export function resolveSeatEngine({ previewText, role }) {
   const measured = detectSeatEngine(previewText);
-  if (measured !== "unknown") {
+  if (measured === "unknown") {
     return {
-      engine: measured,
+      refused: true,
+      reason: UNKNOWN_SEAT_ENGINE_REASON,
       measured,
-      source: "measured-preview",
       role: role ?? null,
+      detail: describeUnknown(previewText, role),
     };
   }
-  const engine = roleFallbackEngine(role);
   return {
-    engine,
+    engine: measured,
     measured,
-    source: "role-fallback-ambiguous-preview",
+    source: "measured-preview",
     role: role ?? null,
   };
+}
+
+function describeUnknown(previewText, role) {
+  const text = String(previewText ?? "");
+  const kind =
+    CLAUDE_ENGINE_MARKERS.test(text) && CODEX_ENGINE_MARKERS.test(text)
+      ? "BOTH_ENGINE_MARKERS"
+      : "NO_ENGINE_MARKER";
+  return (
+    `${kind} role=${role ?? "(none)"} preview_chars=${text.length} ` +
+    "찾던 마커: claude[Sonnet|Opus|Fable|bypass permissions] / codex[gpt-5.6] -- " +
+    "엔진을 추측하지 않고 거부한다"
+  );
 }
 
 function parseArgs(argv) {
@@ -87,7 +101,8 @@ function parseArgs(argv) {
 const USAGE =
   "Usage: node seat-engine-detect.mjs --role <Role> (--preview-file <path> | --preview <text>)\n" +
   "Prints JSON {engine, measured, source, role} on stdout, exit 0.\n" +
-  "engine/measured in {claude, codex, unknown}. source in {measured-preview, role-fallback-ambiguous-preview}.";
+  "engine in {claude, codex}; source = measured-preview.\n" +
+  "unknown measurement -> REFUSED: stderr 'FAILED reason=UNKNOWN_SEAT_ENGINE ...', exit 2 (no engine guessed).";
 
 export function runSeatEngineDetectCli(argv) {
   const parsed = parseArgs(argv);
@@ -108,6 +123,9 @@ export function runSeatEngineDetectCli(argv) {
     previewText: previewText ?? "",
     role: parsed.role,
   });
+  if (result.refused) {
+    return { ok: false, reason: result.reason, detail: result.detail };
+  }
   return { ok: true, result };
 }
 

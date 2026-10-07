@@ -21,7 +21,7 @@ before relying on it.
       `UserPromptSubmit` hook command that invokes `context-inject.mjs` and
       read the `--context <path>` argument baked into that command string.
       For this install, that is typically
-      `D:/문서관리/에디터-관제실/PROJECT-CONTEXT.md` when a control room path was
+      `D:/문서관리/하네스-관제실/PROJECT-CONTEXT.md` when a control room path was
       configured (`solo-full`), or absent/omitted for `team-local` (which has
       no control room) — but re-read the actual hook config each time rather
       than trusting this note, since it is per-clone and can change.

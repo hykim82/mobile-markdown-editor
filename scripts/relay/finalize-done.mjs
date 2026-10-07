@@ -20,12 +20,8 @@
 // Claude-specific runtime. finalize-done.test.mjs's CLI-spawn tests exercise
 // exactly this non-Claude path.
 
-import {
-  appendFileSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 // HYK-324/HYK-325 §2-1 (r2 수리: 검토 반려 P1): reuse relay-handshake.mjs's
 // own "well-formed DONE line" contract -- DONE_RE for finding the line, and
@@ -43,11 +39,19 @@ import {
   isWellFormedDoneTimestamp,
   resolveResultTaskId,
   resolveLiveRoundFilePaths,
+  __probeResolveResultDoneMatch,
 } from "../check/relay-handshake.mjs";
 // HYK-332 §2: reuse reject-streak.mjs's own 'for:' cover-line regex and
 // REVIEW-family test -- same reuse-not-reinvent instruction as the
 // relay-handshake.mjs import above.
-import { FOR_LINE_RE_G, isReviewFamilyRole } from "../check/reject-streak.mjs";
+// HYK-209 (stamp self-check): the open-quote line finders are reused too --
+// the refusal message names the exact line the consumer is swallowing at.
+import {
+  FOR_LINE_RE_G,
+  isReviewFamilyRole,
+  unclosedFenceOpenLine,
+  unclosedQuoteOpenLine,
+} from "../check/reject-streak.mjs";
 // HYK-353 2R §1 (P1-2): reuse first-observation.mjs's own generation-lookup
 // (active vs tombstoned) instead of re-deriving the same logic here -- same
 // reuse-not-reinvent instruction as the relay-handshake.mjs import above.
@@ -146,7 +150,46 @@ export const FINALIZE_DONE_REASON = Object.freeze({
   // roles only, coder-task.md §1⑵) is missing or ambiguous.
   HEADER_FOR_MISSING: "HEADER_FOR_MISSING",
   HEADER_FOR_AMBIGUOUS: "HEADER_FOR_AMBIGUOUS",
+  // HYK-209 (stamp self-check): the marker was written, but the consumer's
+  // own completion-match (resolveResultDoneMatch) does not see it -- an
+  // unclosed fence/comment above it swallows it. The stamp is reverted to
+  // its pre-stamp bytes and the refusal names the opening line.
+  STAMP_NOT_VISIBLE: "STAMP_NOT_VISIBLE",
 });
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+// HYK-209 (stamp self-check): every DONE write goes through here. It writes
+// the stamp, then re-reads the file and asks the CONSUMER's own completion
+// match (relay-handshake.mjs resolveResultDoneMatch, via the probe export) --
+// no copy of that logic lives here. If the stamp is visible, `success` is
+// returned unchanged. If not, the file is put back byte-for-byte
+// (sha256-checked) and the refusal names the file:line of the unclosed
+// fence/comment that swallows it.
+function stampAndVerifyVisible({ resultPath, nextContent, success }) {
+  const preStampBytes = readFileSync(resultPath);
+  writeFileSync(resultPath, nextContent, "utf8");
+  const written = readFileSync(resultPath, "utf8");
+  const consumer = __probeResolveResultDoneMatch(written);
+  if (consumer.ok) return success;
+
+  writeFileSync(resultPath, preStampBytes);
+  const restoredOk = sha256(readFileSync(resultPath)) === sha256(preStampBytes);
+  const quoteLine = unclosedQuoteOpenLine(written);
+  let where = "no unclosed fence/comment found";
+  if (quoteLine !== -1) {
+    const kind =
+      unclosedFenceOpenLine(written) === quoteLine ? "fence" : "comment";
+    where = `unclosed ${kind} opens at ${resultPath}:${quoteLine + 1} -- close it (the stamp swallowed by that open ${kind}), then re-run finalize-done`;
+  }
+  return {
+    ok: false,
+    reasonCode: FINALIZE_DONE_REASON.STAMP_NOT_VISIBLE,
+    reason: `finalize-done refuses to stamp DONE: the stamp it just wrote is not visible to the consumer (${consumer.reason}). ${where}. File restored to pre-stamp bytes: ${restoredOk ? "sha256 match" : "RESTORE SHA MISMATCH -- inspect manually"}.`,
+  };
+}
 
 // HYK-332 §2 요구1/2/3: called right after `existing` is read and before
 // any DONE line is inspected/written -- refuses to stamp DONE on a result
@@ -358,35 +401,33 @@ function resolveExistingDoneLine({
     `superseded_done: ${supersededLine}`,
   );
   const separator = withSuperseded.endsWith("\n") ? "" : "\n";
-  writeFileSync(
-    resultPath,
-    `${withSuperseded}${separator}${line}\n${FINALIZE_DONE_MARKER_LINE}\n`,
-    "utf8",
-  );
-
   // HYK-418 §2-3: malformedSingle and unmarkedWellFormedSingle are mutually
   // exclusive (a malformed timestamp can never also be
   // isWellFormedDoneTimestamp), so exactly one of these two branches ran to
   // reach this point -- reasonCode/reason distinguish which recovery this
   // was for the caller/CLI (see the CLI's REPLACED_MALFORMED-vs-default
   // branch and the new REPLACED_UNMARKED branch below).
-  return malformedSingle
-    ? {
-        ok: true,
-        reasonCode: FINALIZE_DONE_REASON.REPLACED_MALFORMED,
-        reason: `replaced malformed '>>> DONE:' line ('${supersededLine}') with machine-stamped '${line}' in ${resultPath} (original preserved as 'superseded_done:')`,
-        line,
-        supersededLine,
-        nowMs,
-      }
-    : {
-        ok: true,
-        reasonCode: FINALIZE_DONE_REASON.REPLACED_UNMARKED,
-        reason: `replaced unmarked (likely hand-typed) '>>> DONE:' line ('${supersededLine}') with machine-stamped '${line}' in ${resultPath} (original preserved as 'superseded_done:')`,
-        line,
-        supersededLine,
-        nowMs,
-      };
+  return stampAndVerifyVisible({
+    resultPath,
+    nextContent: `${withSuperseded}${separator}${line}\n${FINALIZE_DONE_MARKER_LINE}\n`,
+    success: malformedSingle
+      ? {
+          ok: true,
+          reasonCode: FINALIZE_DONE_REASON.REPLACED_MALFORMED,
+          reason: `replaced malformed '>>> DONE:' line ('${supersededLine}') with machine-stamped '${line}' in ${resultPath} (original preserved as 'superseded_done:')`,
+          line,
+          supersededLine,
+          nowMs,
+        }
+      : {
+          ok: true,
+          reasonCode: FINALIZE_DONE_REASON.REPLACED_UNMARKED,
+          reason: `replaced unmarked (likely hand-typed) '>>> DONE:' line ('${supersededLine}') with machine-stamped '${line}' in ${resultPath} (original preserved as 'superseded_done:')`,
+          line,
+          supersededLine,
+          nowMs,
+        },
+  });
 }
 
 // finalizeDone({ role, harnessDir, callerSuppliedAt, nowFn }) ->
@@ -456,19 +497,17 @@ export function finalizeDone({
   const nowMs = nowFn();
   const separator = existing.endsWith("\n") ? "" : "\n";
   const line = `>>> DONE: ${role.toUpperCase()} @ ${formatKst(nowMs)}`;
-  appendFileSync(
+  return stampAndVerifyVisible({
     resultPath,
-    `${separator}${line}\n${FINALIZE_DONE_MARKER_LINE}\n`,
-    "utf8",
-  );
-
-  return {
-    ok: true,
-    reasonCode: FINALIZE_DONE_REASON.FINALIZED,
-    reason: `wrote '${line}' to ${resultPath}`,
-    line,
-    nowMs,
-  };
+    nextContent: `${existing}${separator}${line}\n${FINALIZE_DONE_MARKER_LINE}\n`,
+    success: {
+      ok: true,
+      reasonCode: FINALIZE_DONE_REASON.FINALIZED,
+      reason: `wrote '${line}' to ${resultPath}`,
+      line,
+      nowMs,
+    },
+  });
 }
 
 const invokedDirectly =
