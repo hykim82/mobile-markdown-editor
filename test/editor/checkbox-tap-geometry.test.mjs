@@ -118,25 +118,101 @@ test("탭 덮개는 자기 줄의 첫 줄 상자 안에만 있다 -- 이웃 줄�
   );
 });
 
-// 가로 띠(left·width)는 글리프 밖까지 뻗어야 한다 -- 좁아지면 44px 탭 띠가 글리프 폭(1.2em)으로
-// 붕괴한다(HYK-304-overlay-horizontal-1 · PR #27 검토 M8: left 0 · width 0 이면 전건 초록이었다).
-// 값은 em 으로 읽는다(글꼴 크기와 무관하게 글리프 1.2em 기준으로 잰다).
-test("탭 덮개의 가로 띠는 글리프 왼쪽 밖까지 뻗는다 -- 좁아지면 빨갛다(M8)", () => {
+// 가로 띠는 「관계」로 붙든다 -- left 와 width 를 한쪽 경계씩 따로 보면 띠가 글리프를 덮는지 아무도
+// 안 본다(HYK-304-overlay-horizontal-1 · PR #27 검토 M8·A·B·C). 값은 em 으로 읽는다.
+//   바닥  : 띠 왼쪽 끝이 글리프 왼쪽 1.4em 밖에 있다            (M8: left 0 · width 0 → 붕괴)
+//   글리프: 띠 오른쪽 끝이 글리프 오른쪽 끝(1.2em)에 닿는다      (A: left -10em → 띠가 화면 밖으로 빠진다)
+//   천장  : 띠 오른쪽 끝이 본문 글자 자리(1.4em = 글리프 1.2em + 여백 0.2em)를 넘지 않는다 (B: width 40em → 본문 삼킴)
+//   존재  : content: "" 가 있어야 덮개가 생긴다                   (C: content 삭제 → 덮개 부재)
+const GLYPH_EM = 1.2; // 글리프 ::before 의 width
+const GLYPH_GAP_EM = 0.2; // 글리프 margin-right -- 본문 글자는 여기서 시작한다
+const EM_EPS = 1e-9; // 부동소수 오차(-1.4 + 2.6 등)
+
+// em 길이 하나, 또는 그 덧셈·뺄셈 calc() 를 em 값으로 읽는다. 읽을 수 없으면 NaN.
+// 리터럴 정규식만 보면 뜻이 같은 고쳐쓰기(calc(1.4em + 1.2em))에 거짓 빨강이 난다(HYK-304 P2-6).
+function emValue(expr) {
+  if (expr === null) return NaN;
+  const inner = expr
+    .trim()
+    .replace(/^calc\(([\s\S]*)\)$/, "$1")
+    .trim();
+  if (!/^[+-]?\s*\d+(?:\.\d+)?em(?:\s*[+-]\s*\d+(?:\.\d+)?em)*$/.test(inner)) {
+    return NaN;
+  }
+  let sum = 0;
+  for (const [, sign, digits] of inner.matchAll(
+    /([+-]?)\s*(\d+(?:\.\d+)?)em/g,
+  )) {
+    sum += (sign === "-" ? -1 : 1) * Number(digits);
+  }
+  return sum;
+}
+
+function declared(body, name) {
+  const match = body.match(new RegExp(`(?:^|[\\s;])${name}:\\s*([^;]+);`));
+  return match ? match[1].trim() : null;
+}
+
+// 덮개 규칙 본문이 위 네 관계를 지키는지 판정한다. 빈 배열이면 통과.
+function coverProblems(body) {
+  const problems = [];
+  if (!/(?:^|[\s;])content:\s*""\s*;/.test(body)) {
+    problems.push('content: "" 가 없다 -- 덮개가 아예 생기지 않는다(C 변이)');
+  }
+  const left = emValue(declared(body, "left"));
+  const width = emValue(declared(body, "width"));
+  if (!Number.isFinite(left) || !Number.isFinite(width)) {
+    problems.push("덮개 left·width 는 em 값(또는 그 calc())이어야 한다");
+    return problems;
+  }
+  const right = left + width;
+  if (left > -1.4 + EM_EPS) {
+    problems.push(
+      "덮개는 글리프 왼쪽으로 1.4em 밖까지 뻗어야 한다(M8: 44px 띠가 글리프 폭으로 붕괴)",
+    );
+  }
+  if (right < GLYPH_EM - EM_EPS) {
+    problems.push(
+      "덮개 오른쪽 끝이 글리프 오른쪽 끝(1.2em)에 닿지 않는다(A: 띠가 글리프에서 떨어진다)",
+    );
+  }
+  if (right > GLYPH_EM + GLYPH_GAP_EM + EM_EPS) {
+    problems.push(
+      "덮개가 본문 글자 자리(1.4em)를 넘는다(B: 본문을 눌러도 캐럿이 안 간다)",
+    );
+  }
+  return problems;
+}
+
+test("탭 덮개의 가로 띠는 바닥·글리프·천장·존재의 네 관계를 지킨다 -- 하나라도 깨지면 빨갛다(M8·A·B·C)", () => {
   const css = readFileSync(CSS_PATH, "utf8");
   const after = ruleBody(css, "#editor-root li[aria-checked]::after");
   assert.ok(after, "덮개(::after) 규칙이 있어야 한다");
-  const left = after.match(/(?:^|[\s;])left:\s*(-?\d+(?:\.\d+)?)em\s*;/);
-  const width = after.match(/(?:^|[\s;])width:\s*(\d+(?:\.\d+)?)em\s*;/);
-  assert.ok(left, "덮개 left 는 em 값이어야 한다");
-  assert.ok(width, "덮개 width 는 em 값이어야 한다");
-  assert.ok(
-    Number(left[1]) <= -1.4,
-    "덮개는 글리프 왼쪽으로 1.4em 이상 뻗어야 한다(M8 변이: left 0 → 44px 띠가 20px 글리프로 붕괴)",
-  );
-  assert.ok(
-    Number(width[1]) >= 2.6,
-    "덮개 가로 폭은 2.6em 이상이어야 한다(M8 변이: width 0 → 탭 띠가 사라진다)",
-  );
+  assert.deepEqual(coverProblems(after), []);
+});
+
+test("같은 뜻의 calc() 표기는 초록이다 -- 리터럴 정규식에 묶이지 않는다(P2-6)", () => {
+  const sameMeaning = [
+    'content: ""; left: calc(-1.4em); width: calc(1.4em + 1.2em);',
+    'content: ""; left: calc(0em - 1.4em); width: 2.6em;',
+    'content: ""; left: -1.40em; width: calc(4em - 1.4em);',
+    'content: ""; left: -1.4em; width: calc(1.2em + 1.4em);',
+  ];
+  for (const body of sameMeaning) {
+    assert.deepEqual(coverProblems(body), [], body);
+  }
+});
+
+test("판정기는 네 변이를 각각 빨갛게 본다", () => {
+  const mutants = {
+    M8: 'content: ""; left: 0em; width: 0em;',
+    A: 'content: ""; left: -10em; width: 2.6em;',
+    B: 'content: ""; left: -1.4em; width: 40em;',
+    C: "left: -1.4em; width: 2.6em;",
+  };
+  for (const [name, body] of Object.entries(mutants)) {
+    assert.notDeepEqual(coverProblems(body), [], `${name} 변이가 초록이다`);
+  }
 });
 
 test("체크칸 글리프의 px 너비는 CSS 원문에 있다 -- 탭 판정이 NaN 으로 빗나가지 않게", () => {
