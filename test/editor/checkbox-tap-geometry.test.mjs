@@ -242,6 +242,73 @@ test("판정기는 네 변이를 각각 빨갛게 본다", () => {
   }
 });
 
+// (v) 캐스케이드 고정 -- R1(마지막 선언)·R2(뒤 블록)·R2m(@media 로 감싼 뒤 블록)·R3(중첩 중괄호)를
+// ruleBody() -> coverProblems() 경로로 실제로 태운다(HYK-304-overlay-cascade-2 · 검토 P1-1).
+// 바로 위 "판정기는 네 변이를..." 처럼 문자열을 coverProblems() 에 직접 넣으면 ruleBody() 를
+// 안 타는 헛시험이 되어, ruleBody()/declared() 를 base 판으로 되돌려도 안 걸린다 -- 그래서
+// 여기서는 실제 public/index.html 원문을 문자열로 변이시켜 ruleBody() 에 태운다.
+test("판정기는 캐스케이드 구멍(R1·R2·R2m·R3)을 ruleBody() 경로로 빨갛게 본다", () => {
+  const css = readFileSync(CSS_PATH, "utf8");
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+  const ORIGINAL_RULE = `#editor-root li[aria-checked]::after {
+        content: "";
+        position: absolute;
+        left: -1.4em;
+        top: 0;
+        width: 2.6em;
+        height: 1lh;
+      }`;
+  assert.ok(
+    css.includes(ORIGINAL_RULE),
+    "원본 덮개 규칙 문구가 바뀌었다 -- 아래 변이 문자열도 같이 맞춰야 한다",
+  );
+  assert.ok(css.includes("</style>"), "</style> 태그가 없다");
+
+  // HEAD 실물 CSS(변이 없음) -- 같은 ruleBody() 경로로 초록이어야 한다.
+  assert.deepEqual(coverProblems(ruleBody(css, SELECTOR)), []);
+
+  const mutations = {
+    // R1: 같은 블록 끝에 중복 선언 -- "마지막 선언이 이긴다"가 깨지면 초록(구멍)이다.
+    R1: css.replace(ORIGINAL_RULE, () =>
+      ORIGINAL_RULE.replace(
+        "height: 1lh;",
+        "height: 1lh;\n        left: 0em;\n        width: 0em;",
+      ),
+    ),
+    // R2: </style> 바로 앞의 뒤쪽 블록 -- "마지막 블록이 이긴다"가 깨지면 초록(구멍)이다.
+    R2: css.replace(
+      "</style>",
+      () =>
+        '#editor-root li[aria-checked]::after { content: ""; left: 0em; width: 0em; }\n    </style>',
+    ),
+    // R2m: 같은 뒤 블록을 @media 로 감싸도 여전히 붙들어야 한다.
+    R2m: css.replace(
+      "</style>",
+      () =>
+        '@media (max-width: 9999px) { #editor-root li[aria-checked]::after { content: ""; left: 0em; width: 0em; } }\n    </style>',
+    ),
+    // R3: 블록 「안」에 중첩 중괄호(@media)를 넣고 그 뒤에 재선언 -- 중첩을 가로질러 뒤
+    // 선언까지 읽어야 한다(안 그러면 깊이 계수가 첫 "}" 에서 끊겨 재선언을 놓친다).
+    R3: css.replace(ORIGINAL_RULE, () =>
+      ORIGINAL_RULE.replace(
+        "height: 1lh;",
+        "height: 1lh;\n        @media (min-width:0px){color:red;}\n        left: 0em;\n        width: 0em;",
+      ),
+    ),
+  };
+
+  for (const [name, mutated] of Object.entries(mutations)) {
+    assert.notEqual(mutated, css, `${name} 변이가 실제로 걸리지 않았다`);
+    const body = ruleBody(mutated, SELECTOR);
+    assert.ok(body, `${name}: ruleBody() 가 덮개 규칙을 못 읽었다`);
+    assert.notDeepEqual(
+      coverProblems(body),
+      [],
+      `${name} 변이가 ruleBody()/coverProblems() 경로에서 초록이다 -- 캐스케이드 구멍이 다시 뚫렸다`,
+    );
+  }
+});
+
 test("체크칸 글리프의 px 너비는 CSS 원문에 있다 -- 탭 판정이 NaN 으로 빗나가지 않게", () => {
   const css = readFileSync(CSS_PATH, "utf8");
   const before = ruleBody(css, "#editor-root li[aria-checked]::before");
