@@ -165,15 +165,19 @@
         margin-right: 0.2em;
         color: var(--color-text-muted);
       }
-      /* 탭 영역 44px(PRD 5b). 글리프 밖으로 뻗는 투명 덮개라 줄 높이·글자 위치는 그대로다.
-         덮개를 누르면 탭 대상은 li 가 된다(가상 요소의 탭은 원소 자신으로 잡힌다). */
+      /* 탭 덮개. 글리프 밖으로 뻗는 투명 덮개라 줄 높이·글자 위치는 그대로다.
+         덮개를 누르면 탭 대상은 li 가 된다(가상 요소의 탭은 원소 자신으로 잡힌다).
+         세로는 자기 줄의 첫 줄 상자(1lh)를 넘기지 않는다 -- 넘기면 이웃 줄 상자 위에 겹쳐
+         이웃의 탭을 가로챈다(HYK-304-tap-overlay-geometry-1 실측: 44px 덮개는 위·아래로
+         8.5px 씩 침범해 윗줄 탭이 아랫줄로 갔다). 줄 간격이 27.2px 라 44px 를 겹침 없이는
+         지킬 수 없다 -- 실질 탭 높이는 줄 높이(27.2px)다(PRD 5b 와의 차이는 결과 파일에 적었다). */
       #editor-root li[aria-checked]::after {
         content: "";
         position: absolute;
         left: -1.4em;
-        top: -0.5em;
+        top: 0;
         width: 2.6em;
-        height: 2.6em;
+        height: 1lh;
       }
       #editor-root li[aria-checked="true"]::before {
         content: "\2611";
