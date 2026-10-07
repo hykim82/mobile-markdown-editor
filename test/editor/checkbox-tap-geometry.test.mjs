@@ -70,10 +70,30 @@ function tapRowAt(li, index) {
 // 덮개(::after)가 실제 CSS 에서 어떻게 정해졌는지 파일에서 직접 읽는다.
 // 가짜 getComputedStyle 이 아니라 배포되는 스타일시트 원문을 묻는다.
 const CSS_PATH = new URL("../../public/index.html", import.meta.url);
+
+// CSS 는 나중 선언·나중 블록이 이긴다. 같은 선택자가 파일에 여러 번(@media 안쪽
+// 포함) 나오면 그 블록들을 나타난 순서대로 이어붙여, declared() 가 "마지막 선언"을
+// 고르면 그대로 캐스케이드의 "마지막 선언이 이긴다"가 된다. 각 블록 자체는 중괄호
+// 깊이를 세어 매칭되는 닫는 중괄호까지 읽으므로 중첩 규칙(@media 등)을 가로지른다.
 function ruleBody(css, selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
-  return match ? match[1] : null;
+  const opener = new RegExp(`${escaped}\\s*\\{`, "g");
+  let combined = null;
+  let match;
+  while ((match = opener.exec(css))) {
+    const start = match.index + match[0].length;
+    let depth = 1;
+    let i = start;
+    while (i < css.length && depth > 0) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}") depth--;
+      i++;
+    }
+    const body = css.slice(start, i - 1);
+    combined = combined === null ? body : combined + body;
+    opener.lastIndex = i;
+  }
+  return combined;
 }
 
 test("연속 체크줄에서 윗줄을 탭하면 윗줄만 바뀌고 아랫줄은 [ ] 로 남는다", async () => {
@@ -148,9 +168,16 @@ function emValue(expr) {
   return sum;
 }
 
+// CSS 는 같은 속성이 중복 선언되면 마지막 것이 이긴다 -- declared() 는 그래서
+// "첫" 이 아니라 "마지막" 일치를 돌려준다(전역 매칭으로 전부 모은 뒤 끝 것을 쓴다).
 function declared(body, name) {
-  const match = body.match(new RegExp(`(?:^|[\\s;])${name}:\\s*([^;]+);`));
-  return match ? match[1].trim() : null;
+  const re = new RegExp(`(?:^|[\\s;])${name}:\\s*([^;]+);`, "g");
+  let last = null;
+  let match;
+  while ((match = re.exec(body))) {
+    last = match[1].trim();
+  }
+  return last;
 }
 
 // 덮개 규칙 본문이 위 네 관계를 지키는지 판정한다. 빈 배열이면 통과.
@@ -212,6 +239,73 @@ test("판정기는 네 변이를 각각 빨갛게 본다", () => {
   };
   for (const [name, body] of Object.entries(mutants)) {
     assert.notDeepEqual(coverProblems(body), [], `${name} 변이가 초록이다`);
+  }
+});
+
+// (v) 캐스케이드 고정 -- R1(마지막 선언)·R2(뒤 블록)·R2m(@media 로 감싼 뒤 블록)·R3(중첩 중괄호)를
+// ruleBody() -> coverProblems() 경로로 실제로 태운다(HYK-304-overlay-cascade-2 · 검토 P1-1).
+// 바로 위 "판정기는 네 변이를..." 처럼 문자열을 coverProblems() 에 직접 넣으면 ruleBody() 를
+// 안 타는 헛시험이 되어, ruleBody()/declared() 를 base 판으로 되돌려도 안 걸린다 -- 그래서
+// 여기서는 실제 public/index.html 원문을 문자열로 변이시켜 ruleBody() 에 태운다.
+test("판정기는 캐스케이드 구멍(R1·R2·R2m·R3)을 ruleBody() 경로로 빨갛게 본다", () => {
+  const css = readFileSync(CSS_PATH, "utf8");
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+  const ORIGINAL_RULE = `#editor-root li[aria-checked]::after {
+        content: "";
+        position: absolute;
+        left: -1.4em;
+        top: 0;
+        width: 2.6em;
+        height: 1lh;
+      }`;
+  assert.ok(
+    css.includes(ORIGINAL_RULE),
+    "원본 덮개 규칙 문구가 바뀌었다 -- 아래 변이 문자열도 같이 맞춰야 한다",
+  );
+  assert.ok(css.includes("</style>"), "</style> 태그가 없다");
+
+  // HEAD 실물 CSS(변이 없음) -- 같은 ruleBody() 경로로 초록이어야 한다.
+  assert.deepEqual(coverProblems(ruleBody(css, SELECTOR)), []);
+
+  const mutations = {
+    // R1: 같은 블록 끝에 중복 선언 -- "마지막 선언이 이긴다"가 깨지면 초록(구멍)이다.
+    R1: css.replace(ORIGINAL_RULE, () =>
+      ORIGINAL_RULE.replace(
+        "height: 1lh;",
+        "height: 1lh;\n        left: 0em;\n        width: 0em;",
+      ),
+    ),
+    // R2: </style> 바로 앞의 뒤쪽 블록 -- "마지막 블록이 이긴다"가 깨지면 초록(구멍)이다.
+    R2: css.replace(
+      "</style>",
+      () =>
+        '#editor-root li[aria-checked]::after { content: ""; left: 0em; width: 0em; }\n    </style>',
+    ),
+    // R2m: 같은 뒤 블록을 @media 로 감싸도 여전히 붙들어야 한다.
+    R2m: css.replace(
+      "</style>",
+      () =>
+        '@media (max-width: 9999px) { #editor-root li[aria-checked]::after { content: ""; left: 0em; width: 0em; } }\n    </style>',
+    ),
+    // R3: 블록 「안」에 중첩 중괄호(@media)를 넣고 그 뒤에 재선언 -- 중첩을 가로질러 뒤
+    // 선언까지 읽어야 한다(안 그러면 깊이 계수가 첫 "}" 에서 끊겨 재선언을 놓친다).
+    R3: css.replace(ORIGINAL_RULE, () =>
+      ORIGINAL_RULE.replace(
+        "height: 1lh;",
+        "height: 1lh;\n        @media (min-width:0px){color:red;}\n        left: 0em;\n        width: 0em;",
+      ),
+    ),
+  };
+
+  for (const [name, mutated] of Object.entries(mutations)) {
+    assert.notEqual(mutated, css, `${name} 변이가 실제로 걸리지 않았다`);
+    const body = ruleBody(mutated, SELECTOR);
+    assert.ok(body, `${name}: ruleBody() 가 덮개 규칙을 못 읽었다`);
+    assert.notDeepEqual(
+      coverProblems(body),
+      [],
+      `${name} 변이가 ruleBody()/coverProblems() 경로에서 초록이다 -- 캐스케이드 구멍이 다시 뚫렸다`,
+    );
   }
 });
 
