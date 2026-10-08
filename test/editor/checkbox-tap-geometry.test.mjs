@@ -75,21 +75,24 @@ const CSS_PATH = new URL("../../public/index.html", import.meta.url);
 // 포함) 나오면 그 블록들을 나타난 순서대로 이어붙여, declared() 가 "마지막 선언"을
 // 고르면 그대로 캐스케이드의 "마지막 선언이 이긴다"가 된다. 각 블록 자체는 중괄호
 // 깊이를 세어 매칭되는 닫는 중괄호까지 읽으므로 중첩 규칙(@media 등)을 가로지른다.
+// 선택자가 쉼표로 묶인 목록 어디에 있어도(맨 앞·가운데·맨 뒤) 그 블록을 읽는다(P2-2) --
+// 선택자 뒤에 "{" 가 바로 오지 않고 쉼표가 오면, 목록이 끝나는 다음 "{" 까지 건너뛴다.
 function ruleBody(css, selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const opener = new RegExp(`${escaped}\\s*\\{`, "g");
+  const opener = new RegExp(`${escaped}\\s*(?:,|\\{)`, "g");
   let combined = null;
   let match;
   while ((match = opener.exec(css))) {
-    const start = match.index + match[0].length;
+    const brace = css.indexOf("{", match.index);
+    if (brace === -1) break;
     let depth = 1;
-    let i = start;
+    let i = brace + 1;
     while (i < css.length && depth > 0) {
       if (css[i] === "{") depth++;
       else if (css[i] === "}") depth--;
       i++;
     }
-    const body = css.slice(start, i - 1);
+    const body = css.slice(brace + 1, i - 1);
     combined = combined === null ? body : combined + body;
     opener.lastIndex = i;
   }
@@ -168,16 +171,34 @@ function emValue(expr) {
   return sum;
 }
 
-// CSS 는 같은 속성이 중복 선언되면 마지막 것이 이긴다 -- declared() 는 그래서
-// "첫" 이 아니라 "마지막" 일치를 돌려준다(전역 매칭으로 전부 모은 뒤 끝 것을 쓴다).
+// CSS 주석은 선언이 아니다 -- 주석 속에 적힌 옛 값(예: "/* was left: -1.4em; */")을
+// "마지막 선언"으로 잘못 읽지 않도록 매칭 전에 지운다(P2-1). ruleBody() 의 중괄호
+// 깊이 계수에는 적용하지 않는다 -- 주석 안 중괄호로 깊이가 틀어지는 문제는 이 조각
+// 범위 밖이다(1R 검토 P3-3).
+function stripComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+// CSS 는 같은 속성이 중복 선언되면 "마지막" 것이 이긴다 -- 단 !important 가 붙은
+// 선언은 같은 우선순위 축에서 뒤에 오는 일반(!important 없는) 선언에 지지 않는다
+// (P2-1/§6). declared() 는 그래서 "마지막 !important 선언" 이 있으면 그것을, 없으면
+// "마지막 일반 선언" 을 돌려준다(전역 매칭으로 전부 모은 뒤 고른다).
 function declared(body, name) {
+  const clean = stripComments(body);
   const re = new RegExp(`(?:^|[\\s;])${name}:\\s*([^;]+);`, "g");
-  let last = null;
+  let lastNormal = null;
+  let lastImportant = null;
   let match;
-  while ((match = re.exec(body))) {
-    last = match[1].trim();
+  while ((match = re.exec(clean))) {
+    const raw = match[1].trim();
+    const important = /!\s*important\s*$/i.exec(raw);
+    if (important) {
+      lastImportant = raw.slice(0, important.index).trim();
+    } else {
+      lastNormal = raw;
+    }
   }
-  return last;
+  return lastImportant !== null ? lastImportant : lastNormal;
 }
 
 // 덮개 규칙 본문이 위 네 관계를 지키는지 판정한다. 빈 배열이면 통과.
@@ -210,6 +231,35 @@ function coverProblems(body) {
   }
   return problems;
 }
+
+// coverProblems() 의 가로 판정과 같은 "마지막 선언이 이긴다" 캐스케이드를 세로(top·height)
+// 에도 적용한다(P2-3) -- declared() 로 마지막 값을 뽑아 정확한 값과 비교한다. 위
+// "자기 줄의 첫 줄 상자 안에만 있다" 시험의 assert.match 는 문자열 어디든 있으면
+// 통과해 캐스케이드 뒤집힘을 못 본다(vertR1: 규칙 끝 재선언에도 match 가 여전히 통과).
+function verticalProblems(body) {
+  const problems = [];
+  const top = declared(body, "top");
+  if (top === null || top.replace(/\s+/g, "") !== "0") {
+    problems.push(
+      `덮개 위쪽은 줄 상자 위쪽에 맞춘다(음수 top 이면 윗줄을 침범한다) -- 실제 top=${top}`,
+    );
+  }
+  const height = declared(body, "height");
+  if (height === null || height.replace(/\s+/g, "") !== "1lh") {
+    problems.push(
+      `덮개 높이는 첫 줄 높이(1lh)다 -- 줄 높이보다 크면 아랫줄을 침범한다 -- 실제 height=${height}`,
+    );
+  }
+  return problems;
+}
+
+// (v)·(w) 공용 -- left: 0em; width: 0em; 로 붕괴한 덮개의 기대 문제 목록(바닥·글리프
+// 2건, 2R 검토 §3-2). 변이별 "먼저 적은" 기대값(coverProblems 코드 순서: 바닥 → 글리프)과
+// 판정기 출력을 맞춘 뒤 고정한다 -- 길이·존재 여부만 보는 notDeepEqual 이 아니라 내용을 본다.
+const EXPECTED_COLLAPSE_PROBLEMS = [
+  "덮개는 글리프 왼쪽으로 1.4em 밖까지 뻗어야 한다(M8: 44px 띠가 글리프 폭으로 붕괴)",
+  "덮개 오른쪽 끝이 글리프 오른쪽 끝(1.2em)에 닿지 않는다(A: 띠가 글리프에서 떨어진다)",
+];
 
 test("탭 덮개의 가로 띠는 바닥·글리프·천장·존재의 네 관계를 지킨다 -- 하나라도 깨지면 빨갛다(M8·A·B·C)", () => {
   const css = readFileSync(CSS_PATH, "utf8");
@@ -301,12 +351,105 @@ test("판정기는 캐스케이드 구멍(R1·R2·R2m·R3)을 ruleBody() 경로�
     assert.notEqual(mutated, css, `${name} 변이가 실제로 걸리지 않았다`);
     const body = ruleBody(mutated, SELECTOR);
     assert.ok(body, `${name}: ruleBody() 가 덮개 규칙을 못 읽었다`);
-    assert.notDeepEqual(
+    // 네 변이 모두 left: 0em; width: 0em; 로 붕괴하므로 기대 문제는 같다(바닥·글리프
+    // 2건) -- notDeepEqual(…, []) 은 "문제 있음"만 보고 어떤 관계가 깨졌는지 보지
+    // 않아, declared() 가 엉뚱한 사유로 빨간 변이도 통과시킨다(2R 검토 P2-1 · ⓖ).
+    assert.deepEqual(
       coverProblems(body),
-      [],
-      `${name} 변이가 ruleBody()/coverProblems() 경로에서 초록이다 -- 캐스케이드 구멍이 다시 뚫렸다`,
+      EXPECTED_COLLAPSE_PROBLEMS,
+      `${name} 변이가 ruleBody()/coverProblems() 경로에서 기대한 문제 목록과 다르다 -- 캐스케이드 구멍이 다시 뚫렸거나 엉뚱한 사유로 빨갛다`,
     );
   }
+});
+
+// (w) 1R P2-1·P2-2·P2-3·2R §6 고정 -- 주석 안 선언(4g·4h)·!important·선택자 목록
+// 맨 앞/맨 뒤(4d·4e)·세로 캐스케이드(vertR1)가 ruleBody()/coverProblems()(세로는
+// ruleBody()/verticalProblems()) 경로에서 기대한 문제 목록으로 빨갛다. 합성 CSS 문자열을
+// ruleBody() 에 태우므로(coverProblems() 에 직접 넣지 않으므로) 헛시험 1형태가 아니다.
+test("판정기는 주석 속 선언·!important·선택자 목록 위치·세로 캐스케이드를 각각 기대한 문제로 빨갛게 본다", () => {
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+
+  const horizontalFixtures = {
+    "4g(선언 뒤 주석에 옛 값이 있다)": `${SELECTOR} {
+      content: "";
+      position: absolute;
+      left: 0em; /* 이전 값 left: -1.4em; */
+      top: 0;
+      width: 0em; /* 이전 값 width: 2.6em; */
+      height: 1lh;
+    }`,
+    "4h(규칙 끝 주석에 옛 값을 한꺼번에 적는다)": `${SELECTOR} {
+      content: "";
+      position: absolute;
+      left: 0em;
+      top: 0;
+      width: 0em;
+      height: 1lh; /* was left: -1.4em; width: 2.6em; */
+    }`,
+    "important(규칙 앞쪽 !important 가 뒤 일반 선언에 지지 않는다)": `${SELECTOR} {
+      content: "";
+      position: absolute;
+      left: 0em !important;
+      top: 0;
+      width: 0em !important;
+      height: 1lh;
+      left: -1.4em;
+      width: 2.6em;
+    }`,
+    "4d(선택자 목록 맨 앞 -- 덮어쓰기 블록을 못 읽으면 거짓 초록)": `${SELECTOR} {
+      content: "";
+      position: absolute;
+      left: -1.4em;
+      top: 0;
+      width: 2.6em;
+      height: 1lh;
+    }
+    ${SELECTOR}, .unrelated-sibling {
+      left: 0em;
+      width: 0em;
+    }`,
+    "4e(선택자 목록 맨 뒤)": `${SELECTOR} {
+      content: "";
+      position: absolute;
+      left: -1.4em;
+      top: 0;
+      width: 2.6em;
+      height: 1lh;
+    }
+    .unrelated-sibling, ${SELECTOR} {
+      left: 0em;
+      width: 0em;
+    }`,
+  };
+
+  for (const [name, css] of Object.entries(horizontalFixtures)) {
+    const body = ruleBody(css, SELECTOR);
+    assert.ok(body, `${name}: ruleBody() 가 덮개 규칙을 못 읽었다`);
+    assert.deepEqual(coverProblems(body), EXPECTED_COLLAPSE_PROBLEMS, name);
+  }
+
+  const vertR1 = `${SELECTOR} {
+    content: "";
+    position: absolute;
+    left: -1.4em;
+    top: 0;
+    width: 2.6em;
+    height: 1lh;
+    top: -20px;
+    height: 3lh;
+  }`;
+  const vertBody = ruleBody(vertR1, SELECTOR);
+  assert.ok(vertBody, "vertR1: ruleBody() 가 덮개 규칙을 못 읽었다");
+  assert.deepEqual(verticalProblems(vertBody), [
+    "덮개 위쪽은 줄 상자 위쪽에 맞춘다(음수 top 이면 윗줄을 침범한다) -- 실제 top=-20px",
+    "덮개 높이는 첫 줄 높이(1lh)다 -- 줄 높이보다 크면 아랫줄을 침범한다 -- 실제 height=3lh",
+  ]);
+
+  // 실물 CSS(변이 없음) -- 같은 경로(가로·세로 둘 다)로 초록.
+  const realCss = readFileSync(CSS_PATH, "utf8");
+  const realBody = ruleBody(realCss, SELECTOR);
+  assert.deepEqual(coverProblems(realBody), []);
+  assert.deepEqual(verticalProblems(realBody), []);
 });
 
 test("체크칸 글리프의 px 너비는 CSS 원문에 있다 -- 탭 판정이 NaN 으로 빗나가지 않게", () => {
