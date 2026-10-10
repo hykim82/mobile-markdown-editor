@@ -77,22 +77,30 @@ const CSS_PATH = new URL("../../public/index.html", import.meta.url);
 // 깊이를 세어 매칭되는 닫는 중괄호까지 읽으므로 중첩 규칙(@media 등)을 가로지른다.
 // 선택자가 쉼표로 묶인 목록 어디에 있어도(맨 앞·가운데·맨 뒤) 그 블록을 읽는다(P2-2) --
 // 선택자 뒤에 "{" 가 바로 오지 않고 쉼표가 오면, 목록이 끝나는 다음 "{" 까지 건너뛴다.
+//
+// HYK-304-overlay-cascade-4(1R P3-3 · cascade-3 P3-1) -- 중괄호 깊이 계수가 CSS 주석 속
+// "{"·"}" 도 구조로 세면 블록 경계가 뒤틀린다: 주석 안에 닫는 중괄호가 있으면 블록이 일찍
+// 끝나고(X1), 여는 중괄호가 있으면 뒤 규칙까지 흡수한다(4f). 주석 처리된 가짜 블록도 실
+// 규칙으로 읽힌다(4i). 그래서 깊이를 세기 전에 문서 전체에서 CSS 주석을 먼저 지운다 --
+// 주석이 사라지면 그 안의 중괄호도, 주석 속 가짜 선택자 글자도 함께 사라진다.
+// ⛔문자열 값(예: content: "{") 안의 중괄호는 이 수리의 범위 밖이다(결과 파일 한계 참고).
 function ruleBody(css, selector) {
+  const clean = stripComments(css);
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const opener = new RegExp(`${escaped}\\s*(?:,|\\{)`, "g");
   let combined = null;
   let match;
-  while ((match = opener.exec(css))) {
-    const brace = css.indexOf("{", match.index);
+  while ((match = opener.exec(clean))) {
+    const brace = clean.indexOf("{", match.index);
     if (brace === -1) break;
     let depth = 1;
     let i = brace + 1;
-    while (i < css.length && depth > 0) {
-      if (css[i] === "{") depth++;
-      else if (css[i] === "}") depth--;
+    while (i < clean.length && depth > 0) {
+      if (clean[i] === "{") depth++;
+      else if (clean[i] === "}") depth--;
       i++;
     }
-    const body = css.slice(brace + 1, i - 1);
+    const body = clean.slice(brace + 1, i - 1);
     combined = combined === null ? body : combined + body;
     opener.lastIndex = i;
   }
@@ -172,9 +180,9 @@ function emValue(expr) {
 }
 
 // CSS 주석은 선언이 아니다 -- 주석 속에 적힌 옛 값(예: "/* was left: -1.4em; */")을
-// "마지막 선언"으로 잘못 읽지 않도록 매칭 전에 지운다(P2-1). ruleBody() 의 중괄호
-// 깊이 계수에는 적용하지 않는다 -- 주석 안 중괄호로 깊이가 틀어지는 문제는 이 조각
-// 범위 밖이다(1R 검토 P3-3).
+// "마지막 선언"으로 잘못 읽지 않도록 매칭 전에 지운다(P2-1). HYK-304-overlay-cascade-4
+// 부터는 ruleBody() 의 중괄호 깊이 계수에도 적용한다 -- 주석 안 중괄호로 깊이가
+// 틀어지는 문제(1R 검토 P3-3 · cascade-3 P3-1)를 이 함수로 함께 막는다.
 function stripComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "");
 }
@@ -201,10 +209,28 @@ function declared(body, name) {
   return lastImportant !== null ? lastImportant : lastNormal;
 }
 
+// HYK-304-overlay-cascade-4(P3-2) -- content 의 "있다/없다" 도 캐스케이드다: 마지막으로
+// 이기는 content 선언이 none(또는 normal -- 기본값과 같은 뜻)이면 의사 요소가 생기지
+// 않는다. "문자열 어디든 하나 있으면 통과" 로 보면 뒤 블록의 content: none 재선언을
+// 놓친다(K2 -- 파일 수준 `</style>` 앞 붕괴 블록이 전건 초록이던 구멍). 주석 속 content
+// 는 선언이 아니므로 먼저 지운다(P3-3 -- declared() 가 left·width 에 적용하는 전제를
+// content 에도 적용한다 · K1).
+function lastContentValue(body) {
+  const clean = stripComments(body);
+  const re = /(?:^|[\s;])content:\s*([^;]+);/g;
+  let last = null;
+  let match;
+  while ((match = re.exec(clean))) {
+    last = match[1].trim();
+  }
+  return last;
+}
+
 // 덮개 규칙 본문이 위 네 관계를 지키는지 판정한다. 빈 배열이면 통과.
 function coverProblems(body) {
   const problems = [];
-  if (!/(?:^|[\s;])content:\s*""\s*;/.test(body)) {
+  const content = lastContentValue(body);
+  if (content === null || /^(?:none|normal)$/i.test(content)) {
     problems.push('content: "" 가 없다 -- 덮개가 아예 생기지 않는다(C 변이)');
   }
   const left = emValue(declared(body, "left"));
@@ -236,16 +262,39 @@ function coverProblems(body) {
 // 에도 적용한다(P2-3) -- declared() 로 마지막 값을 뽑아 정확한 값과 비교한다. 위
 // "자기 줄의 첫 줄 상자 안에만 있다" 시험의 assert.match 는 문자열 어디든 있으면
 // 통과해 캐스케이드 뒤집힘을 못 본다(vertR1: 규칙 끝 재선언에도 match 가 여전히 통과).
+//
+// HYK-304-overlay-cascade-4(P3-4) -- 정확 문자열 비교("0"·"1lh")는 뜻이 같은 다른 표기
+// (0px·0em·calc(0px)·+0 / calc(1lh)·1LH)를 거짓 빨강으로 본다(가로의 calc 등가 수용,
+// P2-6 과 비대칭). isZeroTop()/isOneLineHeight() 가 그 등가를 받는다 -- 실제로 붕괴한
+// 값(예: -20px·3lh)은 그대로 빨갛다.
+function isZeroTop(value) {
+  if (value === null) return false;
+  const inner = value
+    .trim()
+    .replace(/^calc\(([\s\S]*)\)$/i, "$1")
+    .trim();
+  return /^[+-]?0(?:\.0+)?(?:px|em)?$/i.test(inner);
+}
+
+function isOneLineHeight(value) {
+  if (value === null) return false;
+  const inner = value
+    .trim()
+    .replace(/^calc\(([\s\S]*)\)$/i, "$1")
+    .trim();
+  return /^1lh$/i.test(inner);
+}
+
 function verticalProblems(body) {
   const problems = [];
   const top = declared(body, "top");
-  if (top === null || top.replace(/\s+/g, "") !== "0") {
+  if (!isZeroTop(top)) {
     problems.push(
       `덮개 위쪽은 줄 상자 위쪽에 맞춘다(음수 top 이면 윗줄을 침범한다) -- 실제 top=${top}`,
     );
   }
   const height = declared(body, "height");
-  if (height === null || height.replace(/\s+/g, "") !== "1lh") {
+  if (!isOneLineHeight(height)) {
     problems.push(
       `덮개 높이는 첫 줄 높이(1lh)다 -- 줄 높이보다 크면 아랫줄을 침범한다 -- 실제 height=${height}`,
     );
@@ -441,6 +490,188 @@ test("판정기는 주석 속 선언·!important·선택자 목록 위치·세�
   const vertBody = ruleBody(vertR1, SELECTOR);
   assert.ok(vertBody, "vertR1: ruleBody() 가 덮개 규칙을 못 읽었다");
   assert.deepEqual(verticalProblems(vertBody), [
+    "덮개 위쪽은 줄 상자 위쪽에 맞춘다(음수 top 이면 윗줄을 침범한다) -- 실제 top=-20px",
+    "덮개 높이는 첫 줄 높이(1lh)다 -- 줄 높이보다 크면 아랫줄을 침범한다 -- 실제 height=3lh",
+  ]);
+
+  // 실물 CSS(변이 없음) -- 같은 경로(가로·세로 둘 다)로 초록.
+  const realCss = readFileSync(CSS_PATH, "utf8");
+  const realBody = ruleBody(realCss, SELECTOR);
+  assert.deepEqual(coverProblems(realBody), []);
+  assert.deepEqual(verticalProblems(realBody), []);
+});
+
+// HYK-304-overlay-cascade-4 고정 -- content 존재 캐스케이드(P3-2 · K2)·주석 속 중괄호로
+// 블록 경계가 뒤틀리는 모양(1R P3-3·cascade-3 P3-1 · X1·X1b·4f)·주석 처리된 가짜 블록을
+// 실 규칙으로 읽던 거짓 빨강(1R P3-3 · 4i)·content 주석 축(P3-3 · K1)·세로 등가 표기
+// (P3-4)를 ruleBody()/coverProblems()·verticalProblems() 경로로 실제로 태운다(합성
+// CSS 문자열을 ruleBody() 에 넣으므로 헛시험 1형태가 아니다). 기대 문제 목록은 코드를
+// 보고 먼저 적은 뒤 판정기 출력과 맞췄다(헛시험 2형태 금지 -- 길이·존재 여부만 보지 않음).
+// 세 시험으로 나눈다(content 캐스케이드 · 주석 속 중괄호 · 세로 등가) -- 하나로 모으면
+// max-lines-per-function(80) 을 넘는다.
+test("판정기는 content 존재도 캐스케이드로 본다(K2·K1)", () => {
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+
+  // K2: 덮개 규칙 뒤에 같은 선택자로 content: none 재선언 -- "마지막 블록이 이긴다" 가
+  // content 에도 적용돼야 한다. "문자열 어디든 하나 있으면 통과" 로 보면 앞 블록의
+  // content: "" 를 보고 통과한다(파일 수준 `</style>` 앞 K2 모양이 전건 초록이던 구멍).
+  const K2_CSS = `${SELECTOR} {
+    content: "";
+    position: absolute;
+    left: -1.4em;
+    top: 0;
+    width: 2.6em;
+    height: 1lh;
+  }
+  ${SELECTOR} {
+    content: none;
+  }`;
+  assert.deepEqual(coverProblems(ruleBody(K2_CSS, SELECTOR)), [
+    'content: "" 가 없다 -- 덮개가 아예 생기지 않는다(C 변이)',
+  ]);
+
+  // K1: content 선언 자체가 CSS 주석으로 감싸져 있다 -- 선언이 아니므로 "없음"으로
+  // 읽어야 한다(1R P2-1 이 left·width 에 적용한 주석 제거를 content 에도 적용).
+  const K1_CSS = `${SELECTOR} {
+    /* content: ""; */
+    position: absolute;
+    left: -1.4em;
+    top: 0;
+    width: 2.6em;
+    height: 1lh;
+  }`;
+  assert.deepEqual(coverProblems(ruleBody(K1_CSS, SELECTOR)), [
+    'content: "" 가 없다 -- 덮개가 아예 생기지 않는다(C 변이)',
+  ]);
+  // K1 직접(ruleBody 미경유, "같은 뜻의 calc() 표기" · "네 변이" 시험과 같은 방식) --
+  // ruleBody() 가 문서 전체에서 주석을 먼저 지우므로(이 조각), K1 을 ruleBody() 경유로만
+  // 재면 lastContentValue() 자신의 주석 제거가 걸리는지 독립적으로 가려낼 수 없다(결과
+  // 파일 §2-6 C3 메모). coverProblems() 를 직접 불러 그 메커니즘 자체를 고정한다.
+  assert.deepEqual(
+    coverProblems(
+      '/* content: ""; */ position: absolute; left: -1.4em; top: 0; width: 2.6em; height: 1lh;',
+    ),
+    ['content: "" 가 없다 -- 덮개가 아예 생기지 않는다(C 변이)'],
+  );
+});
+
+test("판정기는 주석 속 중괄호로 블록 경계가 뒤틀리지 않는다(X1·X1b·4f·4i)", () => {
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+
+  // X1: height 선언 뒤 CSS 주석 안에 닫는 중괄호가 하나 있고, 뒤에 붕괴 블록(그 블록
+  // 끝에도 주석)이 있다 -- 주석 속 "}" 를 구조로 세면 첫 블록이 거기서 끊기고, 이어붙인
+  // 몸통 위에서 주석 제거가 그 틈부터 뒤 블록의 "*/" 까지를 지워 붕괴 선언이 통째로
+  // 사라진다(cascade-3 검토 §8 X1 · base→HEAD 로 뒤집힌 거짓 초록).
+  const X1_CSS = `${SELECTOR} {
+    content: "";
+    position: absolute;
+    left: -1.4em;
+    top: 0;
+    width: 2.6em;
+    height: 1lh; /* note: closing brace inside comment } */
+  }
+  ${SELECTOR} {
+    left: 0em;
+    width: 0em; /* trailing comment */
+  }`;
+  assert.deepEqual(
+    coverProblems(ruleBody(X1_CSS, SELECTOR)),
+    EXPECTED_COLLAPSE_PROBLEMS,
+  );
+
+  // X1b: 같은 모양인데 뒤 블록에 주석이 없다 -- 뒤집힘의 원인이 "앞 블록의 열린 주석 ~
+  // 뒤 블록의 */" 구간이었는지를 가른다. 이 모양은 cascade-3 에서도 이미 빨갰다(회귀
+  // 아님) -- 뒤 블록의 주석 유무로 결과가 갈리지 않아야 한다.
+  const X1B_CSS = `${SELECTOR} {
+    content: "";
+    position: absolute;
+    left: -1.4em;
+    top: 0;
+    width: 2.6em;
+    height: 1lh; /* note: closing brace inside comment } */
+  }
+  ${SELECTOR} {
+    left: 0em;
+    width: 0em;
+  }`;
+  assert.deepEqual(
+    coverProblems(ruleBody(X1B_CSS, SELECTOR)),
+    EXPECTED_COLLAPSE_PROBLEMS,
+  );
+
+  // 4f: 규칙 안 CSS 주석에 여는 중괄호가 있고 뒤에 무관한 .x 규칙이 있다 -- 주석 속 "{"
+  // 를 구조로 세면 깊이가 하나 더 깊어져 .x 규칙까지 흡수한다(1R 검토 §5 4f). 정상
+  // CSS이므로 초록이어야 한다 -- .x 는 다른 선택자라 끌어오지 않아야 한다.
+  const FOUR_F_CSS = `${SELECTOR} {
+    content: "";
+    position: absolute;
+    left: -1.4em; /* { 는 열기 */
+    top: 0;
+    width: 2.6em;
+    height: 1lh;
+  }
+  .x { left: 0em; width: 9em; }`;
+  assert.deepEqual(coverProblems(ruleBody(FOUR_F_CSS, SELECTOR)), []);
+
+  // 4i: 주석 처리된 같은 선택자 블록("금지 예") -- 주석이므로 실제로는 아무 효과가
+  // 없다. 주석을 지우지 않고 찾으면 주석 속 선택자 글자까지 집어 가짜 블록을 실 규칙
+  // 으로 읽는다(1R 검토 §5 4i · 거짓 빨강). 정상 CSS이므로 초록이어야 한다.
+  const FOUR_I_CSS = `${SELECTOR} {
+    content: "";
+    position: absolute;
+    left: -1.4em;
+    top: 0;
+    width: 2.6em;
+    height: 1lh;
+  }
+  /* 금지 예: ${SELECTOR} { content: ""; left: 0em; width: 0em; } */`;
+  assert.deepEqual(coverProblems(ruleBody(FOUR_I_CSS, SELECTOR)), []);
+});
+
+test("판정기는 세로 등가 표기를 초록으로 보고 실제 붕괴는 그대로 빨갛게 본다(P3-4)", () => {
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+
+  // 세로 등가 표기(P3-4) -- top 의 0 과 height 의 1lh 는 각각 여러 표기로 적을 수 있다.
+  // 전부 같은 뜻이므로 초록이어야 한다(거짓 빨강 0).
+  const VERTICAL_EQUIVALENTS = {
+    "top: 0px": { top: "0px", height: "1lh" },
+    "top: 0em": { top: "0em", height: "1lh" },
+    "top: calc(0px)": { top: "calc(0px)", height: "1lh" },
+    "top: +0": { top: "+0", height: "1lh" },
+    "height: calc(1lh)": { top: "0", height: "calc(1lh)" },
+    "height: 1LH": { top: "0", height: "1LH" },
+  };
+  for (const [name, { top, height }] of Object.entries(VERTICAL_EQUIVALENTS)) {
+    const body = ruleBody(
+      `${SELECTOR} {
+        content: "";
+        position: absolute;
+        left: -1.4em;
+        top: ${top};
+        width: 2.6em;
+        height: ${height};
+      }`,
+      SELECTOR,
+    );
+    assert.deepEqual(verticalProblems(body), [], name);
+  }
+
+  // vertR1 -- 실제 붕괴 값(음수 top·늘어난 height)은 등가 수용과 무관하게 그대로
+  // 빨갛다(세로 등가 수용이 진짜 붕괴까지 눈감지 않는지 다시 확인).
+  const vertR1Body = ruleBody(
+    `${SELECTOR} {
+      content: "";
+      position: absolute;
+      left: -1.4em;
+      top: 0;
+      width: 2.6em;
+      height: 1lh;
+      top: -20px;
+      height: 3lh;
+    }`,
+    SELECTOR,
+  );
+  assert.deepEqual(verticalProblems(vertR1Body), [
     "덮개 위쪽은 줄 상자 위쪽에 맞춘다(음수 top 이면 윗줄을 침범한다) -- 실제 top=-20px",
     "덮개 높이는 첫 줄 높이(1lh)다 -- 줄 높이보다 크면 아랫줄을 침범한다 -- 실제 height=3lh",
   ]);
