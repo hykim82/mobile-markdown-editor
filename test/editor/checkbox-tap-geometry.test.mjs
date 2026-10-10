@@ -209,28 +209,31 @@ function declared(body, name) {
   return lastImportant !== null ? lastImportant : lastNormal;
 }
 
-// HYK-304-overlay-cascade-4(P3-2) -- content 의 "있다/없다" 도 캐스케이드다: 마지막으로
-// 이기는 content 선언이 none(또는 normal -- 기본값과 같은 뜻)이면 의사 요소가 생기지
-// 않는다. "문자열 어디든 하나 있으면 통과" 로 보면 뒤 블록의 content: none 재선언을
-// 놓친다(K2 -- 파일 수준 `</style>` 앞 붕괴 블록이 전건 초록이던 구멍). 주석 속 content
-// 는 선언이 아니므로 먼저 지운다(P3-3 -- declared() 가 left·width 에 적용하는 전제를
-// content 에도 적용한다 · K1).
-function lastContentValue(body) {
-  const clean = stripComments(body);
-  const re = /(?:^|[\s;])content:\s*([^;]+);/g;
-  let last = null;
-  let match;
-  while ((match = re.exec(clean))) {
-    last = match[1].trim();
-  }
-  return last;
+// HYK-304-overlay-cascade-4(2R §2 P2-1) -- content 의 "있다/없다" 도 declared() 와 같은
+// 마지막 승자(!important 축 포함) 캐스케이드를 그대로 쓴다. 1R 판(lastContentValue())은
+// 날것 마지막 값만 보고 none/normal 두 낱말만 "없음"으로 읽어 `!important` 꼬리와 CSS
+// 전역 키워드(initial·inherit·unset·revert·revert-layer)를 전부 "있음"으로 오판했다
+// (2R 검토 §5 P2-1 -- base 빨강 → HEAD 초록). declared() 로 뽑으면 그 구멍이 닫히지만,
+// declared() 는 "없음" 이 아닌 값을 그대로 돌려주므로 "있음" 쪼 자체를 좁혀야 한다 --
+// 의사 요소를 실제로 만드는 값은 문자열 리터럴과 CSS content 스펙의 생성값 함수뿐이다.
+// 여기서는 흔한 네 가지(url()·counter()·counters()·attr())만 받는다 -- image()·leader()·
+// target-counter() 등 드문 생성값은 이 수리 범위 밖이다(실물 CSS·계약 어디에도 없음 --
+// 결과 파일 한계). 그 밖(none·normal·initial·inherit·unset·revert·revert-layer·빈 값·
+// 알 수 없는 값)은 전부 "없음" 으로 fail-closed 한다(base 의 "정확히 \"\"" 보존 + 넓힌
+// 축도 포함).
+const CONTENT_GENERATED_VALUE = /^(?:url|counters?|attr)\(/i;
+
+function isContentPresent(value) {
+  if (value === null) return false;
+  const trimmed = value.trim();
+  if (/^(["']).*\1$/.test(trimmed)) return true;
+  return CONTENT_GENERATED_VALUE.test(trimmed);
 }
 
 // 덮개 규칙 본문이 위 네 관계를 지키는지 판정한다. 빈 배열이면 통과.
 function coverProblems(body) {
   const problems = [];
-  const content = lastContentValue(body);
-  if (content === null || /^(?:none|normal)$/i.test(content)) {
+  if (!isContentPresent(declared(body, "content"))) {
     problems.push('content: "" 가 없다 -- 덮개가 아예 생기지 않는다(C 변이)');
   }
   const left = emValue(declared(body, "left"));
@@ -545,13 +548,118 @@ test("판정기는 content 존재도 캐스케이드로 본다(K2·K1)", () => {
   ]);
   // K1 직접(ruleBody 미경유, "같은 뜻의 calc() 표기" · "네 변이" 시험과 같은 방식) --
   // ruleBody() 가 문서 전체에서 주석을 먼저 지우므로(이 조각), K1 을 ruleBody() 경유로만
-  // 재면 lastContentValue() 자신의 주석 제거가 걸리는지 독립적으로 가려낼 수 없다(결과
-  // 파일 §2-6 C3 메모). coverProblems() 를 직접 불러 그 메커니즘 자체를 고정한다.
+  // 재면 declared() 자신의 주석 제거(content 축)가 걸리는지 독립적으로 가려낼 수 없다
+  // (2R §2 P3-2① · ⓙ①). coverProblems() 를 직접 불러 그 메커니즘 자체를 고정한다.
   assert.deepEqual(
     coverProblems(
       '/* content: ""; */ position: absolute; left: -1.4em; top: 0; width: 2.6em; height: 1lh;',
     ),
     ['content: "" 가 없다 -- 덮개가 아예 생기지 않는다(C 변이)'],
+  );
+});
+
+// 2R §2 P2-1 고정 -- content 가 "있음"으로 좁혀진 쪼(isContentPresent) 밖의 값은 전부
+// "없음" 으로 fail-closed 한다. !important 꼬리와 CSS 전역 키워드가 base 빨강 →
+// HEAD(1R) 초록으로 뒤집혔던 모양(2R 검토 §5 P2-1)을 각각 단독 규칙으로 고정한다.
+const CONTENT_MISSING_PROBLEM =
+  'content: "" 가 없다 -- 덮개가 아예 생기지 않는다(C 변이)';
+
+test("판정기는 content 의 !important 꼬리·CSS 전역 키워드를 '없음'으로 본다(2R P2-1 ⓐ~ⓕ)", () => {
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+
+  function bodyFor(contentDecl) {
+    return ruleBody(
+      `${SELECTOR} {
+        ${contentDecl}
+        position: absolute;
+        left: -1.4em;
+        top: 0;
+        width: 2.6em;
+        height: 1lh;
+      }`,
+      SELECTOR,
+    );
+  }
+
+  const singletons = {
+    "ⓐ none !important 단독": "content: none !important;",
+    "ⓑ normal !important 단독": "content: normal !important;",
+    "ⓒ initial": "content: initial;",
+    "ⓓ inherit": "content: inherit;",
+    "ⓔ unset": "content: unset;",
+    "ⓕ revert": "content: revert;",
+  };
+  for (const [name, decl] of Object.entries(singletons)) {
+    assert.deepEqual(
+      coverProblems(bodyFor(decl)),
+      [CONTENT_MISSING_PROBLEM],
+      name,
+    );
+  }
+});
+
+test("판정기는 content 존재 판정에도 !important 캐스케이드를 세운다(2R P2-1 ⓖ·ⓘ)", () => {
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+  const GEOMETRY_RULE = `${SELECTOR} {
+    position: absolute;
+    left: -1.4em;
+    top: 0;
+    width: 2.6em;
+    height: 1lh;
+  }`;
+
+  // ⓖ: 앞 블록 content: none !important · 뒤 블록 content: ""(중요도 없음) -- 뒤에 와도
+  // 일반 선언은 !important 를 못 이긴다 -- "없음" 이 이겨야 한다(캐스케이드 구멍이면 초록).
+  const G_CSS = `${SELECTOR} { content: none !important; }\n${GEOMETRY_RULE}\n${SELECTOR} { content: ""; }`;
+  assert.deepEqual(coverProblems(ruleBody(G_CSS, SELECTOR)), [
+    CONTENT_MISSING_PROBLEM,
+  ]);
+
+  // ⓘ: 반대 방향 -- 앞 블록 content: none(일반) · 뒤 블록 content: "" !important -- 이번엔
+  // !important 가 붙은 "있음" 이 이긴다(거짓 빨강 0 -- 실물 CSS 와 같은 방향의 확인).
+  const I_CSS = `${SELECTOR} { content: none; }\n${GEOMETRY_RULE}\n${SELECTOR} { content: "" !important; }`;
+  assert.deepEqual(coverProblems(ruleBody(I_CSS, SELECTOR)), []);
+});
+
+test("판정기는 파일 수준에서도 content !important·전역 키워드 붕괴를 본다(2R P2-1 ⓗ)", () => {
+  const SELECTOR = "#editor-root li[aria-checked]::after";
+  const css = readFileSync(CSS_PATH, "utf8");
+  assert.ok(css.includes("</style>"), "</style> 태그가 없다");
+
+  // 실물 덮개 규칙 뒤에 새 블록을 덧붙인다(1R 검토 F2·F8 모양) -- (v) 의 ORIGINAL_RULE
+  // 문구 가드가 아니라, 가로 띠 「관계 판정」 칸(coverProblems())에서 직접 빨개져야 한다.
+  const appendedBlocks = {
+    "ⓗ-1 뒤 블록 content: none !important": `${SELECTOR} { content: none !important; }`,
+    "ⓗ-2 뒤 블록 content: initial": `${SELECTOR} { content: initial; }`,
+  };
+  for (const [name, block] of Object.entries(appendedBlocks)) {
+    const mutated = css.replace("</style>", () => `${block}\n    </style>`);
+    assert.notEqual(mutated, css, `${name}: 변이가 실제로 걸리지 않았다`);
+    const body = ruleBody(mutated, SELECTOR);
+    assert.ok(body, `${name}: ruleBody() 가 덮개 규칙을 못 읽었다`);
+    assert.deepEqual(coverProblems(body), [CONTENT_MISSING_PROBLEM], name);
+  }
+});
+
+test("판정기는 declared() 자신의 주석 제거와 normal 갈래를 content 축에서 단독으로 고정한다(2R P3-2 ⓙ)", () => {
+  // ⓙ① -- (w) 의 4g 재료(선언 뒤 트레일링 주석에 옛 값)를 content 에도 적용해
+  // coverProblems() 를 직접 호출한다(ruleBody 미경유) -- declared() 자신의
+  // stripComments() 가 트레일링 주석 속 옛 content 값을 선언으로 오인하지 않는지
+  // 독립적으로 가려낸다(K1 직접은 "전체 주석", 여기는 "트레일링 주석"이라 서로 다른 모양).
+  assert.deepEqual(
+    coverProblems(
+      'content: none; /* 이전 값 content: ""; */ position: absolute; left: -1.4em; top: 0; width: 2.6em; height: 1lh;',
+    ),
+    [CONTENT_MISSING_PROBLEM],
+  );
+
+  // ⓙ② -- "없음" 판정의 normal 갈래 단독 고정(K2 의 none 판과 짝) -- coverProblems() 를
+  // 직접 호출해 "normal" 재료가 content 부재로 읽히는지 확인한다.
+  assert.deepEqual(
+    coverProblems(
+      "content: normal; position: absolute; left: -1.4em; top: 0; width: 2.6em; height: 1lh;",
+    ),
+    [CONTENT_MISSING_PROBLEM],
   );
 });
 
