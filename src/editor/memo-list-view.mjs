@@ -72,6 +72,15 @@ function attachSwipeToDelete(card, id, onSwipeDelete) {
     }
     startX = null;
   });
+  // 검토 1R P1-1/P3-1: 가로 스와이프 중 브라우저가 팬 제스처로 가져가면
+  // pointerup 대신 pointercancel 이 온다(public/index.html 의
+  // touch-action: pan-y 를 넘는 성분이 있을 때·스크롤과 뒤섞일 때 등).
+  // 여기서 상태를 안 지우면 낡은 swiped=true 가 남아, 다음에 오는 (새
+  // pointerdown 없는) click 하나를 아래 click 가드가 엉뚱하게 삼킨다.
+  card.addEventListener("pointercancel", () => {
+    startX = null;
+    swiped = false;
+  });
   card.addEventListener("click", (event) => {
     if (!swiped) return;
     event.preventDefault();
@@ -133,6 +142,18 @@ function buildErrorState(message, onRetry) {
 export function renderMemoListError(container, { onRetry }) {
   container.textContent = "";
   container.append(buildErrorState(LIST_ERROR_MESSAGE, onRetry));
+}
+
+// coder-task.md §2(P2-3) 책임자 결정④ 문구. renderMemoListError 와 달리
+// 목록 전체를 지우지 않고 이어 붙인다 -- 스와이프·되돌리기 저장 실패는
+// "조회 자체가 안 됨"과 달리 카드가 이미 화면에 있어야 하므로(검토
+// 1R P2-3 "카드 남음" 요구) 지우면 안 된다.
+export const SAVE_ERROR_MESSAGE = "저장에 실패했어요. 다시 시도해 주세요";
+
+export function renderSaveError(container, { onRetry }) {
+  const existing = container.querySelector(".memo-list-error");
+  if (existing) existing.remove();
+  container.append(buildErrorState(SAVE_ERROR_MESSAGE, onRetry));
 }
 
 // memos 는 이미 src/storage/list-query.mjs 가 정렬·필터해 둔 배열이어야

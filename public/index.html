@@ -62,6 +62,12 @@
         font: inherit;
         color: inherit;
         cursor: pointer;
+        /* 검토 1R P1-1 실측: touch-action 선언이 없으면(auto) 가로
+           스와이프를 브라우저가 팬 제스처로 가져가 pointercancel 을
+           보내고 pointerup 이 오지 않아 삭제가 한 번도 안 불린다.
+           pan-y 는 세로 스크롤은 그대로 브라우저가 처리하고 가로는
+           페이지(여기서는 스와이프 삭제 리스너)가 받게 한다. */
+        touch-action: pan-y;
       }
       #list-root .memo-card-title {
         font-size: var(--font-size-body);

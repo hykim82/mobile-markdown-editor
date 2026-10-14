@@ -3,7 +3,11 @@
 // -> list-query.mjs 의 정렬·필터 -> memo-list-view.mjs 의 DOM 렌더까지
 // 한 호출로 잇는다.
 import { visibleMemosSortedByUpdatedAt } from "../storage/list-query.mjs";
-import { renderMemoList, renderMemoListError } from "./memo-list-view.mjs";
+import {
+  renderMemoList,
+  renderMemoListError,
+  renderSaveError,
+} from "./memo-list-view.mjs";
 import { createSoftDeleteLifecycle } from "../storage/memo-lifecycle.mjs";
 
 // PRD §5.5 수용 기준③ "7초 경과 시 hard delete" -- memo-lifecycle.mjs
@@ -39,10 +43,17 @@ export function mountMemoList(
   adapter,
   { onOpen, toast, now, setTimeoutFn, clearTimeoutFn } = {},
 ) {
+  // 검토 1R P2-2: graceMs 를 안 넘기면 memo-lifecycle.mjs 자신의 기본값
+  // (그 파일 안에서만 보이는 GRACE_MS)을 쓰게 되어, 이 토스트의
+  // UNDO_TOAST_MS 와 "우연히 같은 숫자"일 뿐 같은 원천이 아니게 된다 --
+  // 데이터 계층 기본값이 바뀌면 토스트는 조용히 다른 길이로 떠 있는다.
+  // 여기서 명시로 넘겨 원천을 하나로 묶는다(memo-lifecycle.mjs 자체는
+  // 수정하지 않는다 -- coder-task.md §2 범위 제약).
   const lifecycle = createSoftDeleteLifecycle(adapter, {
     now,
     setTimeoutFn,
     clearTimeoutFn,
+    graceMs: UNDO_TOAST_MS,
   });
   const scheduleFn = setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
   const cancelFn = clearTimeoutFn ?? ((id) => clearTimeout(id));
@@ -68,8 +79,15 @@ export function mountMemoList(
       detachActiveUndo();
       cancelFn(hideTimer);
       toast.element.hidden = true;
-      await lifecycle.restore(id);
-      await refresh();
+      try {
+        await lifecycle.restore(id);
+        await refresh();
+      } catch {
+        // 검토 1R P2-3: 되돌리기 저장이 거부돼도 unhandledRejection 으로
+        // 새면 안 된다 -- handleSwipeDelete 와 같은 실패 표시를 재사용한다
+        // (책임자 결정④, 기존 목록 오류 표시 모양 그대로).
+        renderSaveError(container, { onRetry: () => handler() });
+      }
     };
     active = { id, handler };
     toast.undoButton.addEventListener("click", handler);
@@ -83,9 +101,18 @@ export function mountMemoList(
   }
 
   async function handleSwipeDelete(id) {
-    await lifecycle.softDelete(id);
-    await refresh();
-    showUndoToast(id);
+    try {
+      await lifecycle.softDelete(id);
+      await refresh();
+      showUndoToast(id);
+    } catch {
+      // 검토 1R P2-3 근거: adapter.put 이 거부하면 이 await 가 던지고,
+      // 이 함수가 pointerup 리스너(memo-list-view.mjs)에서 await 없이
+      // 불리므로 그대로 두면 unhandledRejection 으로 샌다. 여기서 끝내고
+      // 책임자 결정④ 문구로 실패를 보여준다 -- refresh() 를 안 불렀으니
+      // 카드는 그대로 남아 있다(P2-3 "카드 남음" 요구).
+      renderSaveError(container, { onRetry: () => handleSwipeDelete(id) });
+    }
   }
 
   async function refresh() {

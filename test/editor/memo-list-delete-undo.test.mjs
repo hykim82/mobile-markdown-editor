@@ -8,11 +8,17 @@
 import "../support/jsdom-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { mountMemoList } from "../../src/editor/memo-list-mount.mjs";
+import { SAVE_ERROR_MESSAGE } from "../../src/editor/memo-list-view.mjs";
 import { createMemoStore } from "../../src/storage/memo-store.mjs";
 import { createFakeAdapter } from "../support/fake-adapter.mjs";
 
 const { window } = globalThis;
+const here = dirname(fileURLToPath(import.meta.url));
+const indexHtmlPath = join(here, "..", "..", "public", "index.html");
 
 async function createMemoAt(adapter, body, updatedAt) {
   const store = createMemoStore(adapter, { now: () => updatedAt });
@@ -264,4 +270,195 @@ test("ⓕ두 메모를 연속으로 삭제해도 각각 독립적으로 되돌�
   assert.ok(recordA, "A 는 되돌려졌으니 그대로 남아있어야 한다");
   assert.equal(recordA.deletedAt, null);
   assert.deepEqual(cardIds(container), [idA], "최종 목록엔 A 만 남는다");
+});
+
+// 검토 1R P1-1 ⓐ: jsdom 은 touch-action 을 흉내 내지 않으므로, 출하
+// public/index.html 실물의 카드 규칙 문자열을 직접 대조한다(배선 6 선례,
+// app-wiring.test.mjs).
+test("출하 CSS: #list-root .memo-card 규칙에 touch-action: pan-y 가 선언돼 있다(P1-1 ⓐ)", async () => {
+  const html = await readFile(indexHtmlPath, "utf8");
+  const match = html.match(/#list-root \.memo-card\s*\{([^}]*)\}/s);
+  assert.ok(
+    match,
+    "#list-root .memo-card 규칙을 출하 CSS 에서 찾을 수 있어야 한다",
+  );
+  assert.match(
+    match[1],
+    /touch-action:\s*pan-y/,
+    "그 규칙 블록 안에 touch-action: pan-y 선언이 있어야 한다(파일 전체 아무 데나 있음은 충족 아님)",
+  );
+});
+
+// 검토 1R P1-1 ⓑ · P3-1: 브라우저가 가로 스와이프를 팬 제스처로 가져가면
+// pointerup 대신 pointercancel 이 온다. 그 뒤 swiped 상태가 안 풀리면,
+// 이어지는(새 pointerdown 없는) click 하나를 click 가드가 삼켜 "한 번
+// 열기"가 사라진다.
+test("pointercancel 뒤엔 삭제가 안 되고, 이어지는 click 은 onOpen 을 정상적으로 부른다(P1-1 ⓑ · P3-1 닫힘)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "취소된 스와이프 메모", 100);
+  const clock = makeFakeClock();
+  const opened = [];
+  const { list } = makeList(container, adapter, clock, {
+    onOpen: (openedId) => opened.push(openedId),
+  });
+  await list.refresh();
+  const card = container.querySelector(`[data-memo-id="${id}"]`);
+
+  dispatchPointer(card, "pointerdown", 100);
+  dispatchPointer(card, "pointermove", 20); // 문턱(40px) 넘김
+  card.dispatchEvent(
+    new window.Event("pointercancel", { bubbles: true, cancelable: true }),
+  );
+  // 키보드 활성화 모양: 새 pointerdown 없이 곧장 click 만 온다.
+  card.dispatchEvent(
+    new window.Event("click", { bubbles: true, cancelable: true }),
+  );
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container),
+    [id],
+    "pointercancel 뒤엔 삭제가 일어나면 안 된다",
+  );
+  assert.deepEqual(
+    opened,
+    [id],
+    "pointercancel 뒤의 click 은 onOpen 을 불러야 한다(삼켜지면 안 된다)",
+  );
+});
+
+// 검토 1R P2-1(M5 생존): 문턱(40px)을 못 넘는 작은 이동은 스와이프가
+// 아니다 -- 탭(및 약간의 손 떨림)으로 열기가 정상 동작해야 한다.
+test("문턱 미만 이동은 스와이프가 아니다 -- 탭으로 열리고 삭제되지 않는다(P2-1)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "살짝 흔들린 메모", 100);
+  const clock = makeFakeClock();
+  const opened = [];
+  const { list } = makeList(container, adapter, clock, {
+    onOpen: (openedId) => opened.push(openedId),
+  });
+  await list.refresh();
+  const card = container.querySelector(`[data-memo-id="${id}"]`);
+
+  dispatchPointer(card, "pointerdown", 100);
+  dispatchPointer(card, "pointermove", 95); // 5px, 문턱 미만
+  dispatchPointer(card, "pointerup", 95);
+  card.dispatchEvent(
+    new window.Event("click", { bubbles: true, cancelable: true }),
+  );
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container),
+    [id],
+    "문턱 미만 이동으로 삭제되면 안 된다",
+  );
+  assert.deepEqual(
+    opened,
+    [id],
+    "탭으로는 열려야 한다(onOpen 1회, mount 경유)",
+  );
+  const record = await adapter.get(id);
+  assert.equal(record.deletedAt, null, "삭제시각은 null 그대로여야 한다");
+});
+
+// 검토 1R P2-2(M6·M7 생존): 되돌리기 토스트 자체의 자동 숨김이 7초
+// 경계에서 고정돼 있는지(하드 삭제와는 별개의 축 -- 위 ③ 시험은 저장소
+// 쪽만 본다). UNDO_TOAST_MS 를 바꾸거나(M6) 숨김 타이머를 없애면(M7)
+// 이 시험이 빨개진다.
+test("되돌리기 토스트는 6999ms 에는 보이고 7000ms 에는 자동으로 숨는다(P2-2 경계)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "토스트 경계 메모", 100);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  swipe(container.querySelector(`[data-memo-id="${id}"]`));
+  await settle();
+  assert.equal(
+    toast.element.hidden,
+    false,
+    "스와이프 직후 토스트가 보여야 한다",
+  );
+
+  clock.advance(6999);
+  assert.equal(
+    toast.element.hidden,
+    false,
+    "6999ms 에는 아직 토스트가 보여야 한다",
+  );
+
+  clock.advance(1);
+  assert.equal(
+    toast.element.hidden,
+    true,
+    "7000ms 에는 토스트가 자동으로 숨겨져야 한다",
+  );
+});
+
+// 검토 1R P2-3(M10 생존): 스와이프 삭제 저장(adapter.put)이 거부되면
+// unhandledRejection 으로 새면 안 되고, 책임자 결정④ 문구로 실패를
+// 보여주되 카드는 그대로 남아야 한다(renderMemoListError 와 달리 목록을
+// 지우지 않는다). 재시도를 누르면(같은 동작을 다시 시도) 저장 계층이
+// 되살아 있으니 정상 스와이프 삭제 경로(숨김+토스트)로 끝난다.
+test("저장 실패: adapter.put 거부 시 unhandledRejection 없이 표시되고 카드가 남으며, 재시도하면 성공한다(P2-3)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "저장 실패 메모", 100);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+  assert.deepEqual(cardIds(container), [id]);
+
+  const rejections = [];
+  const onRejection = (err) => rejections.push(err);
+  process.on("unhandledRejection", onRejection);
+
+  try {
+    adapter.forceNextPutFailures(1);
+    swipe(container.querySelector(`[data-memo-id="${id}"]`));
+    await settle();
+    await settle();
+
+    assert.deepEqual(
+      rejections,
+      [],
+      "unhandledRejection 이 0이어야 한다(P2-3)",
+    );
+    assert.deepEqual(
+      cardIds(container),
+      [id],
+      "저장 실패 뒤에도 카드는 남아있어야 한다",
+    );
+    const errorEl = container.querySelector(".memo-list-error");
+    assert.ok(errorEl, "저장 실패 표시(재시도 겸용)가 떠야 한다");
+    assert.equal(errorEl.textContent, SAVE_ERROR_MESSAGE);
+    assert.equal(
+      toast.element.hidden,
+      true,
+      "저장이 실패했으니 되돌리기 토스트는 뜨면 안 된다",
+    );
+
+    errorEl.click();
+    await settle();
+    await settle();
+
+    assert.deepEqual(
+      cardIds(container),
+      [],
+      "재시도가 성공하면 정상 스와이프 삭제 경로로 카드가 숨겨져야 한다",
+    );
+    assert.equal(
+      toast.element.hidden,
+      false,
+      "재시도 성공 뒤엔 되돌리기 토스트가 떠야 한다",
+    );
+    const record = await adapter.get(id);
+    assert.ok(record.deletedAt !== null, "저장소에도 삭제가 반영돼야 한다");
+  } finally {
+    process.off("unhandledRejection", onRejection);
+  }
 });
