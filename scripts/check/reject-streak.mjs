@@ -85,18 +85,32 @@ import { execSync, execFileSync } from "node:child_process";
 //   fail-closed 다(표지가 「사라져」 missing/pending 으로 떨어지지, 없는 표지가
 //   생기지 않는다).
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+// HYK-434 3R(판정 ⓐ · P2-1 수리): G1 판독 경로«만»을 위한 넓은 펜스
+// 열림 탐지 -- 들여쓰기 칸수를 0~3으로 좁히지 않고(`[ \t]*`) 임의 길이로
+// 받는다. 목록 항목 안의 펜스(흔히 4칸 이상)까지 "인용"으로 가리기
+// 위해서다. ⛔이 상수 자체를 FENCE_OPEN_RE 대신 쓰는 호출자는 아래
+// maskFencedBlocks의 `wideIndent` 옵션을 통해서만 들어온다 -- 옵션
+// 미지정(기본값 false) 호출은 여전히 FENCE_OPEN_RE 하나만 본다(바이트
+// 단위로 그대로).
+const FENCE_OPEN_WIDE_RE = /^[ \t]*(`{3,}|~{3,})/;
 
 function blankKeepingNewlines(text) {
   return text.replace(/[^\n]/g, " ");
 }
 
-function maskFencedBlocks(content) {
+// HYK-434 3R: `wideIndent`(기본 false)는 maskQuotedMarkerRegions의 새
+// `indentedBlocks` 옵션이 켜졌을 때만 true로 넘어온다 -- 옵션을 넘기지
+// 않는 기존 호출자 전부(이 저장소의 다른 11파일)는 이 함수 바이트 동작이
+// 전혀 바뀌지 않는다.
+function maskFencedBlocks(content, { wideIndent = false } = {}) {
+  const fenceOpenRe = wideIndent ? FENCE_OPEN_WIDE_RE : FENCE_OPEN_RE;
+  const closerIndentPart = wideIndent ? "[ \\t]*" : " {0,3}";
   let fence = null;
   return content
     .split("\n")
     .map((line) => {
       if (fence === null) {
-        const opened = FENCE_OPEN_RE.exec(line);
+        const opened = fenceOpenRe.exec(line);
         if (!opened) return line;
         fence = { char: opened[1][0], len: opened[1].length };
         return blankKeepingNewlines(line);
@@ -110,12 +124,38 @@ function maskFencedBlocks(content) {
       // 정규식이 `m` 플래그를 써 `$` 가 `\r` 앞에서도 맞기 때문이고, 여기는
       // 줄 단위로 직접 대조하므로 그 도움을 받지 못한다.
       const closer = new RegExp(
-        `^ {0,3}\\${fence.char}{${fence.len},}[ \t\r]*$`,
+        `^${closerIndentPart}\\${fence.char}{${fence.len},}[ \t\r]*$`,
       );
       if (closer.test(line)) fence = null;
       return blankKeepingNewlines(line);
     })
     .join("\n");
+}
+
+// HYK-434 3R(판정 ⓐ): 4칸 이상 들여쓴 「코드 블록」(펜스 없이, CommonMark의
+// 들여쓴 코드블록 관례 -- 빈 줄(또는 문서 맨 앞) 뒤에 4칸 이상 들여쓴 줄이
+// 연속하는 구간)을 가린다. G1 판독 경로«만» 쓴다(아래 maskQuotedMarkerRegions
+// 의 indentedBlocks 옵션에서만 호출). 기본 호출자(옵션 없음)는 이 함수 자체를
+// 전혀 타지 않는다.
+const INDENTED_CODE_LINE_RE = /^(?: {4,}|\t)\S/;
+
+function maskIndentedCodeBlocks(content) {
+  const lines = content.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const blankBefore = i === 0 || lines[i - 1].trim() === "";
+    if (blankBefore && INDENTED_CODE_LINE_RE.test(lines[i])) {
+      let j = i;
+      while (j < lines.length && INDENTED_CODE_LINE_RE.test(lines[j])) {
+        lines[j] = blankKeepingNewlines(lines[j]);
+        j += 1;
+      }
+      i = j;
+      continue;
+    }
+    i += 1;
+  }
+  return lines.join("\n");
 }
 
 // HYK-469: 백틱 1개로 감싼 인라인 코드 구간(줄을 못 건넌다 -- CommonMark
@@ -191,8 +231,23 @@ function maskHtmlComments(content) {
 // 쓰지 않는다(위 주석). 내보내는 이유는 시험이 판별식 자체를 직접 재기
 // 위해서다 -- 축마다 각자 복사본을 만들면 조용히 어긋난다(이 파일이
 // DONE_RE/TASK_ID_RE_G 를 내보내는 것과 같은 재사용 규율).
-export function maskQuotedMarkerRegions(content) {
-  return maskHtmlComments(maskFencedBlocks(content));
+// HYK-434 3R(판정 ⓐ): `indentedBlocks`(기본 false)는 G1 판독 경로만 켠다
+// (relay-handshake.mjs의 resolveG1StandaloneLine) -- 옵션을 넘기지 않는
+// 모든 기존 호출자는 이 함수의 바이트 단위 동작이 전혀 바뀌지 않는다
+// (maskFencedBlocks의 wideIndent=false 기본값 + maskIndentedCodeBlocks을
+// 아예 거치지 않음). 켜지면 ⑴ 임의 들여쓰기의 펜스(목록 항목 안 포함)와
+// ⑵ 4칸 이상 들여쓴 코드 블록도 "인용"으로 가려 부재·중복 계수 양쪽에서
+// 제외한다(P2-1 수리 -- G1 키 정규식의 앞 공백 무제한과 이 마스커의
+// 0~3칸 한도가 어긋나 생긴 마스킹 우회를 닫는다).
+export function maskQuotedMarkerRegions(
+  content,
+  { indentedBlocks = false } = {},
+) {
+  const fenced = maskFencedBlocks(content, { wideIndent: indentedBlocks });
+  const withIndentedCode = indentedBlocks
+    ? maskIndentedCodeBlocks(fenced)
+    : fenced;
+  return maskHtmlComments(withIndentedCode);
 }
 
 // HYK-411 exit-claim-mask 2차: 닫히지 않은 펜스가 «어느 줄에서 열렸는지」를

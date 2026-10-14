@@ -2466,10 +2466,318 @@ export function resolveDispatchRecordExistence({
         ).toISOString()}) -- a dispatch record written at or after completion cannot serve as proof of assignment (fail-closed; 같은 밀리초도 "그 전"으로 인정하지 않는다)`,
       };
     }
-    return { ok: true, matches: timely.length };
+    // HYK-434 §2-1 (추가 필드, 기존 호출자 무회귀): `matches`(개수)만으로는
+    // G1 대조가 비교할 실제 레코드(runtime_task_id/assignee_pane_key)에
+    // 닿을 수 없다 -- 그 값들을 복제해서 다시 읽지 않고(§HYK-450② 복제
+    // 금지), 이 함수가 이미 계산한 바로 그 필터 결과를 추가 필드로
+    // 노출한다(기존 `ok`/`matches`/`state` 의미는 전혀 바뀌지 않는다).
+    return { ok: true, matches: timely.length, matchRecords: timely };
   }
 
-  return { ok: true, matches: matches.length };
+  return { ok: true, matches: matches.length, matchRecords: matches };
+}
+
+// ---------------------------------------------------------------------------
+// HYK-434: G1 기계 대조 -- worker-dispatch-rule.md §1이 요구하는 "결과 파일
+// 맨 위 3줄"(dispatch_verified:/task_id_from_dispatch:/pane_match:)이
+// 실제 배달 영수증 원장과 맞는지 기계로 대조한다. 이 세 줄 자체는 워커의
+// 자기진술이라 2026-08-25 HYK-357 inject-3 실물처럼 손으로 빠뜨리거나
+// (ORCH-99 인계서 ⓕ-3) 앞 라운드 결과를 머리만 갈아끼워 위조해도 어떤
+// 게이트도 못 잡았다(coder-task.md §1 원문) -- 이 축이 그 빈칸을 닫는다.
+//
+// ⛔기계는 «대조만»(§23-4-1, 메모리 "기계가 워커 증명값을 채우면 헛시험") --
+// 이 파일(소비기)도, 배달기도 G1 값을 결과 파일에 써 넣지 않는다. 기준값은
+// 오직 배달 영수증 원장(resolveDispatchRecordExistence가 이미 role+
+// harness_task_label로 매칭하고, LATE 축으로 시간 선후까지 확인한 바로 그
+// `matchRecords`)에서만 온다 -- 새 원장 읽기를 만들지 않는다(§HYK-450②
+// 복제 금지 규율).
+//
+// 줄 판독은 head_commit:(HYK-383, resolveHeadCommitField)과 같은 계약이다:
+// column-0 단독 줄만(`[ \t]*`, 개행을 삼키지 않는다), maskQuotedMarkerRegions
+// 로 인용/펜스 밖만 본다(HYK-449/HYK-450과 같은 함정 -- 코드블록 안에 인용된
+// G1 3줄도 "표지"로 오인하지 않는다), 같은 키가 인용 밖에 2번 이상이면
+// AMBIGUOUS로 거부한다(HYK-486 선례 -- 조용히 하나를 고르지 않는다).
+//
+// HYK-434 2R(책임자 축 ⓐ -- 형식→값 대조 좁히기): 줄 앞 공백·목록 기호
+// (`- `/`* `)·키를 감싸는 굵게 장식(`**`)·키 대소문자·반각/전각 콜론은
+// «모양»일 뿐이라 거부 사유가 되지 않는다 -- 아래 세 정규식의
+// `[ \t]*(?:[-*][ \t]+)?\*{0,2}...\*{0,2}[ \t]*[:：][ \t]*`가 그 장식을
+// 구조적으로 흡수한다(대소문자는 `i` 플래그). 값 자체의 따옴표·백틱·
+// 굵게 장식은 stripG1ValueDecoration이 캡처 뒤에 벗긴다(regex는 가능한
+// 만큼만 구조적으로 흡수하고, 나머지는 후처리가 덮는다 -- 두 겹이라도
+// 중복 손실 없음, 아래 함수 주석 참조).
+const DISPATCH_VERIFIED_RE_G =
+  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}dispatch_verified\*{0,2}[ \t]*[:：][ \t]*(\S.*?)[ \t]*$/gim;
+const DISPATCH_VERIFIED_ANYWHERE_RE = /dispatch_verified[ \t]*[:：]/i;
+
+const TASK_ID_FROM_DISPATCH_RE_G =
+  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}task_id_from_dispatch\*{0,2}[ \t]*[:：][ \t]*(\S.*?)[ \t]*$/gim;
+const TASK_ID_FROM_DISPATCH_ANYWHERE_RE = /task_id_from_dispatch[ \t]*[:：]/i;
+
+// pane_match 줄 모양(worker-dispatch-rule.md §1 원문): "<값1> == <값2> ?
+// 일치|불일치". HYK-434 3R(책임자 판정 ⓒ "pane key 모양 토큰을 전부
+// 뽑아 전부 = assignee_pane_key · 최소 1개"): 더는 「구분자 앞뒤 두
+// 토큰」 정규식으로 값을 읻지 않는다 -- 2R의 그 구조가 P1-1(공백 없는
+// `==`가 탐욕적 `(\S+)`에 의해 `P=` 로 망가져 거부되는 회귀 + 토큰
+// 1개·화살표 등 구분자 모양 거부)과 P1-2(셋째 토큰이 달라도 소비되는
+// 과관용) 둘 다의 공통 뿌리였다(검토 2R 반려 원문). 이제 키 줄의 콜론
+// 뒤 «값부 전체»(V)를 한 캡처로만 뽑고(§2-1 요구 2 "V를 구분자로
+// 쪼개지 마라"), 구분자·`?`·끝 낱말의 모양은 전혀 보지 않는다 --
+// resolveG1PaneMatchVerdict가 V에서 pane key 모양 토큰을 정규식으로
+// «전부» 추출해 값으로만 판정한다.
+const PANE_MATCH_RE_G =
+  /^[ \t]*(?:[-*+][ \t]+|\d+\.[ \t]+)?\*{0,2}pane_match\*{0,2}[ \t]*[:：][ \t]*\*{0,2}[ \t]*(\S.*?)[ \t]*$/gim;
+const PANE_MATCH_ANYWHERE_RE = /pane_match[ \t]*[:：]/i;
+
+// HYK-434 3R §2-1 요구 3: pane key 모양 토큰(uuid:uuid, 대소문자 무시)을
+// V 안에서 «전부» 뽑는다. 앞뒤 경계(lookbehind/lookahead)는 영숫자·`_`·
+// `:`·`-` 가 아닌 자리여야 한다 -- 그래서 `<pane>x`(접미 위조) 같은 값은
+// 토큰으로 잡히지 않는다(§2-1 요구 3 "접미 위조가 접두 일치로 통과하지
+// 않음", 1R 검토 재현 `Px == Px`). 구분자(`==`/`=`/`->`/유니코드 화살표
+// 등)는 그 글자들이 이미 경계 제외 집합 밖이므로 "뽑기"에 아무 영향이
+// 없다 -- 이것이 구분자·공백의 «모양»을 더는 보지 않는 지점이다.
+const PANE_TOKEN_RE_G =
+  /(?<![0-9A-Za-z_:-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9A-Za-z_:-])/gi;
+
+// HYK-434 2R: 캡처된 값 양끝의 따옴표·백틱·굵게 장식을 벗긴다(책임자 축 ⓐ
+// 점2 -- "값 양끝의 따옴표(' ")·백틱·굵게 장식을 벗긴다"). 위 세 정규식이
+// 이미 구조적으로 대부분 흡수하지만(키 쪽 `**`), "**key: value**"처럼
+// 값 뒤에 붙는 굵게 닫힘이나 `` `value` ``/`"value"` 같은 값 자체의
+// 장식은 regex가 아니라 여기서 한 번 더 벗긴다 -- 이중 안전망이라도
+// 바이트가 겹쳐 사라지는 일은 없다(trim은 공백만, 장식 문자 제거는
+// 좌우 run 각각 한 번뿐).
+function stripG1ValueDecoration(raw) {
+  return raw
+    .trim()
+    .replace(/^[`'"*]+/, "")
+    .replace(/[`'"*]+$/, "")
+    .trim();
+}
+
+// head_commit:(resolveHeadCommitField)과 같은 세 갈래(AMBIGUOUS/MALFORMED/
+// MISSING)를 일반화한다 -- G1 3줄 모두 같은 column-0 단독 줄 계약을 쓰므로
+// 세 번 복제하지 않고 이 한 함수로 모은다.
+function resolveG1StandaloneLine(content, { reGlobal, reAnywhere, label }) {
+  // HYK-434 3R(판정 ⓐ · P2-1 수리): G1 판독 경로만 들여쓴 펜스·코드 블록
+  // 마스킹을 켠다(reject-streak.mjs maskQuotedMarkerRegions의
+  // indentedBlocks 옵션) -- G1 키 정규식이 앞 공백을 몇 칸이든 받는 것과
+  // 공용 마스커의 기본 0~3칸 한도가 어긋나 생긴 마스킹 우회를 닫는다.
+  // 다른 11개 호출자는 옵션을 넘기지 않으므로 바이트 단위로 그대로다.
+  const scan = maskQuotedMarkerRegions(content, { indentedBlocks: true });
+  const matches = [...scan.matchAll(reGlobal)];
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      reason: `${label} has ${matches.length} standalone lines -- 어느 것이 최종인지 결정할 수 없다 (ambiguous, cannot resolve, HYK-434)`,
+    };
+  }
+  if (matches.length === 1) return { ok: true, match: matches[0] };
+  if (reAnywhere.test(scan)) {
+    return {
+      ok: false,
+      reason: `${label} present but not a standalone column-0 well-formed line (found mid-line, or value doesn't match the required shape, HYK-434)`,
+    };
+  }
+  return {
+    ok: false,
+    reason: `${label} missing (no standalone column-0 line found, HYK-434)`,
+  };
+}
+
+// HYK-434-lint-2: extracted from resolveG1DispatchVerificationVerdict (same
+// ESLint max-lines-per-function reason as this file's other extractions) --
+// 재배달 2건 이상일 때 recorded_at 기준 가장 최근 레코드를 고른다. 파싱
+// 불가능한 recorded_at은 후보에서 제외한다(resolveDispatchRecordExistence의
+// LATE 축이 이미 "파싱 불가 = 근거 못 됨"을 쓰는 것과 같은 규율).
+function resolveLatestDispatchRecord(records) {
+  return records.reduce((best, r) => {
+    const t = Date.parse(r?.recorded_at);
+    if (!Number.isFinite(t)) return best;
+    const bestT = best ? Date.parse(best.recorded_at) : -Infinity;
+    return t > bestT ? r : best;
+  }, null);
+}
+
+// dispatchRecordVerdict(위 resolveDispatchRecordExistence의 반환값)가 이미
+// ok:true인 뒤에만 불린다 -- 어댑터 A(`dispatchRecordVerdict.skipped`,
+// 원장 포인터 자체가 없음)는 이 축도 건너뛰되, 건너뛴 사실을 한 줄
+// 고지한다(§2-4 "침묵 0"). 포인터는 있는데 ABSENT/LOOKUP_FAILED/LATE면
+// dispatchRecordVerdict 자신이 이미 ok:false로 거부해 호출부
+// (checkRelayHandshake)가 이 함수를 아예 부르지 않는다 -- 그 세 상태의
+// 기존 HYK-387 동작은 이 라운드가 손대지 않는다(§2-4).
+//
+// ⭐DONE 한정(§2-5): 이 함수는 checkRelayHandshake의 doneResolved.ok===true
+// 본문(이미 DONE으로 확정된 경로)에서만 불린다 -- BLOCKED/NEEDS_INPUT은
+// 그 분기에 도달하기 전에 이미 returnDoneResolvedVerdict로 빠져나가므로
+// (resolveHandshakeCore 참조), 이 함수를 그 경로에 새로 결선하지 않는 한
+// BLOCKED/NEEDS_INPUT 라운드는 구조적으로 이 축 밖이다.
+export function resolveG1DispatchVerificationVerdict({
+  resultContent,
+  dispatchRecordVerdict,
+}) {
+  if (dispatchRecordVerdict.skipped) {
+    console.error(
+      "relay-handshake: G1 dispatch-ledger cross-check skipped (어댑터 A -- this round has no dispatch-receipt ledger pointer, HYK-434) -- 'dispatch_verified:'/'task_id_from_dispatch:'/'pane_match:' header lines are NOT cross-checked against the ledger for this round",
+    );
+    return { ok: true, skipped: true };
+  }
+
+  // dispatchRecordVerdict.ok===true && !skipped는 호출부가 이미 ABSENT/
+  // LOOKUP_FAILED/LATE를 걸러냈다는 뜻이라 matchRecords는 정상 경로에서
+  // 항상 1건 이상이다 -- 그래도 조용히 통과시키지 않고 fail-closed한다.
+  const records = dispatchRecordVerdict.matchRecords ?? [];
+  const latest = resolveLatestDispatchRecord(records);
+  if (!latest) {
+    return {
+      ok: false,
+      reason: `G1 cross-check (HYK-434): no usable dispatch ledger record to cross-check against (matchRecords absent or every recorded_at unparseable -- unexpected for an already-ok dispatchRecordVerdict, fail-closed)`,
+    };
+  }
+
+  const dv = resolveG1StandaloneLine(resultContent, {
+    reGlobal: DISPATCH_VERIFIED_RE_G,
+    reAnywhere: DISPATCH_VERIFIED_ANYWHERE_RE,
+    label: "'dispatch_verified:' line",
+  });
+  if (!dv.ok) {
+    return {
+      ok: false,
+      reason: `G1 cross-check failed (HYK-434): ${dv.reason}`,
+    };
+  }
+  const dvValue = stripG1ValueDecoration(dv.match[1]);
+  if (dvValue.toLowerCase() !== "yes") {
+    return {
+      ok: false,
+      reason: `G1 cross-check failed (HYK-434): 'dispatch_verified:' line value mismatch -- expected 'yes', found '${dvValue}'`,
+    };
+  }
+
+  const tid = resolveG1StandaloneLine(resultContent, {
+    reGlobal: TASK_ID_FROM_DISPATCH_RE_G,
+    reAnywhere: TASK_ID_FROM_DISPATCH_ANYWHERE_RE,
+    label: "'task_id_from_dispatch:' line",
+  });
+  if (!tid.ok) {
+    return {
+      ok: false,
+      reason: `G1 cross-check failed (HYK-434): ${tid.reason}`,
+    };
+  }
+  const tidValue = stripG1ValueDecoration(tid.match[1]);
+  if (tidValue.toLowerCase() !== String(latest.runtime_task_id).toLowerCase()) {
+    return {
+      ok: false,
+      reason: `G1 cross-check failed (HYK-434): 'task_id_from_dispatch:' line value mismatch -- expected '${latest.runtime_task_id}' (most recent matching dispatch ledger record, recorded_at=${latest.recorded_at}), found '${tidValue}'`,
+    };
+  }
+
+  const paneVerdict = resolveG1PaneMatchVerdict({
+    resultContent,
+    expectedPaneKey: String(latest.assignee_pane_key),
+    recordedAt: latest.recorded_at,
+  });
+  if (!paneVerdict.ok) return paneVerdict;
+
+  return { ok: true, usedRecordedAt: latest.recorded_at };
+}
+
+// HYK-434-lint-3: extracted from resolveG1DispatchVerificationVerdict (same
+// ESLint max-lines-per-function/complexity reason as this file's other
+// HYK-434-lint-2 extraction) -- pane_match 줄 하나를 읽어 값부(V) 안의
+// pane key 모양 토큰을 «전부» 뽑아 판정한다(§2-1 요구 3~7, 책임자 판정
+// ⓒ "전부 뽑아 전부 = assignee_pane_key · 최소 1개").
+// HYK-434 3R: 사유·판정 순서는 더 이상 2R과 바이트 단위로 같지 않다 --
+// "구분자 앞뒤 두 토큰" 대조에서 "값부 전체에서 뽑은 토큰 전체" 대조로
+// 비교 기준 자체가 바뀌었다(검토 2R P1-2 수리의 핵심, ⓕ 축 기록).
+function resolveG1PaneMatchVerdict({
+  resultContent,
+  expectedPaneKey,
+  recordedAt,
+}) {
+  const pm = resolveG1StandaloneLine(resultContent, {
+    reGlobal: PANE_MATCH_RE_G,
+    reAnywhere: PANE_MATCH_ANYWHERE_RE,
+    label: "'pane_match:' line",
+  });
+  if (!pm.ok) {
+    return {
+      ok: false,
+      reason: `G1 cross-check failed (HYK-434): ${pm.reason}`,
+    };
+  }
+  // §2-1 요구 2: V(콜론 뒤 값부 전체)를 구분자로 쪼개지 않는다.
+  const valuePart = pm.match[1];
+  // §2-1 요구 3: pane key 모양 토큰을 전부 뽑는다(원문 그대로 -- 가공
+  // 하지 않는다, §2-1 요구 7 "사유에 캡처 가공 값을 넣지 마라").
+  const tokens = [...valuePart.matchAll(PANE_TOKEN_RE_G)].map((m) => m[0]);
+  // §2-1 요구 4: 토큰 0개 = 형식 거부(값 거부가 아니다).
+  if (tokens.length === 0) {
+    return {
+      ok: false,
+      reason: `G1 cross-check failed (HYK-434): 'pane_match:' line has no pane key token (HYK-434, line: '${valuePart}')`,
+    };
+  }
+  // §2-1 요구 5: 뽑은 토큰 전부가 영수증 값과 같아야 한다(대소문자
+  // 무시) -- 하나라도 다르면 값 거부, 사유에 다른 토큰 전부를 원문
+  // 그대로 적는다(여럿이면 전부).
+  const expectedLower = expectedPaneKey.toLowerCase();
+  const mismatched = tokens.filter((t) => t.toLowerCase() !== expectedLower);
+  if (mismatched.length > 0) {
+    return {
+      ok: false,
+      reason: `G1 cross-check failed (HYK-434): 'pane_match:' line value mismatch -- expected '${expectedPaneKey}' (most recent matching dispatch ledger record, recorded_at=${recordedAt}), found '${mismatched.join("', '")}'`,
+    };
+  }
+  // §2-1 요구 6: 전부 같으면 끝으로 "불일치" 선언 여부만 본다(판정 ⓑ).
+  // 끝 낱말 `일치`·`?`의 유무·철자는 보지 않는다.
+  if (valuePart.includes("불일치")) {
+    return {
+      ok: false,
+      reason: `G1 cross-check failed (HYK-434): 'pane_match:' line mismatch -- worker declared 불일치 even though both pane keys equal '${expectedPaneKey}' (HYK-434)`,
+    };
+  }
+  return { ok: true };
+}
+
+// HYK-434-lint-1: extracted from checkRelayHandshake (same ESLint max-lines-
+// per-function reason as this file's other HYK-257-done-stamp-lint-1/
+// HYK-398 extractions) -- composes the two checks that sit at this exact
+// spot in the pipeline (resolveDispatchRecordExistence then, only if that
+// passed, resolveG1DispatchVerificationVerdict) and returns the ok:false
+// verdict to return immediately, or null when neither rejects (proceed).
+// Order/reasons/behavior are byte-identical to the inline version this
+// replaces -- only moved.
+function resolveDispatchAndG1Verdict({
+  role,
+  taskId,
+  dispatchLedgerPath,
+  doneAt,
+  harnessDir,
+  judgedRegion,
+}) {
+  const dispatchRecordVerdict = resolveDispatchRecordExistence({
+    role,
+    taskId,
+    dispatchLedgerPath,
+    doneAtMs: doneAt.getTime(),
+    harnessDir,
+  });
+  if (!dispatchRecordVerdict.ok) return dispatchRecordVerdict;
+
+  // HYK-434: dispatchRecordVerdict와 같은 자리 원칙(§4 무회귀) -- 원장에
+  // 이 라운드 배정 기록이 있다고 이미 확인된(ok:true) 뒤에만 G1 3줄을 그
+  // 기록과 대조한다. 어댑터 A(dispatchRecordVerdict.skipped)는 이 축도
+  // 건너뛴다(한 줄 고지). DONE 소비 경로에만 결선한다(BLOCKED/NEEDS_INPUT은
+  // 이 분기에 도달하기 전에 이미 빠져나간다, resolveG1DispatchVerificationVerdict
+  // 자신의 헤더 참조).
+  const g1Verdict = resolveG1DispatchVerificationVerdict({
+    resultContent: judgedRegion,
+    dispatchRecordVerdict,
+  });
+  if (!g1Verdict.ok) return g1Verdict;
+
+  return null;
 }
 
 // HYK-257-done-stamp-lint-1: extracted from checkRelayHandshake (same
@@ -3266,16 +3574,19 @@ export function checkRelayHandshake({
   if (!consecutiveRunnerReceiptsVerdict.ok)
     return consecutiveRunnerReceiptsVerdict;
 
-  // HYK-387: headCommitVerdict와 같은 자리 원칙(§4 무회귀) -- REVIEW 한정
-  // 아님(오늘의 실사고는 CODER 라운드였다, coder-task.md §1 원문).
-  const dispatchRecordVerdict = resolveDispatchRecordExistence({
+  // HYK-387/HYK-434: headCommitVerdict와 같은 자리 원칙(§4 무회귀) -- REVIEW
+  // 한정 아님(오늘의 실사고는 CODER 라운드였다, coder-task.md §1 원문).
+  // quality-check max-lines-per-function 상한을 지키려고 checkRewriteAndStaleness
+  // 등과 같은 이유로 뽑았다(판정/사유/순서는 조금도 바뀌지 않는다).
+  const dispatchAndG1Verdict = resolveDispatchAndG1Verdict({
     role,
     taskId,
     dispatchLedgerPath,
-    doneAtMs: doneAt.getTime(),
+    doneAt,
     harnessDir,
+    judgedRegion,
   });
-  if (!dispatchRecordVerdict.ok) return dispatchRecordVerdict;
+  if (dispatchAndG1Verdict) return dispatchAndG1Verdict;
 
   const sideEffectVerdict = runCompletionSideEffects({
     role,

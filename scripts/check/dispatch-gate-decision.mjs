@@ -3520,6 +3520,15 @@ function bestEffortStampDroppedAt(taskPath, args) {
 // function's own header comment).
 export const RESULT_FILE_LINE_RE = /^result_file:[ \t]*\S.*$/im;
 
+// HYK-480-3 §2-1 (책임자 판정 A, P2-1 수리): 인용 밖에 있는 「빈」
+// result_file: 키인지를 같은 마스킹 관례로 판정하는 전용 정규식 --
+// fillEmptyLegacyKeysInPlace가 각 키마다 동적으로 만드는
+// `new RegExp(`^${key}:[ \t]*$`, "gim")`과 같은 "같은 줄 안에 값이 없다"
+// 모양을 result_file 하나에 고정한 사본이다(존재 여부만 보는 호출부라
+// g 플래그 없이 둔다). export는 이 파일의 다른 정규식(RESULT_FILE_LINE_RE
+// 등)과 같은 "테스트 전용 대조" 관례.
+export const RESULT_FILE_EMPTY_KEY_RE = /^result_file:[ \t]*$/im;
+
 const HARNESS_GITIGNORE_NOTE_TEXT =
   ".harness/ 는 git-ignore라 커밋 diff에 절대 안 나온다 -- 검토는 위 절대경로 파일을 직접 열어 확인하라(HYK-465 기계 주입, 손 기억 의존 금지).";
 const WORKTREE_DISCIPLINE_TEXT =
@@ -3757,31 +3766,44 @@ function bestEffortInjectResultPaths(taskPath, args) {
   if (!role) return;
   try {
     const original = readFileSync(taskPath, "utf8");
-    // HYK-480-2 §1 (P2-4 수리): 분기 판정·삽입 위치를 모두 masked 텍스트
-    // 기준으로 한다 -- maskQuotedMarkerRegions는 길이를 보존하며 가리므로
-    // (blankKeepingNewlines) masked 텍스트에서 구한 오프셋은 원문에서도
-    // 그대로 유효하다(resolveHeaderTaskId가 이미 이 전제로 동작). 첫
-    // `result_file:` 매치가 인용(펜스/HTML 주석) 밖이면 masked 텍스트에도
-    // 그대로 살아남아 지금까지의 동작과 바이트 하나도 다르지 않다.
+    // HYK-480-2 §1 (P2-4 수리) + HYK-480-3 주석 정리(P3-1): 분기 판정·
+    // 삽입 위치를 모두 masked 텍스트 기준으로 한다 -- maskQuotedMarkerRegions
+    // 는 길이를 보존하며 가리므로(blankKeepingNewlines) masked 텍스트에서
+    // 구한 오프셋은 원문에서도 그대로 유효하다(resolveHeaderTaskId가
+    // 이미 이 전제로 동작). masked 텍스트에 「값 있는」 result_file: 줄이
+    // 살아남으면(=그 줄이 인용 밖에 있었다는 뜻) existingMatch로 잡힌다.
+    // 실제 판정은 "첫 매치"가 아니라 "인용 밖에 값 있는 그 줄이 있는가"다
+    // -- 인용 안 예시는 masking으로 사라지므로 섞이지 않는다.
     const maskedOriginal = maskQuotedMarkerRegions(original);
     const existingMatch = maskedOriginal.match(RESULT_FILE_LINE_RE);
     if (existingMatch) {
       handleAlreadyInjectedResultFile(taskPath, role, original, existingMatch);
       return;
     }
-    // HYK-480-2 §2 요구1 (fail-closed): masked 텍스트에는 매치가 없는데
-    // 원문(raw)에는 있다면 -- 첫 `result_file:` 이 인용(펜스/HTML 주석)
-    // 안에만 있다는 뜻이다(P2-4 실사고 모양 그 자체). 이 경우 "줄이 아예
-    // 없음"(바로 아래 분기, 전체 블록 주입)으로 떨어지면 매 실행마다
-    // 인용 안에 점검표를 거듭 덧붙이게 된다(수리 전 재현: 9->18->27->36
-    // 줄, 호출당 +1303바이트, 상한 없음) -- 채움 자체를 거부하고 조용하지
-    // 않은 로그만 남긴다(§2 "거부 로그는 조용하지 않아야 한다").
-    const rawMatchAnywhere = original.match(RESULT_FILE_LINE_RE);
-    if (rawMatchAnywhere) {
-      console.log(
-        `dispatch-gate-decision: result-path injection REFUSED (fail-closed, HYK-480-2 P2-4) -- no 'result_file:' line outside a quoted/fenced region (raw match: '${rawMatchAnywhere[0].trim()}') -- not injecting paths, not filling checklist, task file left byte-unchanged -- ${taskPath}`,
-      );
-      return;
+    // HYK-480-3 §2-1 (책임자 판정 A, P2-1 수리): 인용 밖에 「빈」
+    // result_file: 키가 있으면 -- 값 있는 result_file: 줄이 인용 안에만
+    // 있더라도 -- 거부하지 말고 그 빈 키를 제자리에서 채운다
+    // (fillEmptyLegacyKeysInPlace 경로로 떨어뜨린다, 바로 아래). 그 함수가
+    // 이미 "인용 밖 빈 키가 2개 이상이면 거부"(HYK-486)를 쥐고 있으므로
+    // 여기서는 존재 여부만 본다.
+    const hasGenuineEmptyResultFileKey =
+      RESULT_FILE_EMPTY_KEY_RE.test(maskedOriginal);
+    // HYK-480-2 §2 요구1 (fail-closed) + HYK-480-3 §2-1 주석 정리(P3-1):
+    // masked 텍스트에 값 있는 줄도 빈 키도 없는데 원문(raw)에는 값 있는
+    // 줄이 있다면 -- result_file: 이 인용(펜스/HTML 주석) 안에만 있다는
+    // 뜻이다(P2-4 실사고 모양 그 자체). 이 경우 "줄이 아예 없음"(바로
+    // 아래 분기, 전체 블록 주입)으로 떨어지면 매 실행마다 인용 안에
+    // 점검표를 거듭 덧붙이게 된다(수리 전 재현: 9->18->27->36줄, 호출당
+    // +1303바이트, 상한 없음) -- 채움 자체를 거부하고 조용하지 않은
+    // 로그만 남긴다(§2 "거부 로그는 조용하지 않아야 한다").
+    if (!hasGenuineEmptyResultFileKey) {
+      const rawMatchAnywhere = original.match(RESULT_FILE_LINE_RE);
+      if (rawMatchAnywhere) {
+        console.log(
+          `dispatch-gate-decision: result-path injection REFUSED (fail-closed, HYK-480-2 P2-4) -- no non-empty result_file line outside quoted regions (raw match: '${rawMatchAnywhere[0].trim()}') -- not injecting paths, not filling checklist, task file left byte-unchanged -- ${taskPath}`,
+        );
+        return;
+      }
     }
     const harnessDir = resolve(dirname(taskPath));
     const legacyValues = computeLegacyInjectionValues(role, harnessDir);
