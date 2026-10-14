@@ -41,7 +41,46 @@ function displayTitle(title) {
   return title.trim() === "" ? UNTITLED_MEMO_PLACEHOLDER : title;
 }
 
-function buildMemoCard(memo, onOpen) {
+// PRD §5.5 수용 기준① -- 스와이프(터치·포인터, 방향 불문) 거리가 이
+// 임계값을 넘으면 삭제로 판정한다. 포인터 이벤트 하나로 마우스·터치를
+// 함께 다룬다(단축키바·체크칸 탭과 같은 선례, checkbox-tap.mjs 참고).
+const SWIPE_THRESHOLD_PX = 40;
+
+// 스와이프 뒤에 따라오는 합성 click(실기기에서 탭 해제 시 브라우저가
+// 보내는 것)이 카드를 "열기"로 오판하지 않게 막는다. 같은 원소에 등록된
+// 리스너는 등록 순서대로 "at target" 단계에서 불리므로(캡처 플래그와
+// 무관), 이 가드를 onOpen 리스너보다 "먼저" 등록해야 stopImmediatePropagation
+// 으로 onOpen 호출 자체를 끊을 수 있다.
+function attachSwipeToDelete(card, id, onSwipeDelete) {
+  if (!onSwipeDelete) return;
+  let startX = null;
+  let swiped = false;
+
+  card.addEventListener("pointerdown", (event) => {
+    startX = event.clientX;
+    swiped = false;
+  });
+  card.addEventListener("pointermove", (event) => {
+    if (startX === null || swiped) return;
+    if (Math.abs(event.clientX - startX) >= SWIPE_THRESHOLD_PX) {
+      swiped = true;
+    }
+  });
+  card.addEventListener("pointerup", () => {
+    if (swiped) {
+      onSwipeDelete(id);
+    }
+    startX = null;
+  });
+  card.addEventListener("click", (event) => {
+    if (!swiped) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    swiped = false;
+  });
+}
+
+function buildMemoCard(memo, { onOpen, onSwipeDelete }) {
   const card = document.createElement("button");
   card.type = "button";
   card.className = "memo-card";
@@ -56,6 +95,7 @@ function buildMemoCard(memo, onOpen) {
   meta.textContent = formatModifiedAt(memo.updatedAt);
 
   card.append(title, meta);
+  attachSwipeToDelete(card, memo.id, onSwipeDelete);
   card.addEventListener("click", () => onOpen(memo.id));
   return card;
 }
@@ -100,7 +140,7 @@ export function renderMemoListError(container, { onRetry }) {
 export function renderMemoList(
   container,
   memos,
-  { onOpen, emptyMessage = EMPTY_LIST_MESSAGE } = {},
+  { onOpen, emptyMessage = EMPTY_LIST_MESSAGE, onSwipeDelete } = {},
 ) {
   container.textContent = "";
   if (memos.length === 0) {
@@ -108,6 +148,6 @@ export function renderMemoList(
     return;
   }
   for (const memo of memos) {
-    container.append(buildMemoCard(memo, onOpen));
+    container.append(buildMemoCard(memo, { onOpen, onSwipeDelete }));
   }
 }

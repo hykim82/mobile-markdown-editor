@@ -72,6 +72,8 @@ function grabElements() {
     copyToast: document.getElementById("notion-copy-toast"),
     shortcutBar: document.getElementById("shortcut-bar"),
     listRoot: document.getElementById("list-root"),
+    listDeleteToast: document.getElementById("list-delete-toast"),
+    listUndoButton: document.getElementById("list-delete-undo-button"),
     newMemoButton: document.getElementById("new-memo-button"),
     backButton: document.getElementById("back-to-list-button"),
     screens: {
@@ -128,6 +130,10 @@ function main() {
       openMemoInEditor(editor, store, adapter, store.restoreState, id).then(
         () => showScreen(elements.screens, "editor"),
       ),
+    toast: {
+      element: elements.listDeleteToast,
+      undoButton: elements.listUndoButton,
+    },
   });
   wireListNavigation(elements, { editor, store, adapter, list });
 
