@@ -62,6 +62,12 @@
         font: inherit;
         color: inherit;
         cursor: pointer;
+        /* 검토 1R P1-1 실측: touch-action 선언이 없으면(auto) 가로
+           스와이프를 브라우저가 팬 제스처로 가져가 pointercancel 을
+           보내고 pointerup 이 오지 않아 삭제가 한 번도 안 불린다.
+           pan-y 는 세로 스크롤은 그대로 브라우저가 처리하고 가로는
+           페이지(여기서는 스와이프 삭제 리스너)가 받게 한다. */
+        touch-action: pan-y;
       }
       #list-root .memo-card-title {
         font-size: var(--font-size-body);
@@ -88,6 +94,34 @@
         text-align: center;
         font: inherit;
         min-height: 44px;
+        cursor: pointer;
+      }
+      /* PRD §5.5 삭제(+되돌리기) 토스트 -- "+"(new-memo-button, bottom 24px·
+         높이 56px) 위에 겹치지 않게 그 위에 띄운다. notion-copy-toast 와
+         같은 비토큰 다크 배경 선례(그 자리 주석 참고)를 그대로 따른다. */
+      #list-delete-toast {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        bottom: 92px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 16px;
+        border-radius: 8px;
+        background: #2a2d33;
+        color: #fafaf8;
+        font-size: 14px;
+      }
+      #list-delete-undo-button {
+        background: none;
+        border: none;
+        color: var(--color-accent);
+        font: inherit;
+        font-weight: 600;
+        min-height: 44px;
+        padding: 0 4px;
         cursor: pointer;
       }
       #new-memo-button {
@@ -294,6 +328,10 @@
         <h1>메모</h1>
       </div>
       <div id="list-root" class="list"></div>
+      <div id="list-delete-toast" hidden>
+        <span id="list-delete-toast-text">메모를 삭제했어요</span>
+        <button id="list-delete-undo-button" type="button">되돌리기</button>
+      </div>
       <button id="new-memo-button" type="button" aria-label="새 메모">+</button>
     </div>
     <div id="editor-screen" hidden>

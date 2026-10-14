@@ -41,7 +41,55 @@ function displayTitle(title) {
   return title.trim() === "" ? UNTITLED_MEMO_PLACEHOLDER : title;
 }
 
-function buildMemoCard(memo, onOpen) {
+// PRD §5.5 수용 기준① -- 스와이프(터치·포인터, 방향 불문) 거리가 이
+// 임계값을 넘으면 삭제로 판정한다. 포인터 이벤트 하나로 마우스·터치를
+// 함께 다룬다(단축키바·체크칸 탭과 같은 선례, checkbox-tap.mjs 참고).
+const SWIPE_THRESHOLD_PX = 40;
+
+// 스와이프 뒤에 따라오는 합성 click(실기기에서 탭 해제 시 브라우저가
+// 보내는 것)이 카드를 "열기"로 오판하지 않게 막는다. 같은 원소에 등록된
+// 리스너는 등록 순서대로 "at target" 단계에서 불리므로(캡처 플래그와
+// 무관), 이 가드를 onOpen 리스너보다 "먼저" 등록해야 stopImmediatePropagation
+// 으로 onOpen 호출 자체를 끊을 수 있다.
+function attachSwipeToDelete(card, id, onSwipeDelete) {
+  if (!onSwipeDelete) return;
+  let startX = null;
+  let swiped = false;
+
+  card.addEventListener("pointerdown", (event) => {
+    startX = event.clientX;
+    swiped = false;
+  });
+  card.addEventListener("pointermove", (event) => {
+    if (startX === null || swiped) return;
+    if (Math.abs(event.clientX - startX) >= SWIPE_THRESHOLD_PX) {
+      swiped = true;
+    }
+  });
+  card.addEventListener("pointerup", () => {
+    if (swiped) {
+      onSwipeDelete(id);
+    }
+    startX = null;
+  });
+  // 검토 1R P1-1/P3-1: 가로 스와이프 중 브라우저가 팬 제스처로 가져가면
+  // pointerup 대신 pointercancel 이 온다(public/index.html 의
+  // touch-action: pan-y 를 넘는 성분이 있을 때·스크롤과 뒤섞일 때 등).
+  // 여기서 상태를 안 지우면 낡은 swiped=true 가 남아, 다음에 오는 (새
+  // pointerdown 없는) click 하나를 아래 click 가드가 엉뚱하게 삼킨다.
+  card.addEventListener("pointercancel", () => {
+    startX = null;
+    swiped = false;
+  });
+  card.addEventListener("click", (event) => {
+    if (!swiped) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    swiped = false;
+  });
+}
+
+function buildMemoCard(memo, { onOpen, onSwipeDelete }) {
   const card = document.createElement("button");
   card.type = "button";
   card.className = "memo-card";
@@ -56,6 +104,7 @@ function buildMemoCard(memo, onOpen) {
   meta.textContent = formatModifiedAt(memo.updatedAt);
 
   card.append(title, meta);
+  attachSwipeToDelete(card, memo.id, onSwipeDelete);
   card.addEventListener("click", () => onOpen(memo.id));
   return card;
 }
@@ -95,12 +144,24 @@ export function renderMemoListError(container, { onRetry }) {
   container.append(buildErrorState(LIST_ERROR_MESSAGE, onRetry));
 }
 
+// coder-task.md §2(P2-3) 책임자 결정④ 문구. renderMemoListError 와 달리
+// 목록 전체를 지우지 않고 이어 붙인다 -- 스와이프·되돌리기 저장 실패는
+// "조회 자체가 안 됨"과 달리 카드가 이미 화면에 있어야 하므로(검토
+// 1R P2-3 "카드 남음" 요구) 지우면 안 된다.
+export const SAVE_ERROR_MESSAGE = "저장에 실패했어요. 다시 시도해 주세요";
+
+export function renderSaveError(container, { onRetry }) {
+  const existing = container.querySelector(".memo-list-error");
+  if (existing) existing.remove();
+  container.append(buildErrorState(SAVE_ERROR_MESSAGE, onRetry));
+}
+
 // memos 는 이미 src/storage/list-query.mjs 가 정렬·필터해 둔 배열이어야
 // 한다 -- 이 함수는 그 순서를 그대로 DOM 순서로 옮길 뿐이다.
 export function renderMemoList(
   container,
   memos,
-  { onOpen, emptyMessage = EMPTY_LIST_MESSAGE } = {},
+  { onOpen, emptyMessage = EMPTY_LIST_MESSAGE, onSwipeDelete } = {},
 ) {
   container.textContent = "";
   if (memos.length === 0) {
@@ -108,6 +169,6 @@ export function renderMemoList(
     return;
   }
   for (const memo of memos) {
-    container.append(buildMemoCard(memo, onOpen));
+    container.append(buildMemoCard(memo, { onOpen, onSwipeDelete }));
   }
 }
