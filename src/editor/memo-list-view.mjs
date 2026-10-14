@@ -144,17 +144,13 @@ export function renderMemoListError(container, { onRetry }) {
   container.append(buildErrorState(LIST_ERROR_MESSAGE, onRetry));
 }
 
-// coder-task.md §2(P2-3) 책임자 결정④ 문구. renderMemoListError 와 달리
-// 목록 전체를 지우지 않고 이어 붙인다 -- 스와이프·되돌리기 저장 실패는
-// "조회 자체가 안 됨"과 달리 카드가 이미 화면에 있어야 하므로(검토
-// 1R P2-3 "카드 남음" 요구) 지우면 안 된다.
+// coder-task.md §2(P2-3) 책임자 결정④ 문구. 1R 은 이 문구를
+// renderMemoListError 처럼 목록 컨테이너에 append 했다가 검토 2R
+// P2-1(긴 목록에서 화면 밖)로 닫혔다 -- 지금은 memo-list-mount.mjs 의
+// syncToastVisibility 가 되돌리기 토스트와 같은 고정 영역에 이 문구를
+// 그린다(위치는 이 화면 렌더러가 아니라 mount 쪽 책임이라 이 파일에는
+// DOM 생성 함수를 더 두지 않는다 -- 상수만 공유).
 export const SAVE_ERROR_MESSAGE = "저장에 실패했어요. 다시 시도해 주세요";
-
-export function renderSaveError(container, { onRetry }) {
-  const existing = container.querySelector(".memo-list-error");
-  if (existing) existing.remove();
-  container.append(buildErrorState(SAVE_ERROR_MESSAGE, onRetry));
-}
 
 // memos 는 이미 src/storage/list-query.mjs 가 정렬·필터해 둔 배열이어야
 // 한다 -- 이 함수는 그 순서를 그대로 DOM 순서로 옮길 뿐이다.
