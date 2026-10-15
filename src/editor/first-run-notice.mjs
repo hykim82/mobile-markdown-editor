@@ -53,9 +53,16 @@ export function mountFirstRunNotice({ element, textEl, closeButton } = {}) {
   }
   if (textEl) textEl.textContent = FIRST_RUN_NOTICE_TEXT;
   element.hidden = false;
+  // 2R 책임자 판정 §2 ⓓ: "본 것"으로 치는 시점 = 고지를 실제로 보인
+  // 순간(바로 위 hidden = false 직후), 닫기(확인) 시점이 아니다. PRD
+  // 74·100행 "최초 실행 1회 조용한 고지"의 "조용한"은 확인 동작을
+  // 요구하지 않는다는 뜻으로 읽었다(결과 파일 §선택 근거) -- 그래서
+  // 사용자가 닫지 않고 앱을 벗어나도(또는 재부팅해도) 이미 한 번
+  // 보여줬다는 사실 자체로 기록이 끝난다. 닫기 때 다시 기록하는 이중
+  // 호출은 두지 않는다(기록은 이미 끝났으므로 onClose 는 숨김만 한다).
+  recordSeen();
   const onClose = () => {
     element.hidden = true;
-    recordSeen();
   };
   closeButton?.addEventListener("click", onClose);
 }

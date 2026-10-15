@@ -185,3 +185,152 @@ test("⑤고지가 떠 있는 동안에도 다른 조작(새 메모 열기)이 �
     "고지가 떠 있는 채로도 에디터는 입력 가능 상태여야 한다",
   );
 });
+
+// ⓕ 2R 책임자 §2 ⓓ: "본 것" 기록 시점 = 표시 순간(hidden = false 직후),
+// 닫기(확인) 시점이 아니다. 닫지 않고 재부팅해도 이미 한 번 보여줬다는
+// 사실만으로 기록이 끝나 있어야 한다(V1 생존: recordSeen() 을 다시
+// onClose 안으로 옮기면 여기서 RED -- 닫지 않았으므로 기록이 없다).
+test("⑥닫지 않고 재부팅해도(표시 순간에 이미 기록됨) 고지가 다시 뜨지 않는다", async () => {
+  const first = await bootApp();
+  await waitForListScreen(first.window.document);
+  assert.equal(
+    first.window.document.getElementById("first-run-notice").hidden,
+    false,
+    "표시 전제: 첫 부팅에는 고지가 보여야 한다",
+  );
+  // 닫기 버튼을 누르지 않는다 -- 이 칸의 목적이 바로 "닫지 않아도
+  // 기록이 되는가"이기 때문이다.
+
+  const second = await bootApp({
+    seed: (dom) => {
+      dom.window.localStorage.setItem(
+        "mobile-markdown-editor:first-run-notice-seen",
+        first.window.localStorage.getItem(
+          "mobile-markdown-editor:first-run-notice-seen",
+        ),
+      );
+    },
+  });
+  await waitForListScreen(second.window.document);
+
+  assert.equal(
+    second.window.document.getElementById("first-run-notice").hidden,
+    true,
+    "닫지 않았어도 표시 순간에 기록이 남아 재부팅에는 고지가 뜨지 않아야 한다",
+  );
+});
+
+// ⓖ 저장소 읽기(getItem)가 매번 실패하는 환경(사생활 모드 등)에서는
+// "정확히 1회"를 보장할 수 없다 -- 책임자 §2 ⓑ 결정(읽기 실패 시 매
+// 실행 다시 보여줌)을 부팅 2회로 고정한다(R6 생존: hasSeenNotice 의
+// catch 를 `return true` 로 뒤집으면 두 번째 부팅에서 RED).
+test("⑦저장소 읽기(getItem)가 실패하면 부팅할 때마다 고지가 다시 보인다", async () => {
+  const seed = (d) => {
+    d.window.Storage.prototype.getItem = function throwingGetItem() {
+      throw new Error("first-run-notice.test.mjs: 강제 읽기 실패(재표시 칸)");
+    };
+  };
+
+  const first = await bootApp({ seed });
+  await waitForListScreen(first.window.document);
+  assert.equal(
+    first.window.document.getElementById("first-run-notice").hidden,
+    false,
+    "읽기 실패 1회차에도 고지가 보여야 한다",
+  );
+
+  const second = await bootApp({ seed });
+  await waitForListScreen(second.window.document);
+  assert.equal(
+    second.window.document.getElementById("first-run-notice").hidden,
+    false,
+    "읽기 실패 2회차에도(기록을 읽을 수 없으므로) 고지가 다시 보여야 한다",
+  );
+});
+
+// ⓗ 1R 검토 P3-3: ⑤ 의 정규식은 #first-run-notice 를 가리키는 "첫 번째"
+// 규칙만 본다 -- position: absolute(R4b)나 같은 선택자의 "두 번째" 규칙
+// (R4c)은 잡지 못했다. 여기서는 출하 CSS 안에서 그 선택자를 가리키는
+// 모든 규칙을 matchAll 로 모아 각각에 대해 전체 덮개 모양(position:
+// fixed/absolute, inset 단축, top+right+bottom+left 네 변 동시 선언)이
+// 없는지를 단언한다. jsdom getComputedStyle 은 레이아웃을 계산하지
+// 않으므로(한계 -- 결과 파일 §9) 구조 검사의 보조 신호로만 병행한다.
+test("⑧비오버레이(넓힘): #first-run-notice 를 가리키는 모든 CSS 규칙에 전체 덮개 선언이 없다", async () => {
+  const html = await readFile(indexHtmlPath, "utf8");
+  const withoutComments = html.replace(/\/\*[\s\S]*?\*\//g, "");
+  const ruleRegex = /#first-run-notice\s*\{([^}]*)\}/gs;
+  const blocks = [...withoutComments.matchAll(ruleRegex)].map((m) => m[1]);
+  assert.ok(
+    blocks.length >= 1,
+    "#first-run-notice 규칙이 출하 CSS 에 적어도 1개 있어야 한다",
+  );
+  for (const [index, block] of blocks.entries()) {
+    assert.doesNotMatch(
+      block,
+      /position\s*:\s*(fixed|absolute)/i,
+      `규칙 #${index + 1}: 고지는 position: fixed/absolute 로 선언된 전체 덮개 오버레이면 안 된다`,
+    );
+    assert.doesNotMatch(
+      block,
+      /inset\s*:/i,
+      `규칙 #${index + 1}: inset 단축 속성으로 전체 덮개를 선언하면 안 된다`,
+    );
+    const hasTop = /(^|[;{\s])top\s*:/i.test(block);
+    const hasRight = /(^|[;{\s])right\s*:/i.test(block);
+    const hasBottom = /(^|[;{\s])bottom\s*:/i.test(block);
+    const hasLeft = /(^|[;{\s])left\s*:/i.test(block);
+    assert.ok(
+      !(hasTop && hasRight && hasBottom && hasLeft),
+      `규칙 #${index + 1}: top/right/bottom/left 네 변을 한꺼번에 선언해 전체 덮개를 만들면 안 된다`,
+    );
+  }
+
+  // 보조 신호(한계: jsdom 은 레이아웃을 계산하지 않고, position 처럼
+  // 직접 선언된 값만 돌려준다 -- inset 같은 단축 속성의 전개값은
+  // 비어 있는 채로 온다. 위 구조 검사가 1차 증거다).
+  const dom = await bootApp();
+  const { document } = dom.window;
+  await waitForListScreen(document);
+  const computed = dom.window.getComputedStyle(
+    document.getElementById("first-run-notice"),
+  );
+  assert.notEqual(computed.position, "fixed");
+  assert.notEqual(computed.position, "absolute");
+});
+
+// ⓘ 1R 검토 P3-4: setItem 을 try 밖으로 빼도(R8) 시험이 못 잡았다 --
+// ④ 는 setItem 을 던지게 해 두지만 닫기를 누르지 않아 그 분기(2R 부터는
+// "표시" 분기)가 실행되지 않았다. 여기서는 닫기 전까지 기다리지 않고
+// "표시(=기록 시도)" 자체가 setItem 예외를 삼키는지, 그리고 그 뒤
+// 닫기도 정상 동작하는지를 함께 잰다(V5 생존: try 를 없애면 표시 중
+// main() 이 죽어 waitForListScreen 타임아웃으로 RED).
+test("⑨저장소 쓰기(setItem)가 실패해도 고지가 정상적으로 보였다가 닫힌다(예외가 밖으로 새지 않는다)", async () => {
+  const dom = await bootApp({
+    seed: (d) => {
+      d.window.Storage.prototype.setItem = function throwingSetItem() {
+        throw new Error(
+          "first-run-notice.test.mjs: 강제 쓰기 실패(쓰기 분기 칸)",
+        );
+      };
+    },
+  });
+  const { document } = dom.window;
+
+  // main() 이 동기 구간까지 끝까지 돌아 여기 도달했다는 것 자체가
+  // "표시(기록 시도)가 예외를 밖으로 던지지 않았다"는 증거다.
+  await waitForListScreen(document);
+
+  assert.equal(
+    document.getElementById("first-run-notice").hidden,
+    false,
+    "쓰기 실패가 있어도 고지는 정상적으로 보여야 한다",
+  );
+
+  document.getElementById("first-run-notice-close-button").click();
+
+  assert.equal(
+    document.getElementById("first-run-notice").hidden,
+    true,
+    "쓰기 실패가 있어도 닫기는 예외 없이 정상 동작해야 한다",
+  );
+});
