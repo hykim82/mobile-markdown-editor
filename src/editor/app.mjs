@@ -73,7 +73,9 @@ function grabElements() {
     shortcutBar: document.getElementById("shortcut-bar"),
     listRoot: document.getElementById("list-root"),
     listDeleteToast: document.getElementById("list-delete-toast"),
+    listDeleteToastText: document.getElementById("list-delete-toast-text"),
     listUndoButton: document.getElementById("list-delete-undo-button"),
+    listSaveErrorButton: document.getElementById("list-save-error-button"),
     newMemoButton: document.getElementById("new-memo-button"),
     backButton: document.getElementById("back-to-list-button"),
     screens: {
@@ -132,7 +134,9 @@ function main() {
       ),
     toast: {
       element: elements.listDeleteToast,
+      textEl: elements.listDeleteToastText,
       undoButton: elements.listUndoButton,
+      errorButton: elements.listSaveErrorButton,
     },
   });
   wireListNavigation(elements, { editor, store, adapter, list });

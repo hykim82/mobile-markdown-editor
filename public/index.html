@@ -123,6 +123,26 @@
         min-height: 44px;
         padding: 0 4px;
         cursor: pointer;
+        flex: none;
+      }
+      /* HYK-304-delete-undo-ui-2(책임자 판정 §2): 저장 실패 표시를 목록 끝
+         append 대신 이 토스트의 고정 영역에 그린다(검토 2R P2-1). 기존
+         "메모를 삭제했어요" 텍스트(#list-delete-toast-text)가 있던 자리를
+         저장 실패일 때 대신 차지한다 -- 되돌리기 토스트가 이미 떠 있던
+         중(다른 메모) 실패가 나면 되돌리기 버튼은 그대로 두고(제품 결정)
+         이 버튼이 옆에 함께 뜬다(한 영역에 버튼 둘, memo-list-mount.mjs
+         의 syncToastVisibility 가 가시성을 가른다). */
+      #list-save-error-button {
+        flex: 1;
+        min-width: 0;
+        background: none;
+        border: none;
+        color: #ff9b9b;
+        font: inherit;
+        text-align: left;
+        min-height: 44px;
+        padding: 0;
+        cursor: pointer;
       }
       #new-memo-button {
         position: fixed;
@@ -331,6 +351,7 @@
       <div id="list-delete-toast" hidden>
         <span id="list-delete-toast-text">메모를 삭제했어요</span>
         <button id="list-delete-undo-button" type="button">되돌리기</button>
+        <button id="list-save-error-button" type="button" hidden></button>
       </div>
       <button id="new-memo-button" type="button" aria-label="새 메모">+</button>
     </div>

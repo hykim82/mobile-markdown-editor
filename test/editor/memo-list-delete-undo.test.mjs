@@ -11,9 +11,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mountMemoList } from "../../src/editor/memo-list-mount.mjs";
+import {
+  mountMemoList,
+  UNDO_TOAST_MS,
+} from "../../src/editor/memo-list-mount.mjs";
 import { SAVE_ERROR_MESSAGE } from "../../src/editor/memo-list-view.mjs";
 import { createMemoStore } from "../../src/storage/memo-store.mjs";
+import { createSoftDeleteLifecycle } from "../../src/storage/memo-lifecycle.mjs";
 import { createFakeAdapter } from "../support/fake-adapter.mjs";
 
 const { window } = globalThis;
@@ -26,12 +30,21 @@ async function createMemoAt(adapter, body, updatedAt) {
   return store.getMemoId();
 }
 
+// HYK-304-delete-undo-ui-2(책임자 판정 §2): 저장 실패 표시가 이제 이
+// 되돌리기 토스트와 같은 고정 영역을 나눠 쓴다 -- textEl(평소 "메모를
+// 삭제했어요" 자리) · undoButton(기존) · errorButton(신규, 책임자
+// 결정④ 문구 전용) 셋을 실제 출하 public/index.html 과 같은 모양으로
+// 만든다(memo-list-mount.mjs 의 syncToastVisibility 가 이 셋의 hidden
+// 을 가른다).
 function makeToastElements() {
   const element = document.createElement("div");
   element.hidden = true;
+  const textEl = document.createElement("span");
   const undoButton = document.createElement("button");
-  element.append(undoButton);
-  return { element, undoButton };
+  const errorButton = document.createElement("button");
+  errorButton.hidden = true;
+  element.append(textEl, undoButton, errorButton);
+  return { element, textEl, undoButton, errorButton };
 }
 
 // 수동 가짜 시계 -- memo-lifecycle.mjs(hard delete 예약) 와 memo-list-
@@ -272,20 +285,34 @@ test("ⓕ두 메모를 연속으로 삭제해도 각각 독립적으로 되돌�
   assert.deepEqual(cardIds(container), [idA], "최종 목록엔 A 만 남는다");
 });
 
-// 검토 1R P1-1 ⓐ: jsdom 은 touch-action 을 흉내 내지 않으므로, 출하
-// public/index.html 실물의 카드 규칙 문자열을 직접 대조한다(배선 6 선례,
-// app-wiring.test.mjs).
-test("출하 CSS: #list-root .memo-card 규칙에 touch-action: pan-y 가 선언돼 있다(P1-1 ⓐ)", async () => {
+// 검토 1R P1-1 ⓐ · 2R P3-1: jsdom 은 touch-action 을 흉내 내지 않으므로,
+// 출하 public/index.html 실물의 카드 규칙 문자열을 직접 대조한다(배선 6
+// 선례, app-wiring.test.mjs). 2R 에서 이 시험의 "첫 블록만 본다" 약점이
+// 드러났다(C2 주석·C4/C5 뒤쪽 재선언이 전부 GREEN으로 샜다 -- 검토 2R
+// §6 P3-1). 지금은 ⑴ 주석을 먼저 벗기고 ⑵ 같은 선택자의 "모든" 규칙
+// 블록을 순서대로 훑어 ⑶ 그중 "마지막" touch-action 값만 본다 --
+// 브라우저의 캐스케이드(나중 선언이 이긴다)와 같은 규칙이다.
+test('출하 CSS: #list-root .memo-card 선택자의 모든 규칙을 통틀어 "마지막" touch-action 값이 pan-y 다(P1-1 ⓐ · P3-1 닫힘)', async () => {
   const html = await readFile(indexHtmlPath, "utf8");
-  const match = html.match(/#list-root \.memo-card\s*\{([^}]*)\}/s);
+  const withoutComments = html.replace(/\/\*[\s\S]*?\*\//g, "");
+  const ruleRe = /#list-root \.memo-card\s*\{([^}]*)\}/gs;
+  let match;
+  let sawAny = false;
+  let lastValue = null;
+  while ((match = ruleRe.exec(withoutComments)) !== null) {
+    const decls = match[1].match(/touch-action\s*:\s*([a-z-]+)/g);
+    if (!decls) continue;
+    sawAny = true;
+    lastValue = decls[decls.length - 1].split(":")[1].trim();
+  }
   assert.ok(
-    match,
-    "#list-root .memo-card 규칙을 출하 CSS 에서 찾을 수 있어야 한다",
+    sawAny,
+    "주석을 벗긴 뒤에도 #list-root .memo-card 규칙(들) 안에 touch-action 선언이 있어야 한다",
   );
-  assert.match(
-    match[1],
-    /touch-action:\s*pan-y/,
-    "그 규칙 블록 안에 touch-action: pan-y 선언이 있어야 한다(파일 전체 아무 데나 있음은 충족 아님)",
+  assert.equal(
+    lastValue,
+    "pan-y",
+    '같은 선택자의 모든 규칙(주석 속 선언 제외)을 통틀어 "마지막" touch-action 값이 pan-y 여야 한다 -- 뒤쪽 재선언·추가 규칙이 이를 덮으면 안 된다',
   );
 });
 
@@ -399,12 +426,13 @@ test("되돌리기 토스트는 6999ms 에는 보이고 7000ms 에는 자동으�
   );
 });
 
-// 검토 1R P2-3(M10 생존): 스와이프 삭제 저장(adapter.put)이 거부되면
-// unhandledRejection 으로 새면 안 되고, 책임자 결정④ 문구로 실패를
-// 보여주되 카드는 그대로 남아야 한다(renderMemoListError 와 달리 목록을
-// 지우지 않는다). 재시도를 누르면(같은 동작을 다시 시도) 저장 계층이
-// 되살아 있으니 정상 스와이프 삭제 경로(숨김+토스트)로 끝난다.
-test("저장 실패: adapter.put 거부 시 unhandledRejection 없이 표시되고 카드가 남으며, 재시도하면 성공한다(P2-3)", async () => {
+// 검토 1R P2-3(M10 생존) + 2R P2-1(위치 수정): 스와이프 삭제 저장
+// (adapter.put)이 거부되면 unhandledRejection 으로 새면 안 되고, 책임자
+// 결정④ 문구를 "토스트 고정 영역"에서 보여주되(목록 끝 append 아님 --
+// 2R 이 여기서 닫은 자리) 카드는 그대로 남아야 한다. 재시도를 누르면
+// (같은 동작을 다시 시도) 저장 계층이 되살아 있으니 정상 스와이프 삭제
+// 경로(숨김+토스트)로 끝난다.
+test("저장 실패: adapter.put 거부 시 unhandledRejection 없이 토스트 고정 영역에 표시되고 카드가 남으며, 재시도하면 성공한다(P2-3 · P2-1 닫힘)", async () => {
   const container = document.createElement("div");
   const adapter = createFakeAdapter();
   const id = await createMemoAt(adapter, "저장 실패 메모", 100);
@@ -433,16 +461,29 @@ test("저장 실패: adapter.put 거부 시 unhandledRejection 없이 표시되�
       [id],
       "저장 실패 뒤에도 카드는 남아있어야 한다",
     );
-    const errorEl = container.querySelector(".memo-list-error");
-    assert.ok(errorEl, "저장 실패 표시(재시도 겸용)가 떠야 한다");
-    assert.equal(errorEl.textContent, SAVE_ERROR_MESSAGE);
+    assert.equal(
+      container.querySelector(".memo-list-error"),
+      null,
+      "목록 컨테이너(스크롤 영역)에는 더 이상 오류가 붙지 않는다(P2-1)",
+    );
     assert.equal(
       toast.element.hidden,
+      false,
+      "저장 실패 표시는 토스트 고정 영역에서 보여야 한다(P2-1 위치 수정)",
+    );
+    assert.equal(
+      toast.errorButton.hidden,
+      false,
+      "오류 재시도 버튼이 보여야 한다",
+    );
+    assert.equal(toast.errorButton.textContent, SAVE_ERROR_MESSAGE);
+    assert.equal(
+      toast.undoButton.hidden,
       true,
-      "저장이 실패했으니 되돌리기 토스트는 뜨면 안 된다",
+      "되돌릴 대상이 없으니 되돌리기 버튼은 안 보여야 한다",
     );
 
-    errorEl.click();
+    toast.errorButton.click();
     await settle();
     await settle();
 
@@ -456,9 +497,416 @@ test("저장 실패: adapter.put 거부 시 unhandledRejection 없이 표시되�
       false,
       "재시도 성공 뒤엔 되돌리기 토스트가 떠야 한다",
     );
+    assert.equal(
+      toast.undoButton.hidden,
+      false,
+      "재시도 성공 뒤 되돌리기 버튼이 보여야 한다",
+    );
+    assert.equal(toast.errorButton.hidden, true, "오류 표시는 사라져야 한다");
     const record = await adapter.get(id);
     assert.ok(record.deletedAt !== null, "저장소에도 삭제가 반영돼야 한다");
   } finally {
     process.off("unhandledRejection", onRejection);
   }
+});
+
+// 책임자 판정 §2 풀어 쓴 요구 1-ⓐ(검토 2R P2-1 후속): 긴 목록(한 화면을
+// 넘는 카드 수, 2R §6 P2-1 표본 31장과 같은 자릿수)에서도 저장 실패
+// 표시는 카드 수와 무관하게 "고정 영역"(토스트 자리)에서 보여야 한다 --
+// jsdom 은 레이아웃을 재지 않으므로 "화면 밖"은 DOM 위치(목록 컨테이너
+// 안이냐 밖이냐)로 잰다: 목록 끝에 붙으면 스크롤해야 보이고, 토스트
+// 영역(별도 고정 엘리먼트)에 있으면 카드 수와 무관하게 항상 보인다.
+test("저장 실패 표시는 목록 길이와 무관하게 항상 토스트 고정 영역에서 보인다(위치 요구 ⓐ · P2-1 닫힘)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const ids = [];
+  for (let i = 0; i < 31; i += 1) {
+    ids.push(await createMemoAt(adapter, `메모 ${i}`, 100 + i));
+  }
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+  assert.equal(cardIds(container).length, 31, "31장 전부 그려져야 한다");
+
+  const targetId = ids[3];
+  adapter.forceNextPutFailures(1);
+  swipe(container.querySelector(`[data-memo-id="${targetId}"]`));
+  await settle();
+  await settle();
+
+  assert.equal(
+    container.querySelector(".memo-list-error"),
+    null,
+    "목록(스크롤) 컨테이너에는 오류가 붙지 않는다",
+  );
+  assert.equal(
+    toast.element.hidden,
+    false,
+    "오류는 카드 수와 무관하게 고정 토스트 영역에서 보여야 한다",
+  );
+  assert.equal(toast.errorButton.hidden, false);
+  assert.equal(toast.errorButton.textContent, SAVE_ERROR_MESSAGE);
+});
+
+// 책임자 판정 §2 풀어 쓴 요구 1-ⓑ: 되돌리기 토스트(메모 A)가 이미 떠
+// 있는 동안 다른 메모(B)의 스와이프 저장이 실패하면, 실패 표시가 그
+// 자리를 대신하되(텍스트 숨김) "되돌리기" 버튼은 유지된다 -- 두 버튼이
+// 한 영역에 함께 뜨는 배치(결과 파일 §선택 근거 참고). A 의 되돌리기가
+// 여전히 정상 동작하는지(공존), 그리고 A 가 복원돼도 B 의(별개 id) 저장
+// 실패 표시는 교차로 사라지지 않는지(설계 §한계)까지 잰다.
+test("토스트가 떠 있을 때 다른 메모의 저장이 실패하면 실패 표시가 그 자리를 대신하고 되돌리기 버튼은 유지된다(위치 요구 ⓑ)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idA = await createMemoAt(adapter, "메모 A(되돌리기 대상)", 100);
+  const idB = await createMemoAt(adapter, "메모 B(저장 실패)", 200);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  swipe(container.querySelector(`[data-memo-id="${idA}"]`));
+  await settle();
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "A 삭제 뒤 되돌리기 토스트가 떠야 한다",
+  );
+  assert.equal(toast.element.dataset.memoId, idA);
+
+  adapter.forceNextPutFailures(1);
+  swipe(container.querySelector(`[data-memo-id="${idB}"]`));
+  await settle();
+  await settle();
+
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "B 의 저장 실패 표시가 토스트 자리에 떠야 한다",
+  );
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "A 의 되돌리기 버튼은 유지돼야 한다(제품 결정)",
+  );
+  assert.equal(
+    toast.textEl.hidden,
+    true,
+    "실패 표시가 평소 삭제 안내 문구 자리를 대신한다",
+  );
+
+  toast.undoButton.click();
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container).includes(idA),
+    true,
+    "되돌리기 버튼이 살아있으니 A 는 정상 복원돼야 한다",
+  );
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "B 의 실패 표시는 A 복원과 무관하게 남아있어야 한다(아이디별 분리, §한계)",
+  );
+});
+
+// 책임자 판정 §2 풀어 쓴 요구 2(되돌리기 쪽 고정 칸): 스와이프 →
+// (되돌리기 시점의) put 1회 거부 → 되돌리기 → unhandledRejection 0 ·
+// 표시 · 재시도 → 복원(mount 경유). 검토 2R P2-2 가 지적한 "되돌리기
+// 쪽을 잡는 고정 칸이 없다"를 닫는다(F1·F4 생존 대상).
+test("되돌리기 쪽 저장 실패: put 1회 거부 → unhandledRejection 0 · 표시 · 재시도 → 복원(P2-2 닫힘)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "되돌리기 저장 실패 메모", 100);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  swipe(container.querySelector(`[data-memo-id="${id}"]`));
+  await settle();
+  assert.deepEqual(cardIds(container), [], "스와이프 직후 숨겨져야 한다");
+
+  const rejections = [];
+  const onRejection = (err) => rejections.push(err);
+  process.on("unhandledRejection", onRejection);
+
+  try {
+    adapter.forceNextPutFailures(1);
+    toast.undoButton.click();
+    await settle();
+    await settle();
+
+    assert.deepEqual(
+      rejections,
+      [],
+      "되돌리기 저장 실패가 unhandledRejection 으로 새면 안 된다(P2-2)",
+    );
+    assert.deepEqual(
+      cardIds(container),
+      [],
+      "복원이 실패했으니 카드는 아직 안 보여야 한다",
+    );
+    assert.equal(toast.errorButton.hidden, false, "저장 실패 표시가 떠야 한다");
+    assert.equal(toast.errorButton.textContent, SAVE_ERROR_MESSAGE);
+
+    toast.errorButton.click();
+    await settle();
+    await settle();
+
+    assert.deepEqual(
+      cardIds(container),
+      [id],
+      "재시도가 성공하면 복원돼야 한다",
+    );
+    const record = await adapter.get(id);
+    assert.equal(record.deletedAt, null, "삭제시각이 null 로 복원돼야 한다");
+  } finally {
+    process.off("unhandledRejection", onRejection);
+  }
+});
+
+// 책임자 판정 §2 풀어 쓴 요구 2(P2-2 교차오염 닫힘): A 되돌리기 put 1회
+// 거부(A 실패 표시) → B 스와이프 성공(B 토스트 뜸) → A 실패 버튼(재시도)
+// → A 는 복원되지만 B 의 되돌리기는 끊기면 안 된다 -- handler 가 "자기
+// 것이 아닌" active 를 떼어내면(변이 H1, memo-list-mount.mjs 의 id 조건
+// 제거) B 의 되돌리기 버튼이 사라지고 7초 뒤 B 가 하드 삭제된다.
+test("되돌리기 재시도가 다른 메모(B)의 살아있는 되돌리기를 끊지 않는다(P2-2 교차오염 닫힘, H1 생존 대상)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idA = await createMemoAt(
+    adapter,
+    "메모 A(되돌리기 실패 후 재시도)",
+    100,
+  );
+  const idB = await createMemoAt(adapter, "메모 B(독립 되돌리기)", 200);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  // A 스와이프 → A 되돌리기 put 1회 거부(A 실패 표시, 요구 3: A 자신의
+  // 실패 중엔 되돌리기 버튼 숨김 · 실패 버튼만).
+  swipe(container.querySelector(`[data-memo-id="${idA}"]`));
+  await settle();
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 되돌리기 실패 표시가 떠야 한다",
+  );
+  assert.equal(
+    toast.undoButton.hidden,
+    true,
+    "A 자신의 되돌리기 실패 중엔 되돌리기 버튼은 숨겨진다(요구 3)",
+  );
+
+  // B 스와이프 성공(B 토스트 -- 되돌리기 버튼과 A 의 실패 버튼이 함께
+  // 보임).
+  swipe(container.querySelector(`[data-memo-id="${idB}"]`));
+  await settle();
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "B 삭제 뒤 되돌리기 버튼이 보여야 한다",
+  );
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 의 실패 버튼은 B 삭제와 무관하게 남아야 한다",
+  );
+  assert.equal(toast.element.dataset.memoId, idB);
+
+  // A 실패 버튼(재시도) -> A 는 복원되지만 B 의 되돌리기는 살아있어야
+  // 한다(핵심 단언, 변이 H1 이 이 블록을 RED 로 만든다).
+  toast.errorButton.click();
+  await settle();
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container).includes(idA),
+    true,
+    "A 는 재시도로 복원돼야 한다",
+  );
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "B 의 되돌리기 버튼은 A 재시도 뒤에도 살아있어야 한다(P2-2 교차오염 닫힘)",
+  );
+  assert.equal(
+    toast.element.dataset.memoId,
+    idB,
+    "토스트는 A 재시도 뒤에도 여전히 B 를 가리켜야 한다",
+  );
+
+  // B 되돌리기가 실제로 아직 동작하는지(살아있는 버튼이 "진짜" 되돌릴
+  // 수 있는지)까지 값으로 잰다.
+  toast.undoButton.click();
+  await settle();
+  assert.deepEqual(
+    cardIds(container).includes(idB),
+    true,
+    "B 되돌리기 버튼이 눌리면 B 도 복원돼야 한다",
+  );
+});
+
+// 책임자 판정 §2 풀어 쓴 요구 3-⑵(P3-2 닫힘, G1 생존): 39px 는 좌우 모두
+// 스와이프가 아니고(탭으로 처리), 40px 은 좌우 모두 스와이프(삭제)다 --
+// SWIPE_THRESHOLD_PX(40)의 ">=" 비교가 ">" 로 바뀌면(G1) 40px 왼쪽 삭제가
+// 깨진다.
+test("스와이프 문턱 39px(경계 미만): 좌우 모두 삭제되지 않고 탭으로 열린다(P3-2)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idLeft = await createMemoAt(adapter, "39px 왼쪽", 100);
+  const idRight = await createMemoAt(adapter, "39px 오른쪽", 200);
+  const clock = makeFakeClock();
+  const opened = [];
+  const { list } = makeList(container, adapter, clock, {
+    onOpen: (openedId) => opened.push(openedId),
+  });
+  await list.refresh();
+
+  const cardLeft = container.querySelector(`[data-memo-id="${idLeft}"]`);
+  dispatchPointer(cardLeft, "pointerdown", 100);
+  dispatchPointer(cardLeft, "pointermove", 61); // |61-100| = 39
+  dispatchPointer(cardLeft, "pointerup", 61);
+  cardLeft.dispatchEvent(
+    new window.Event("click", { bubbles: true, cancelable: true }),
+  );
+  await settle();
+
+  const cardRight = container.querySelector(`[data-memo-id="${idRight}"]`);
+  dispatchPointer(cardRight, "pointerdown", 100);
+  dispatchPointer(cardRight, "pointermove", 139); // |139-100| = 39
+  dispatchPointer(cardRight, "pointerup", 139);
+  cardRight.dispatchEvent(
+    new window.Event("click", { bubbles: true, cancelable: true }),
+  );
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container).sort(),
+    [idLeft, idRight].sort(),
+    "39px 는 좌우 모두 스와이프가 아니라 둘 다 남아있어야 한다",
+  );
+  assert.deepEqual(
+    opened.sort(),
+    [idLeft, idRight].sort(),
+    "39px 뒤의 click 은 둘 다 onOpen 을 불러야 한다(탭으로 처리)",
+  );
+});
+
+test("스와이프 문턱 40px(경계): 좌우 모두 스와이프로 삭제된다(P3-2 닫힘, G1 생존)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idLeft = await createMemoAt(adapter, "40px 왼쪽", 100);
+  const idRight = await createMemoAt(adapter, "40px 오른쪽", 200);
+  const clock = makeFakeClock();
+  const { list } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  const cardLeft = container.querySelector(`[data-memo-id="${idLeft}"]`);
+  dispatchPointer(cardLeft, "pointerdown", 100);
+  dispatchPointer(cardLeft, "pointermove", 60); // |60-100| = 40
+  dispatchPointer(cardLeft, "pointerup", 60);
+  await settle();
+  assert.deepEqual(
+    cardIds(container),
+    [idRight],
+    "40px 왼쪽 이동은 삭제돼야 한다",
+  );
+
+  const cardRight = container.querySelector(`[data-memo-id="${idRight}"]`);
+  dispatchPointer(cardRight, "pointerdown", 100);
+  dispatchPointer(cardRight, "pointermove", 140); // |140-100| = 40
+  dispatchPointer(cardRight, "pointerup", 140);
+  await settle();
+  assert.deepEqual(cardIds(container), [], "40px 오른쪽 이동도 삭제돼야 한다");
+});
+
+// 책임자 판정 §2 풀어 쓴 요구 3-⑶(P3-3 닫힘, E2 생존 대상): graceMs 전달
+// 줄이 지워지면(lifecycle 이 자신의 내부 기본값으로 떨어짐) 데이터 계층
+// 기본값과 "우연히 같은 숫자"라 타이밍만으로는 못 가른다(검토 2R §6
+// P3-3). createLifecycle 주입 지점에 스파이를 꽂아 "실제로 전달된 값" 을
+// 직접 관찰한다 -- 이 전달 줄이 지워지면 options.graceMs 가 undefined
+// 가 되어 UNDO_TOAST_MS 와 달라진다(데이터 계층 기본값이 몇이든 무관).
+test("graceMs 전달 고정: createLifecycle 에 UNDO_TOAST_MS 가 명시로 전달된다(P3-3 닫힘)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  await createMemoAt(adapter, "graceMs 관찰용 메모", 100);
+  const clock = makeFakeClock();
+  let capturedOptions = null;
+  const spyCreateLifecycle = (innerAdapter, options) => {
+    capturedOptions = options;
+    return createSoftDeleteLifecycle(innerAdapter, options);
+  };
+  const { list } = makeList(container, adapter, clock, {
+    createLifecycle: spyCreateLifecycle,
+  });
+  await list.refresh();
+
+  assert.ok(capturedOptions, "createLifecycle 이 호출돼야 한다");
+  assert.equal(
+    capturedOptions.graceMs,
+    UNDO_TOAST_MS,
+    "graceMs 는 UNDO_TOAST_MS 와 명시로 같은 값이 전달돼야 한다(이 줄이 지워지면 undefined 가 되어 실패한다)",
+  );
+});
+
+// 책임자 판정 §2 풀어 쓴 요구 3-⑷(P3-4 닫힘, F2 생존 대상): 2회 연속
+// 저장 실패에도 오류 표시는 토스트 영역 안에서 "하나만"(버튼 중복 생성
+// 없음) 유지된다 -- 지금 구조는 errorButton 하나를 계속 재사용하므로
+// append 로 중복 생성하던 1R/2R-pre 구조의 회귀를 버튼 개수로 고정한다.
+test("저장 실패 2회 연속: 토스트 영역의 오류 표시는 항상 하나만 남는다(P3-4 닫힘)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "연속 실패 메모", 100);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  adapter.forceNextPutFailures(1);
+  swipe(container.querySelector(`[data-memo-id="${id}"]`));
+  await settle();
+  await settle();
+  assert.equal(toast.errorButton.hidden, false);
+
+  adapter.forceNextPutFailures(1);
+  toast.errorButton.click();
+  await settle();
+  await settle();
+
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "2회 연속 실패 뒤에도 오류 버튼이 보여야 한다",
+  );
+  assert.equal(
+    toast.element.querySelectorAll("button").length,
+    2,
+    "토스트 영역의 버튼은 되돌리기 1 + 오류 1 = 2개로 고정이어야 한다(중복 생성 없음)",
+  );
+});
+
+// 책임자 판정 §2 풀어 쓴 요구 3-⑸(P3-5 닫힘, F6 생존 대상): 책임자 결정
+// ④ 문구를 상수 비교가 아니라 "문자열 리터럴"로 고정한다 -- SAVE_ERROR_
+// MESSAGE 상수 값 자체가 바뀌는 변이(F6)에도 이 시험은 상수를 다시
+// import 해 비교하지 않으므로 그대로 걸린다.
+test("저장 실패 문구는 책임자 결정④ 글자 그대로 고정된다(F6 생존·P3-5 닫힘)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "문구 확인 메모", 100);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  adapter.forceNextPutFailures(1);
+  swipe(container.querySelector(`[data-memo-id="${id}"]`));
+  await settle();
+  await settle();
+
+  assert.equal(
+    toast.errorButton.textContent,
+    "저장에 실패했어요. 다시 시도해 주세요",
+    "책임자 결정④ 문구 리터럴과 글자 그대로 같아야 한다",
+  );
 });

@@ -6,7 +6,7 @@ import { visibleMemosSortedByUpdatedAt } from "../storage/list-query.mjs";
 import {
   renderMemoList,
   renderMemoListError,
-  renderSaveError,
+  SAVE_ERROR_MESSAGE,
 } from "./memo-list-view.mjs";
 import { createSoftDeleteLifecycle } from "../storage/memo-lifecycle.mjs";
 
@@ -15,8 +15,108 @@ import { createSoftDeleteLifecycle } from "../storage/memo-lifecycle.mjs";
 // 계층은 호출만 하고 고치지 말라는 범위 제약, coder-task.md §0)와 같은
 // 길이로 되돌리기 토스트를 띄워 둔다. 두 숫자가 같은 값을 "따로" 들고
 // 있는 것이라 memo-lifecycle.mjs 의 기본값이 바뀌면 이 숫자도 같이
-// 바꿔야 한다(결과 파일 §한계에 기록).
-const UNDO_TOAST_MS = 7000;
+// 바꿔야 한다(결과 파일 §한계에 기록). export 하는 이유: 검토 2R
+// P3-3 -- 이 값을 그대로 아래 createLifecycle(adapter, { graceMs }) 로
+// "명시로" 넘기는 줄이 지워져도(데이터 계층 기본값과 우연히 같은 7000
+// 이라) 시험이 타이밍만으로는 못 가른다. 시험은 이 상수를 import 해
+// createLifecycle 스파이에 실제로 전달된 값과 직접 비교한다(결과 파일
+// §2-3 참고, test/editor/memo-list-delete-undo.test.mjs).
+export const UNDO_TOAST_MS = 7000;
+
+// 책임자 판정 §2(위치 요구): 되돌리기 토스트와 저장 실패 표시가 같은
+// 고정 영역(toast)을 나눠 쓴다 -- 그 상태 기계를 mountMemoList 밖으로
+// 뽑아낸 것뿐이다(그 함수 하나가 80줄 제한을 넘기지 않도록, ESLint
+// max-lines-per-function). active = 지금 토스트가 책임지는 되돌리기
+// { id, handler } · errorState = 지금 떠 있는 저장 실패 재시도
+// { id, onClick }. errorState 가 id 를 들고 있어야 "A 의 되돌리기가
+// 성공했다고 B 의 아직 안 풀린 실패 표시까지 같이 지워지는" 교차
+// 오염을 막는다(두 상태가 같은 영역을 나눠 쓸 때의 설계 선택 · 결과
+// 파일 §한계에 교차 사례 1건 기록).
+function createToastController(toast) {
+  let active = null;
+  let errorState = null;
+
+  // 이 영역 하나로 "되돌리기 토스트"와 "저장 실패 표시"를 둘 다
+  // 그린다(책임자 결정: 같은 고정 위치 · 같은 사용자 모델). 가시성은
+  // 상태 두 가지(undo 활성·error 활성)의 조합으로만 정해진다 -- 상태가
+  // 바뀌는 모든 자리(아래 각 함수)가 끝에 이 함수를 불러 DOM 을 그
+  // 상태에 맞춘다. 되돌리기 쪽 실패 중에는(요구 ⓒ) handler(아래
+  // showUndoToast)가 먼저 active 를 떼어내므로(detachActiveUndo)
+  // "되돌리기" 버튼은 숨겨지고 실패 버튼(재시도 = handler 재호출)만
+  // 남는다(검토 2R P3-2 정정 -- 이전 문면은 "되돌리기 버튼이 남아
+  // 재시도할 수 있다"고 반대로 적었다). 반면 "토스트가 이미 떠 있는
+  // 동안 다른 메모의 저장이 실패"하면(요구 ⓑ) errorState 가 별도로
+  // 켜져 두 버튼이 한 영역에 나란히 뜬다. 텍스트 슬롯(textEl)은 실패
+  // 표시가 있는 동안엔 숨긴다 -- "실패 표시가 그 자리를 대신한다"
+  // (책임자 결정 원문)를 그대로 옮긴 것.
+  function syncToastVisibility() {
+    if (!toast) return;
+    const hasUndo = active !== null;
+    const hasError = errorState !== null;
+    toast.element.hidden = !(hasUndo || hasError);
+    if (toast.textEl) toast.textEl.hidden = hasError;
+    if (toast.undoButton) toast.undoButton.hidden = !hasUndo;
+    if (toast.errorButton) {
+      toast.errorButton.hidden = !hasError;
+      if (hasError) toast.errorButton.textContent = SAVE_ERROR_MESSAGE;
+    }
+  }
+
+  function detachActiveUndo() {
+    if (!active || !toast) return;
+    toast.undoButton.removeEventListener("click", active.handler);
+    active = null;
+    syncToastVisibility();
+  }
+
+  // 검토 2R P2-2: 되돌리기 실패 재시도(showUndoToast 의 handler, 아래)가
+  // 자기 자신을 detach 해도 되는지 판단하는 데 쓴다 -- active 가 이미
+  // 다른 메모로 넘어가 있으면 "자기 것이 아닌" 되돌리기를 끊으면 안
+  // 된다.
+  function isActiveUndo(id) {
+    return active !== null && active.id === id;
+  }
+
+  function clearSaveErrorFor(id) {
+    if (!errorState || errorState.id !== id) return;
+    if (toast?.errorButton) {
+      toast.errorButton.removeEventListener("click", errorState.onClick);
+    }
+    errorState = null;
+    syncToastVisibility();
+  }
+
+  function showSaveError(id, retry) {
+    if (!toast || !toast.errorButton) return;
+    if (errorState) {
+      toast.errorButton.removeEventListener("click", errorState.onClick);
+    }
+    const onClick = () => retry();
+    errorState = { id, onClick };
+    toast.errorButton.addEventListener("click", onClick);
+    syncToastVisibility();
+  }
+
+  // 연속 삭제(ⓕ)에서 새 토스트가 뜰 때 이전 되돌리기 리스너가 남아
+  // 엉뚱한 id 를 복원하지 않도록, 호출부(showUndoToast)가 이 함수
+  // 전에 반드시 detachActiveUndo() 를 불러 떼어낸다.
+  function setActiveUndo(id, handler) {
+    active = { id, handler };
+    if (toast) {
+      toast.undoButton.addEventListener("click", handler);
+      toast.element.dataset.memoId = id;
+    }
+    syncToastVisibility();
+  }
+
+  return {
+    detachActiveUndo,
+    clearSaveErrorFor,
+    showSaveError,
+    setActiveUndo,
+    isActiveUndo,
+  };
+}
 
 // PRD §5b "실행→입력 1초 내 -- 입력이 목록 로딩을 안 기다린다": 이 함수는
 // adapter.list() 를 기다리는 refresh() 를 리턴만 하고, mountMemoList
@@ -32,16 +132,28 @@ const UNDO_TOAST_MS = 7000;
 // (§2-1 실측). try/catch 로 그 거부를 여기서 끝내고, 실패 화면을
 // 그린다. 재시도 = refresh 자기 자신을 다시 부르는 것 -- 저장 계층이
 // 되살아 있으면 다음 호출은 정상 경로(renderMemoList)로 되돌아간다.
-// toast(옵션) = { element, undoButton } -- 실제 DOM 엘리먼트 둘. 생략하면
-// (기존 호출부·시험과 그대로 호환) 삭제/되돌리기는 데이터 계층까지는
-// 동작하되 토스트만 뜨지 않는다. now/setTimeoutFn/clearTimeoutFn 은
-// memo-lifecycle.mjs 의 createSoftDeleteLifecycle 과 이 모듈 자신의
-// 토스트 타이머가 "같은" 가짜 시계를 쓰도록 그대로 넘겨준다(시험에서
-// 7초를 결정적으로 재는 통로).
+// toast(옵션) = { element, textEl, undoButton, errorButton } -- 실제 DOM
+// 엘리먼트들. 생략하면(기존 호출부·시험과 그대로 호환) 삭제/되돌리기는
+// 데이터 계층까지는 동작하되 토스트만 뜨지 않는다. now/setTimeoutFn/
+// clearTimeoutFn 은 memo-lifecycle.mjs 의 createSoftDeleteLifecycle 과 이
+// 모듈 자신의 토스트 타이머가 "같은" 가짜 시계를 쓰도록 그대로
+// 넘겨준다(시험에서 7초를 결정적으로 재는 통로). createLifecycle(옵션) =
+// createSoftDeleteLifecycle 자리를 대신할 팩토리 -- 기본은 실제 구현.
+// 검토 2R P3-3 전용 주입 통로다: 시험이 이 자리에 스파이를 꽂아
+// "graceMs 가 실제로 어떤 값으로 전달됐는지" 를 직접 관찰한다(데이터
+// 계층 기본값과 우연히 같은 숫자라 타이밍만으로는 못 가르는 문제,
+// §한계 참고). 제품 코드(app.mjs)는 이 옵션을 안 쓴다.
 export function mountMemoList(
   container,
   adapter,
-  { onOpen, toast, now, setTimeoutFn, clearTimeoutFn } = {},
+  {
+    onOpen,
+    toast,
+    now,
+    setTimeoutFn,
+    clearTimeoutFn,
+    createLifecycle = createSoftDeleteLifecycle,
+  } = {},
 ) {
   // 검토 1R P2-2: graceMs 를 안 넘기면 memo-lifecycle.mjs 자신의 기본값
   // (그 파일 안에서만 보이는 GRACE_MS)을 쓰게 되어, 이 토스트의
@@ -49,7 +161,7 @@ export function mountMemoList(
   // 데이터 계층 기본값이 바뀌면 토스트는 조용히 다른 길이로 떠 있는다.
   // 여기서 명시로 넘겨 원천을 하나로 묶는다(memo-lifecycle.mjs 자체는
   // 수정하지 않는다 -- coder-task.md §2 범위 제약).
-  const lifecycle = createSoftDeleteLifecycle(adapter, {
+  const lifecycle = createLifecycle(adapter, {
     now,
     setTimeoutFn,
     clearTimeoutFn,
@@ -57,61 +169,64 @@ export function mountMemoList(
   });
   const scheduleFn = setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
   const cancelFn = clearTimeoutFn ?? ((id) => clearTimeout(id));
+  const toastCtrl = createToastController(toast);
 
   let hideTimer = null;
-  // 토스트가 "지금 누구의 되돌리기를 책임지는지" -- 연속 삭제(ⓕ)에서 새
-  // 토스트가 뜰 때 이전 되돌리기 리스너가 남아 엉뚱한 id를 복원하지
-  // 않도록 교체 시점에 반드시 떼어낸다.
-  let active = null;
-
-  function detachActiveUndo() {
-    if (!active || !toast) return;
-    toast.undoButton.removeEventListener("click", active.handler);
-    active = null;
-  }
 
   function showUndoToast(id) {
     if (!toast) return;
     cancelFn(hideTimer);
-    detachActiveUndo();
+    toastCtrl.detachActiveUndo();
 
     const handler = async () => {
-      detachActiveUndo();
-      cancelFn(hideTimer);
-      toast.element.hidden = true;
+      // 검토 2R §2 ⓒ: 여기서 바로 떼어내고 감춘다(원래(1R)부터의 동작
+      // 그대로) -- 실패해도 "되돌리기" 자체는 이미 끝난 일로 치고,
+      // 재시도는 아래 showSaveError 가 새로 올리는 전용 표시/버튼이
+      // 맡는다(이 메모 id 로 스코프됨). 검토 2R P2-2: 이 handler 자체가
+      // showSaveError 의 재시도 콜백(아래 catch)으로도 다시 불린다 --
+      // 그 사이 다른 메모가 스와이프돼 active 가 이미 "그 메모"로
+      // 넘어가 있을 수 있다(toast 는 하나뿐이라 둘이 같은 영역을 나눠
+      // 쓴다). active 가 "자기 자신"일 때만 떼어내고 타이머를 꺼야 --
+      // 안 그러면 재시도가 다른 메모(B)의 살아있는 되돌리기 버튼·숨김
+      // 타이머를 끊어버린다(교차 오염, 변이 H1 이 이 줄을 없앤 모양).
+      if (toastCtrl.isActiveUndo(id)) {
+        toastCtrl.detachActiveUndo();
+        cancelFn(hideTimer);
+      }
       try {
         await lifecycle.restore(id);
+        toastCtrl.clearSaveErrorFor(id);
         await refresh();
       } catch {
-        // 검토 1R P2-3: 되돌리기 저장이 거부돼도 unhandledRejection 으로
-        // 새면 안 된다 -- handleSwipeDelete 와 같은 실패 표시를 재사용한다
-        // (책임자 결정④, 기존 목록 오류 표시 모양 그대로).
-        renderSaveError(container, { onRetry: () => handler() });
+        // 검토 1R P2-3 근거 + 2R P2-1 위치 수정: 되돌리기 저장이
+        // 거부돼도 unhandledRejection 으로 새면 안 된다 -- 책임자
+        // 결정④ 문구를 토스트 고정 영역에 보여주고, 재시도는 이
+        // handler 자신을 다시 부른다(restore 를 다시 시도).
+        toastCtrl.showSaveError(id, () => handler());
       }
     };
-    active = { id, handler };
-    toast.undoButton.addEventListener("click", handler);
-    toast.element.hidden = false;
-    toast.element.dataset.memoId = id;
+    toastCtrl.setActiveUndo(id, handler);
 
     hideTimer = scheduleFn(() => {
-      toast.element.hidden = true;
-      detachActiveUndo();
+      toastCtrl.detachActiveUndo();
     }, UNDO_TOAST_MS);
   }
 
   async function handleSwipeDelete(id) {
     try {
       await lifecycle.softDelete(id);
+      toastCtrl.clearSaveErrorFor(id);
       await refresh();
       showUndoToast(id);
     } catch {
       // 검토 1R P2-3 근거: adapter.put 이 거부하면 이 await 가 던지고,
       // 이 함수가 pointerup 리스너(memo-list-view.mjs)에서 await 없이
       // 불리므로 그대로 두면 unhandledRejection 으로 샌다. 여기서 끝내고
-      // 책임자 결정④ 문구로 실패를 보여준다 -- refresh() 를 안 불렀으니
-      // 카드는 그대로 남아 있다(P2-3 "카드 남음" 요구).
-      renderSaveError(container, { onRetry: () => handleSwipeDelete(id) });
+      // 책임자 결정④ 문구를 토스트 고정 영역(검토 2R P2-1)에 보여준다 --
+      // refresh() 를 안 불렀으니 카드는 그대로 남아 있다(P2-3 "카드
+      // 남음" 요구). 이때 다른 메모의 되돌리기 토스트가 떠 있었다면
+      // active 는 그대로 둬 되돌리기 버튼이 함께 보인다(요구 ⓑ).
+      toastCtrl.showSaveError(id, () => handleSwipeDelete(id));
     }
   }
 
