@@ -40,12 +40,15 @@ function createToastController(toast) {
   // 그린다(책임자 결정: 같은 고정 위치 · 같은 사용자 모델). 가시성은
   // 상태 두 가지(undo 활성·error 활성)의 조합으로만 정해진다 -- 상태가
   // 바뀌는 모든 자리(아래 각 함수)가 끝에 이 함수를 불러 DOM 을 그
-  // 상태에 맞춘다. 되돌리기 쪽 실패 중에도 "되돌리기" 버튼 자체는
-  // active 가 쥐고 있으니 그대로 눌러 재시도할 수 있다(요구 ⓒ) -- 반면
-  // "토스트가 이미 떠 있는 동안 다른 메모의 저장이 실패"하면(요구 ⓑ)
-  // errorState 가 별도로 켜져 두 버튼이 한 영역에 나란히 뜬다. 텍스트
-  // 슬롯(textEl)은 실패 표시가 있는 동안엔 숨긴다 -- "실패 표시가 그
-  // 자리를 대신한다"(책임자 결정 원문)를 그대로 옮긴 것.
+  // 상태에 맞춘다. 되돌리기 쪽 실패 중에는(요구 ⓒ) handler(아래
+  // showUndoToast)가 먼저 active 를 떼어내므로(detachActiveUndo)
+  // "되돌리기" 버튼은 숨겨지고 실패 버튼(재시도 = handler 재호출)만
+  // 남는다(검토 2R P3-2 정정 -- 이전 문면은 "되돌리기 버튼이 남아
+  // 재시도할 수 있다"고 반대로 적었다). 반면 "토스트가 이미 떠 있는
+  // 동안 다른 메모의 저장이 실패"하면(요구 ⓑ) errorState 가 별도로
+  // 켜져 두 버튼이 한 영역에 나란히 뜬다. 텍스트 슬롯(textEl)은 실패
+  // 표시가 있는 동안엔 숨긴다 -- "실패 표시가 그 자리를 대신한다"
+  // (책임자 결정 원문)를 그대로 옮긴 것.
   function syncToastVisibility() {
     if (!toast) return;
     const hasUndo = active !== null;
@@ -64,6 +67,14 @@ function createToastController(toast) {
     toast.undoButton.removeEventListener("click", active.handler);
     active = null;
     syncToastVisibility();
+  }
+
+  // 검토 2R P2-2: 되돌리기 실패 재시도(showUndoToast 의 handler, 아래)가
+  // 자기 자신을 detach 해도 되는지 판단하는 데 쓴다 -- active 가 이미
+  // 다른 메모로 넘어가 있으면 "자기 것이 아닌" 되돌리기를 끊으면 안
+  // 된다.
+  function isActiveUndo(id) {
+    return active !== null && active.id === id;
   }
 
   function clearSaveErrorFor(id) {
@@ -98,7 +109,13 @@ function createToastController(toast) {
     syncToastVisibility();
   }
 
-  return { detachActiveUndo, clearSaveErrorFor, showSaveError, setActiveUndo };
+  return {
+    detachActiveUndo,
+    clearSaveErrorFor,
+    showSaveError,
+    setActiveUndo,
+    isActiveUndo,
+  };
 }
 
 // PRD §5b "실행→입력 1초 내 -- 입력이 목록 로딩을 안 기다린다": 이 함수는
@@ -165,9 +182,17 @@ export function mountMemoList(
       // 검토 2R §2 ⓒ: 여기서 바로 떼어내고 감춘다(원래(1R)부터의 동작
       // 그대로) -- 실패해도 "되돌리기" 자체는 이미 끝난 일로 치고,
       // 재시도는 아래 showSaveError 가 새로 올리는 전용 표시/버튼이
-      // 맡는다(이 메모 id 로 스코프됨).
-      toastCtrl.detachActiveUndo();
-      cancelFn(hideTimer);
+      // 맡는다(이 메모 id 로 스코프됨). 검토 2R P2-2: 이 handler 자체가
+      // showSaveError 의 재시도 콜백(아래 catch)으로도 다시 불린다 --
+      // 그 사이 다른 메모가 스와이프돼 active 가 이미 "그 메모"로
+      // 넘어가 있을 수 있다(toast 는 하나뿐이라 둘이 같은 영역을 나눠
+      // 쓴다). active 가 "자기 자신"일 때만 떼어내고 타이머를 꺼야 --
+      // 안 그러면 재시도가 다른 메모(B)의 살아있는 되돌리기 버튼·숨김
+      // 타이머를 끊어버린다(교차 오염, 변이 H1 이 이 줄을 없앤 모양).
+      if (toastCtrl.isActiveUndo(id)) {
+        toastCtrl.detachActiveUndo();
+        cancelFn(hideTimer);
+      }
       try {
         await lifecycle.restore(id);
         toastCtrl.clearSaveErrorFor(id);

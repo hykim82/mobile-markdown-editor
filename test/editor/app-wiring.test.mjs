@@ -19,6 +19,7 @@ import {
   readCurrentMemoId,
   writeCurrentMemoId,
 } from "../../src/storage/current-memo-pointer.mjs";
+import { IDBObjectStore } from "fake-indexeddb";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const indexHtmlPath = join(here, "..", "..", "public", "index.html");
@@ -33,6 +34,21 @@ async function seedMemo(id, body) {
     updatedAt: 1,
     deletedAt: null,
   });
+}
+
+// memo-list-delete-undo.test.mjs 의 dispatchPointer/swipe 와 같은 모양
+// (SWIPE_THRESHOLD_PX=40 을 넘기는 왼쪽 이동) -- 여긴 jsdom 합성 DOM이
+// 아니라 bootApp() 이 실제로 부팅한 app.mjs 번들 결선을 통과한다.
+function swipeCard(dom, card) {
+  const { window } = dom;
+  const fire = (type, clientX) => {
+    const event = new window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clientX", { value: clientX });
+    card.dispatchEvent(event);
+  };
+  fire("pointerdown", 100);
+  fire("pointermove", 20);
+  fire("pointerup", 20);
 }
 
 // 번호 1 -- showScreen() 의 hidden 토글 자체. 부팅 직후 기본 화면은
@@ -169,6 +185,12 @@ test("배선 5: 포인터가 메모를 가리키고 있어도 부팅 직후 첫 
 // 아래는 그 6개(save-notice/notion-copy-* 제외 -- 이 조각 범위 밖)를
 // 명시로 한 번 더 값으로 박아, "실물 파일을 읽는 시험이 하나도 없다"는
 // 검토자의 원래 지적 자체를 직접 반증한다.
+//
+// 검토 2R P2-1(최소 배선, 요구 1-ⓑ): list-save-error-button ·
+// list-delete-toast-text 두 id 를 이 목록에 추가한다 -- app.mjs 의
+// grabElements/toast 결선이 이 둘을 쓴다(coder-task.md §2). 아래 배선 7
+// 이 "실제로 동작하는가"(ⓐ)까지 값으로 재므로, 이 추가는 최소 보강
+// (ⓑ)에 해당한다.
 test("배선 6: public/index.html 실물 -- grabElements 가 찾는 DOM id 가 전부 있다", async () => {
   const html = await readFile(indexHtmlPath, "utf8");
   const dom = await bootApp();
@@ -187,6 +209,8 @@ test("배선 6: public/index.html 실물 -- grabElements 가 찾는 DOM id 가 �
     "back-to-list-button",
     "list-screen",
     "editor-screen",
+    "list-save-error-button",
+    "list-delete-toast-text",
   ]) {
     assert.ok(
       html.includes(`id="${id}"`),
@@ -196,5 +220,68 @@ test("배선 6: public/index.html 실물 -- grabElements 가 찾는 DOM id 가 �
       document.getElementById(id),
       `부팅한 DOM 에서도 #${id} 를 찾을 수 있어야 한다`,
     );
+  }
+});
+
+// 번호 7 (검토 2R P2-1, coder-task.md §2 요구 1-ⓐ): 배선 6 은 id 가
+// "있다"만 잰다 -- app.mjs 의 errorButton/textEl 결선이 끊기면(변이
+// S4·S6, index.html 의 id 자체가 사라지는 S5 는 배선 6 이 이미 잡는다)
+// id 는 그대로 있어도 showSaveError 가 아무것도 그리지 않는다
+// (memo-list-mount.mjs:79 "if (!toast || !toast.errorButton) return;").
+// 실물 부팅(public/index.html + 실제 app.mjs 결선) 위에서 adapter.put
+// 을 1회 강제 실패시켜(검토 2R ⓑ 헤드리스 표본과 같은 몽키패치 방식,
+// IDBObjectStore.prototype.put 1회 throw) #list-save-error-button 이
+// 실제로 보이고 문구가 리터럴과 같은지를 값으로 잰다.
+test("배선 7: 메모 스와이프 삭제 저장이 실패하면 #list-save-error-button 이 보이고 고정 문구가 뜬다(P2-1 결선 고정)", async () => {
+  const dom = await bootApp({
+    seed: () => seedMemo("save-error-wiring-1", "저장 실패 결선 확인용 메모"),
+  });
+  const { document } = dom.window;
+  await waitFor(
+    () =>
+      document.querySelector('[data-memo-id="save-error-wiring-1"]') !== null,
+  );
+
+  const originalPut = IDBObjectStore.prototype.put;
+  let failuresLeft = 1;
+  IDBObjectStore.prototype.put = function patchedPut(...args) {
+    if (failuresLeft > 0) {
+      failuresLeft -= 1;
+      throw new Error("app-wiring 배선 7: 강제 저장 실패");
+    }
+    return originalPut.apply(this, args);
+  };
+
+  try {
+    const card = document.querySelector('[data-memo-id="save-error-wiring-1"]');
+    swipeCard(dom, card);
+
+    await waitFor(
+      () => document.getElementById("list-save-error-button").hidden === false,
+    );
+    assert.equal(
+      document.getElementById("list-save-error-button").textContent,
+      "저장에 실패했어요. 다시 시도해 주세요",
+      "실물 결선에서도 책임자 결정④ 문구가 그대로 보여야 한다",
+    );
+    assert.equal(
+      document.getElementById("list-delete-toast").hidden,
+      false,
+      "토스트 고정 영역이 보여야 한다",
+    );
+    assert.equal(
+      document.getElementById("list-delete-toast-text").hidden,
+      true,
+      "실패 표시가 평소 삭제 안내 문구 자리를 대신해야 한다(textEl 결선, 변이 S6 생존 대상)",
+    );
+    assert.deepEqual(
+      [...document.querySelectorAll(".memo-card")].map(
+        (el) => el.dataset.memoId,
+      ),
+      ["save-error-wiring-1"],
+      "저장 실패 뒤에도 카드는 목록에 남아있어야 한다",
+    );
+  } finally {
+    IDBObjectStore.prototype.put = originalPut;
   }
 });

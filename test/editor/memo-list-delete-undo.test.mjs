@@ -663,6 +663,92 @@ test("되돌리기 쪽 저장 실패: put 1회 거부 → unhandledRejection 0 �
   }
 });
 
+// 책임자 판정 §2 풀어 쓴 요구 2(P2-2 교차오염 닫힘): A 되돌리기 put 1회
+// 거부(A 실패 표시) → B 스와이프 성공(B 토스트 뜸) → A 실패 버튼(재시도)
+// → A 는 복원되지만 B 의 되돌리기는 끊기면 안 된다 -- handler 가 "자기
+// 것이 아닌" active 를 떼어내면(변이 H1, memo-list-mount.mjs 의 id 조건
+// 제거) B 의 되돌리기 버튼이 사라지고 7초 뒤 B 가 하드 삭제된다.
+test("되돌리기 재시도가 다른 메모(B)의 살아있는 되돌리기를 끊지 않는다(P2-2 교차오염 닫힘, H1 생존 대상)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idA = await createMemoAt(
+    adapter,
+    "메모 A(되돌리기 실패 후 재시도)",
+    100,
+  );
+  const idB = await createMemoAt(adapter, "메모 B(독립 되돌리기)", 200);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  // A 스와이프 → A 되돌리기 put 1회 거부(A 실패 표시, 요구 3: A 자신의
+  // 실패 중엔 되돌리기 버튼 숨김 · 실패 버튼만).
+  swipe(container.querySelector(`[data-memo-id="${idA}"]`));
+  await settle();
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 되돌리기 실패 표시가 떠야 한다",
+  );
+  assert.equal(
+    toast.undoButton.hidden,
+    true,
+    "A 자신의 되돌리기 실패 중엔 되돌리기 버튼은 숨겨진다(요구 3)",
+  );
+
+  // B 스와이프 성공(B 토스트 -- 되돌리기 버튼과 A 의 실패 버튼이 함께
+  // 보임).
+  swipe(container.querySelector(`[data-memo-id="${idB}"]`));
+  await settle();
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "B 삭제 뒤 되돌리기 버튼이 보여야 한다",
+  );
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 의 실패 버튼은 B 삭제와 무관하게 남아야 한다",
+  );
+  assert.equal(toast.element.dataset.memoId, idB);
+
+  // A 실패 버튼(재시도) -> A 는 복원되지만 B 의 되돌리기는 살아있어야
+  // 한다(핵심 단언, 변이 H1 이 이 블록을 RED 로 만든다).
+  toast.errorButton.click();
+  await settle();
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container).includes(idA),
+    true,
+    "A 는 재시도로 복원돼야 한다",
+  );
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "B 의 되돌리기 버튼은 A 재시도 뒤에도 살아있어야 한다(P2-2 교차오염 닫힘)",
+  );
+  assert.equal(
+    toast.element.dataset.memoId,
+    idB,
+    "토스트는 A 재시도 뒤에도 여전히 B 를 가리켜야 한다",
+  );
+
+  // B 되돌리기가 실제로 아직 동작하는지(살아있는 버튼이 "진짜" 되돌릴
+  // 수 있는지)까지 값으로 잰다.
+  toast.undoButton.click();
+  await settle();
+  assert.deepEqual(
+    cardIds(container).includes(idB),
+    true,
+    "B 되돌리기 버튼이 눌리면 B 도 복원돼야 한다",
+  );
+});
+
 // 책임자 판정 §2 풀어 쓴 요구 3-⑵(P3-2 닫힘, G1 생존): 39px 는 좌우 모두
 // 스와이프가 아니고(탭으로 처리), 40px 은 좌우 모두 스와이프(삭제)다 --
 // SWIPE_THRESHOLD_PX(40)의 ">=" 비교가 ">" 로 바뀌면(G1) 40px 왼쪽 삭제가
