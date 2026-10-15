@@ -749,6 +749,81 @@ test("되돌리기 재시도가 다른 메모(B)의 살아있는 되돌리기를
   );
 });
 
+// HYK-304-first-run-notice-1(coder-task.md §2-5, 책임자 판정 원문
+// 2026-10-15 18:0x §3 "함께 1칸 = E1-후속 P3-1" -- 관제실
+// 아카이브\2026-10-15-B76-에디터-삭제UI후속\pr38-review\rounds\REVIEW-r2.md
+// §3 P3-1): H1 생존 시험(바로 위)은 "B 의 되돌리기 버튼을 눌러서" 살아
+// 있는지를 잰다. 이 칸은 다른 축 -- A 재시도 뒤 "누르지 않고" 가짜
+// 시계를 UNDO_TOAST_MS 만큼 그대로 흘려보내 B 의 자동 숨김 타이머
+// 자체가 살아있는지를 잰다. memo-list-mount.mjs 의 handler 안
+// `if (toastCtrl.isActiveUndo(id)) { ...; cancelFn(hideTimer); }` 가드가
+// 없어지면(변이 N6, 아래) A 의 재시도(handler 재호출)가 "자기 것이
+// 아닌"(지금은 B 소유) hideTimer 까지 무조건 취소해 버린다 -- 그러면
+// B 의 토스트는 7초가 지나도 자동으로 숨지 않는다(사용자 관점: 되돌리기
+// 창이 설명 없이 계속 열려 있음). 제품 코드는 고치지 않는다(0줄).
+test("되돌리기 재시도가 다른 메모(B)의 자동 숨김 타이머를 끊지 않는다(§2-5, N6 생존 대상)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idA = await createMemoAt(
+    adapter,
+    "메모 A(되돌리기 실패 후 재시도, §2-5)",
+    100,
+  );
+  const idB = await createMemoAt(adapter, "메모 B(자동 숨김 관찰, §2-5)", 200);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  // A 스와이프 → A 되돌리기 put 1회 거부(A 실패 표시).
+  swipe(container.querySelector(`[data-memo-id="${idA}"]`));
+  await settle();
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 되돌리기 실패 표시가 떠야 한다",
+  );
+
+  // B 스와이프 성공(B 토스트가 떠서 자동 숨김 타이머가 돈다).
+  swipe(container.querySelector(`[data-memo-id="${idB}"]`));
+  await settle();
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "B 삭제 뒤 되돌리기 버튼이 보여야 한다",
+  );
+  assert.equal(toast.element.dataset.memoId, idB);
+
+  // A 재시도(버튼 클릭 -- A 는 복원되지만, B 의 되돌리기/자동 숨김
+  // 타이머는 끊기면 안 된다).
+  toast.errorButton.click();
+  await settle();
+  await settle();
+  assert.deepEqual(
+    cardIds(container).includes(idA),
+    true,
+    "A 는 재시도로 복원돼야 한다",
+  );
+
+  // B 의 되돌리기 버튼을 누르지 않고, 가짜 시계만 UNDO_TOAST_MS 만큼
+  // 그대로 흘려보낸다 -- B 의 자동 숨김 타이머가 살아있다면 정상적으로
+  // 토스트·되돌리기 버튼이 숨겨져야 한다.
+  clock.advance(UNDO_TOAST_MS);
+  assert.equal(
+    toast.element.hidden,
+    true,
+    "B 의 자동 숨김 타이머가 살아있다면 UNDO_TOAST_MS 뒤 토스트는 숨겨져야 한다(A 재시도가 끊으면 안 된다)",
+  );
+  assert.equal(
+    toast.undoButton.hidden,
+    true,
+    "같은 이유로 되돌리기 버튼도 숨겨져야 한다",
+  );
+});
+
 // 책임자 판정 §2 풀어 쓴 요구 3-⑵(P3-2 닫힘, G1 생존): 39px 는 좌우 모두
 // 스와이프가 아니고(탭으로 처리), 40px 은 좌우 모두 스와이프(삭제)다 --
 // SWIPE_THRESHOLD_PX(40)의 ">=" 비교가 ">" 로 바뀌면(G1) 40px 왼쪽 삭제가
