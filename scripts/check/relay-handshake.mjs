@@ -1851,6 +1851,151 @@ export function countRunnerExitClaims(resultContent) {
   return matches ? matches.length : 0;
 }
 
+// HYK-425 §2: 위 주석("규율을 지키는 워커일수록 이 게이트가 안 켜진다")이
+// 지적한 빈칸을 닫는다 -- 발화 조건을 결과 파일의 `exit=` 주장 하나에만
+// 묶지 않고, task 파일(<harnessDir>/<role>-task.md)이 선언하는 계약 줄로도
+// 넓힌다. 판독은 head_commit:(resolveHeadCommitField)과 같은 계약: 열 0
+// 단독 줄만, maskQuotedMarkerRegions로 인용/펜스 밖만 본다. 같은 키가
+// 인용 밖에 2개 이상이거나 값이 세 값(none/full-1x/full-2x) 밖이면 조용히
+// 하나를 고르지 않고 "판정 불가"로 거부한다(HYK-486 선례, resolveG1Standalone
+// Line의 AMBIGUOUS 분기와 같은 정신). 키 이름은 ORCH 선택이고(coder-
+// task.md §2 item1 각주), 더 나은 이름의 근거가 바뀌어도 이 축의 동작은
+// 바뀌지 않는다.
+export const RUNNER_CONTRACT_RE_G = /^runner_contract:[ \t]*(\S+)[ \t]*$/gm;
+
+// HYK-425 2R P1-1/P2-1 (§2 책임자 판정 ⓐ): 표준 정규식이 매치 0일 때 바로
+// "계약 없음"으로 접기 전에, 근사(장식) 줄이 있는지 먼저 본다 -- 꼬리 글
+// (`runner_contract: full-2x — 설명`) · 빈 값(`runner_contract:`) · 목록
+// 접두(`- runner_contract: ...`)/들여쓰기 · 대소문자(`RUNNER_CONTRACT:`) ·
+// 전각 콜론(`runner_contract：...`) · 굵게(`**runner_contract**:`) 전부
+// 한 줄당 한 번만 매치한다(각 조각은 전부 선택적이라 표준 줄도 이 정규식에
+// 걸린다 -- 그래서 "표준 매치 수보다 근사 매치 수가 많다"로 "표준이 아닌
+// 근사 줄이 따로 있다"를 가린다). head_commit:(HEAD_COMMIT_ANYWHERE_RE)과
+// 같은 "근사 매치로 더 정확한 진단" 정신이지만, 정책은 반대다: G1처럼
+// 장식을 받아주지 않고 «판정 불가»로 거부한다(이 조각은 발화 스위치라
+// 모호하면 멈추는 것이 fail-closed, resolveG1StandaloneLine의 AMBIGUOUS
+// 분기와 같은 정신 -- HYK-486 선례, 조용히 하나를 고르지 않는다). 펜스·
+// HTML 주석 안에만 있는 근사 줄은 maskQuotedMarkerRegions가 이미 지워
+// scan에 안 보인다(=계약 없음, 지금 동작 유지, 마스킹 범위 밖).
+const RUNNER_CONTRACT_LOOSE_RE_G =
+  /^[ \t]*(?:[-*+][ \t]+|\d+\.[ \t]+)?\**[ \t]*runner_contract[ \t]*\**[ \t]*[:：]/gim;
+
+export const RUNNER_CONTRACT_REQUIRED_RUNS = Object.freeze({
+  none: 0,
+  "full-1x": 1,
+  "full-2x": 2,
+});
+
+export function resolveRunnerContractDirective(taskContent) {
+  if (typeof taskContent !== "string") return { state: "absent" };
+  const scan = maskQuotedMarkerRegions(taskContent);
+  const matches = [...scan.matchAll(RUNNER_CONTRACT_RE_G)];
+  if (matches.length > 1) {
+    return {
+      state: "ambiguous",
+      reason: `task file has ${matches.length} standalone 'runner_contract:' lines -- 어느 것이 최종인지 결정할 수 없다 (ambiguous, cannot resolve, HYK-425)`,
+    };
+  }
+  // 표준 줄 1개 + 근사 줄 공존도 판정 불가다(조용히 표준만 고르지 마라,
+  // HYK-486) -- standardIndexes에 없는 loose 매치가 하나라도 있으면
+  // (매치 0개뿐이라 전부가 근사 줄인 경우도 포함) 거부한다.
+  const standardIndexes = new Set(matches.map((m) => m.index));
+  const looseMatches = [...scan.matchAll(RUNNER_CONTRACT_LOOSE_RE_G)];
+  const extraLoose = looseMatches.find((m) => !standardIndexes.has(m.index));
+  if (extraLoose) {
+    const lineEnd = scan.indexOf("\n", extraLoose.index);
+    const lineText = (
+      lineEnd === -1
+        ? scan.slice(extraLoose.index)
+        : scan.slice(extraLoose.index, lineEnd)
+    ).trim();
+    return {
+      state: "ambiguous",
+      reason: `task file has a 'runner_contract' line that is not a standalone column-0 'runner_contract: none|full-1x|full-2x' line (near-miss text: '${lineText}') -- 판정 불가 (ambiguous, cannot resolve, HYK-425 2R)`,
+    };
+  }
+  if (matches.length === 0) return { state: "absent" };
+  const value = matches[0][1].trim().toLowerCase();
+  if (!Object.hasOwn(RUNNER_CONTRACT_REQUIRED_RUNS, value)) {
+    return {
+      state: "ambiguous",
+      reason: `task file 'runner_contract:' value '${value}' is not one of 'none'/'full-1x'/'full-2x' -- 판정 불가 (ambiguous, cannot resolve, HYK-425)`,
+    };
+  }
+  return {
+    state: "set",
+    value,
+    requiredRuns: RUNNER_CONTRACT_REQUIRED_RUNS[value],
+  };
+}
+
+// §2 item2 "요구 회차 = max(계약 N, 주장 개수)" · item3 "계약 줄이 기존
+// 주장 기반 요구를 낮추는 경로가 하나도 없어야 한다"(약화 금지) -- 여기서
+// 계약과 주장을 한 번 합쳐 requiredRuns로 넘긴다. ⚠️HYK-425 2R P3-1(검토
+// 1R M2a 실측 정정): 이 합산이 "유일한 합산 자리"는 아니다 -- 아래 두
+// 소비 함수(resolveRunnerReceiptVerdict의 claims 재확인,
+// resolveConsecutiveRunnerReceiptsVerdict의 `Math.max(requiredRuns,
+// claimCount)`)가 각자 받은 requiredRuns를 다시 자기 쪽 주장 개수와
+// 합친다 -- 즉 합산은 두 겹(이중 방어)이다. 그래서 이 자리의 max()만
+// 제자리 변이로 없애도(M2a) 두 소비 함수가 자기 쪽에서 다시 합치므로 그
+// 변이는 하중이 없다(남는 변이, load-bearing 아님) -- 두 자리 모두를
+// 계약 우선으로 바꾸는 변이(M2)만 하중을 진다. ambiguous 계약은 여기서
+// 바로 거부로 끝난다.
+export function resolveRunnerContractActivation({
+  taskContent,
+  resultContent,
+}) {
+  const directive = resolveRunnerContractDirective(taskContent);
+  if (directive.state === "ambiguous") {
+    return {
+      ok: false,
+      code: RUNNER_RECEIPT_REJECT_REASON.INVALID,
+      reason: `runner contract gate (HYK-425): ${directive.reason}`,
+    };
+  }
+  const contractRuns = directive.state === "set" ? directive.requiredRuns : 0;
+  const claimRuns = countRunnerExitClaims(resultContent);
+  return {
+    ok: true,
+    directive,
+    requiredRuns: Math.max(contractRuns, claimRuns),
+  };
+}
+
+// 거부 사유 문자열에 "계약 줄에서 발화했다"는 사실(키·값)을 담는다(§2
+// item4) -- 계약이 실제로 1회 이상을 요구할 때만 붙인다(값 `none`은
+// "이 라운드는 계약으로 요구하지 않는다"는 선언이므로 붙이지 않는다).
+function runnerContractReasonSuffix(contractDirective) {
+  if (!contractDirective || contractDirective.state !== "set") return "";
+  if (contractDirective.requiredRuns < 1) return "";
+  return ` (activated by task file's 'runner_contract: ${contractDirective.value}' line, HYK-425)`;
+}
+
+// HYK-425 2R P2-2(검토 1R 표 A 실측): 계약으로만 발화하고(claims=false)
+// 결과 파일에 exit= 주장이 0일 때도 MISSING 사유의 앞머리가 "result
+// claims ... 'exit=<n>' line"이라 말해, 사람이 "워커가 exit=를 썼다"고
+// 오독했다. claims가 참일 때는 이 문구를 한 글자도 바꾸지 않는다(주장
+// 발화 경로, 무회귀). eslint complexity 게이트 때문에 분리한다
+// (runnerContractReasonSuffix를 뽑은 것과 같은 이유).
+function missingReceiptReasonHead(claims, contractDirective) {
+  if (claims) {
+    return "result claims full runner results (standalone 'exit=<n>' line)";
+  }
+  return `task file declares a runner contract ('runner_contract: ${contractDirective?.value}' line)`;
+}
+
+// resolveRunnerReceiptVerdict 자신의 분기 수를 줄이기 위해(eslint
+// complexity 게이트, firstUnreadableReceiptVerdict/firstInvalidReceiptVerdict
+// 를 뽑은 것과 같은 이유) 분리한다 -- 판정/사유는 조금도 바뀌지 않는다.
+function isMalformedRunnerReceipt(receipt) {
+  return (
+    typeof receipt !== "object" ||
+    receipt === null ||
+    typeof receipt.runner_exit !== "number" ||
+    typeof receipt.head_commit !== "string"
+  );
+}
+
 function readRunnerReceiptFile(harnessDir) {
   const path = join(harnessDir, RUNNER_RECEIPT_FILENAME);
   let raw;
@@ -1866,10 +2011,18 @@ function readRunnerReceiptFile(harnessDir) {
   }
 }
 
-export function resolveRunnerReceiptVerdict({ resultContent, harnessDir }) {
-  if (!resultClaimsRunnerResults(resultContent)) {
+export function resolveRunnerReceiptVerdict({
+  resultContent,
+  harnessDir,
+  requiredRuns = 0,
+  contractDirective,
+}) {
+  const claims = resultClaimsRunnerResults(resultContent);
+  if (!claims && requiredRuns < 1) {
     return { ok: true, skipped: true };
   }
+  const contractSuffix = runnerContractReasonSuffix(contractDirective);
+  const missingReasonHead = missingReceiptReasonHead(claims, contractDirective);
 
   // 축 ⓑ(실물 대조)와 같은 함수 재사용: 워커의 자기 진술이 아니라 이
   // 워크트리의 실제 HEAD를 기계가 직접 읽는다 -- 영수증의 head_commit을
@@ -1888,7 +2041,7 @@ export function resolveRunnerReceiptVerdict({ resultContent, harnessDir }) {
     return {
       ok: false,
       code: RUNNER_RECEIPT_REJECT_REASON.MISSING,
-      reason: `runner receipt gate (HYK-411): result claims full runner results (standalone 'exit=<n>' line) but ${RUNNER_RECEIPT_FILENAME} is missing at '${found.path}' -- fail-closed, refusing to consume an unverifiable runner claim`,
+      reason: `runner receipt gate (HYK-411): ${missingReasonHead} but ${RUNNER_RECEIPT_FILENAME} is missing at '${found.path}' -- fail-closed, refusing to consume an unverifiable runner claim${contractSuffix}`,
     };
   }
   if (found.parseError) {
@@ -1899,12 +2052,7 @@ export function resolveRunnerReceiptVerdict({ resultContent, harnessDir }) {
     };
   }
   const receipt = found.receipt;
-  if (
-    typeof receipt !== "object" ||
-    receipt === null ||
-    typeof receipt.runner_exit !== "number" ||
-    typeof receipt.head_commit !== "string"
-  ) {
+  if (isMalformedRunnerReceipt(receipt)) {
     return {
       ok: false,
       code: RUNNER_RECEIPT_REJECT_REASON.INVALID,
@@ -1923,21 +2071,21 @@ export function resolveRunnerReceiptVerdict({ resultContent, harnessDir }) {
     return {
       ok: false,
       code: RUNNER_RECEIPT_REJECT_REASON.MEASUREMENT_UNAVAILABLE,
-      reason: `runner receipt gate (HYK-477): runner receipt at ${found.path} reports runner_status=${MEASUREMENT_UNAVAILABLE_OOM_STATUS} -- 측정 불능(measurement unavailable), NOT a test failure: the runner was forcibly killed (OOM/signal) before node --test produced a real result (HYK-467 규율) -- fail-closed all the same (소비는 여전히 거부한다), but reported with a distinct code/문장 so a reader cannot mistake this for "the tests failed"`,
+      reason: `runner receipt gate (HYK-477): runner receipt at ${found.path} reports runner_status=${MEASUREMENT_UNAVAILABLE_OOM_STATUS} -- 측정 불능(measurement unavailable), NOT a test failure: the runner was forcibly killed (OOM/signal) before node --test produced a real result (HYK-467 규율) -- fail-closed all the same (소비는 여전히 거부한다), but reported with a distinct code/문장 so a reader cannot mistake this for "the tests failed"${contractSuffix}`,
     };
   }
   if (receipt.runner_exit !== 0) {
     return {
       ok: false,
       code: RUNNER_RECEIPT_REJECT_REASON.RED,
-      reason: `runner receipt gate (HYK-411): runner receipt at ${found.path} reports runner_exit=${receipt.runner_exit} (non-zero) -- the runner itself observed a failed run, refusing to consume a result claiming green (파이프가 숨긴 빨간 실행 차단)`,
+      reason: `runner receipt gate (HYK-411): runner receipt at ${found.path} reports runner_exit=${receipt.runner_exit} (non-zero) -- the runner itself observed a failed run, refusing to consume a result claiming green (파이프가 숨긴 빨간 실행 차단)${contractSuffix}`,
     };
   }
   if (receipt.head_commit.toLowerCase() !== actualHead.sha) {
     return {
       ok: false,
       code: RUNNER_RECEIPT_REJECT_REASON.STALE,
-      reason: `runner receipt gate (HYK-411): runner receipt at ${found.path} head_commit '${receipt.head_commit}' does not match this worktree's actual HEAD '${actualHead.sha}' -- refusing to consume a stale/reused runner result (HYK-408 1R 실피해 재발 방지)`,
+      reason: `runner receipt gate (HYK-411): runner receipt at ${found.path} head_commit '${receipt.head_commit}' does not match this worktree's actual HEAD '${actualHead.sha}' -- refusing to consume a stale/reused runner result (HYK-408 1R 실피해 재발 방지)${contractSuffix}`,
     };
   }
   return { ok: true };
@@ -2050,47 +2198,47 @@ function countCurrentHeadNumberedReceipts(harnessDir, actualHeadSha) {
 // resolveConsecutiveRunnerReceiptsVerdict 자신의 분기 수를 줄이기 위해
 // (eslint complexity 게이트) 분리한 두 순회 -- 각각 "읽기 자체가 됐는가"와
 // "읽은 내용이 유효한가"라는 서로 다른 질문을 한다.
-function firstUnreadableReceiptVerdict(read) {
+function firstUnreadableReceiptVerdict(read, contractSuffix = "") {
   for (const r of read) {
     if (r.measurementUnavailable) {
       return {
         ok: false,
         code: RUNNER_RECEIPT_REJECT_REASON.MEASUREMENT_UNAVAILABLE,
-        reason: `consecutive runner receipt gate (HYK-485): ${r.path} is an empty placeholder (allocateRunSlot's own reservation, HYK-485 §2-1) with no receipt content written yet -- 측정 불능(measurement unavailable), NOT invalid: this run was forcibly killed before it ever produced a result (review P2-1)`,
+        reason: `consecutive runner receipt gate (HYK-485): ${r.path} is an empty placeholder (allocateRunSlot's own reservation, HYK-485 §2-1) with no receipt content written yet -- 측정 불능(measurement unavailable), NOT invalid: this run was forcibly killed before it ever produced a result (review P2-1)${contractSuffix}`,
       };
     }
     if (r.err) {
       return {
         ok: false,
         code: RUNNER_RECEIPT_REJECT_REASON.INVALID,
-        reason: `consecutive runner receipt gate (HYK-485): ${r.path} ${r.err} -- fail-closed`,
+        reason: `consecutive runner receipt gate (HYK-485): ${r.path} ${r.err} -- fail-closed${contractSuffix}`,
       };
     }
   }
   return null;
 }
 
-function firstInvalidReceiptVerdict(read, actualHeadSha) {
+function firstInvalidReceiptVerdict(read, actualHeadSha, contractSuffix = "") {
   for (const { path, receipt } of read) {
     if (receipt.runner_status === MEASUREMENT_UNAVAILABLE_OOM_STATUS) {
       return {
         ok: false,
         code: RUNNER_RECEIPT_REJECT_REASON.MEASUREMENT_UNAVAILABLE,
-        reason: `consecutive runner receipt gate (HYK-485): ${path} reports runner_status=${MEASUREMENT_UNAVAILABLE_OOM_STATUS} -- 측정 불능(measurement unavailable), NOT a test failure: one of the two claimed runs was forcibly killed before producing a real result`,
+        reason: `consecutive runner receipt gate (HYK-485): ${path} reports runner_status=${MEASUREMENT_UNAVAILABLE_OOM_STATUS} -- 측정 불능(measurement unavailable), NOT a test failure: one of the two claimed runs was forcibly killed before producing a real result${contractSuffix}`,
       };
     }
     if (receipt.runner_exit !== 0) {
       return {
         ok: false,
         code: RUNNER_RECEIPT_REJECT_REASON.RED,
-        reason: `consecutive runner receipt gate (HYK-485): ${path} reports runner_exit=${receipt.runner_exit} (non-zero) -- refusing to consume a claimed 2-consecutive-green result when one of the two runs was not green`,
+        reason: `consecutive runner receipt gate (HYK-485): ${path} reports runner_exit=${receipt.runner_exit} (non-zero) -- refusing to consume a claimed 2-consecutive-green result when one of the two runs was not green${contractSuffix}`,
       };
     }
     if (receipt.head_commit.toLowerCase() !== actualHeadSha) {
       return {
         ok: false,
         code: RUNNER_RECEIPT_REJECT_REASON.STALE,
-        reason: `consecutive runner receipt gate (HYK-485): ${path} head_commit '${receipt.head_commit}' does not match this worktree's actual HEAD '${actualHeadSha}'`,
+        reason: `consecutive runner receipt gate (HYK-485): ${path} head_commit '${receipt.head_commit}' does not match this worktree's actual HEAD '${actualHeadSha}'${contractSuffix}`,
       };
     }
   }
@@ -2112,6 +2260,8 @@ function firstInvalidReceiptVerdict(read, actualHeadSha) {
 export function resolveConsecutiveRunnerReceiptsVerdict({
   resultContent,
   harnessDir,
+  requiredRuns = 0,
+  contractDirective,
 }) {
   // HEAD is resolved unconditionally (not gated behind claimCount like
   // resolveRunnerReceiptVerdict's sibling axis) because the receipts-leg
@@ -2125,7 +2275,15 @@ export function resolveConsecutiveRunnerReceiptsVerdict({
   const matchingReceiptCount = actualHead.ok
     ? countCurrentHeadNumberedReceipts(harnessDir, actualHead.sha)
     : 0;
-  if (claimCount < 2 && matchingReceiptCount < 2) {
+  // HYK-425 §2 item2/item3: "요구 회차 = max(계약 N, 주장 개수)" -- `none`/
+  // 계약 줄 없음(requiredRuns=0)에서는 effectiveRequired === claimCount라
+  // 아래 skip 판정이 이 축이 생기기 전과 바이트 하나도 다르지 않다(무회귀).
+  // `full-1x`(requiredRuns=1)는 여기서 effectiveRequired를 최대 1로만
+  // 끌어올리므로 claimCount가 0이어도 이 축(2회 연속)은 계속 skip된다 --
+  // 2회 연속 요구는 `full-2x`에서만 켜진다(§2 item2 "full-2x 이면 ... 회차
+  // 영수증 검사를 요구한다").
+  const effectiveRequired = Math.max(requiredRuns, claimCount);
+  if (effectiveRequired < 2 && matchingReceiptCount < 2) {
     return { ok: true, skipped: true };
   }
 
@@ -2137,12 +2295,13 @@ export function resolveConsecutiveRunnerReceiptsVerdict({
     };
   }
 
+  const contractSuffix = runnerContractReasonSuffix(contractDirective);
   const entries = listNumberedRunnerReceiptEntries(harnessDir);
   if (entries.length < 2) {
     return {
       ok: false,
       code: RUNNER_RECEIPT_REJECT_REASON.MEASUREMENT_UNAVAILABLE,
-      reason: `consecutive runner receipt gate (HYK-485): this round shows evidence of a 2-consecutive-green requirement (result content claims ${claimCount} separate runner executions and/or ${matchingReceiptCount} numbered receipt(s) match this worktree's actual HEAD) but only ${entries.length} numbered receipt(s) (${RUNNER_RECEIPT_RUN_PREFIX}<N>.json) exist under ${harnessDir} -- 측정 불능(measurement unavailable), NOT a test failure: this does not mean the tests failed, it means the machine cannot verify a second run actually happened (HYK-467 규율, HYK-480 1R 실사고 재발 방지) -- "2회 초록"으로 조용히 통과시키지 않는다`,
+      reason: `consecutive runner receipt gate (HYK-485): this round shows evidence of a 2-consecutive-green requirement (result content claims ${claimCount} separate runner executions and/or ${matchingReceiptCount} numbered receipt(s) match this worktree's actual HEAD${contractSuffix}) but only ${entries.length} numbered receipt(s) (${RUNNER_RECEIPT_RUN_PREFIX}<N>.json) exist under ${harnessDir} -- 측정 불능(measurement unavailable), NOT a test failure: this does not mean the tests failed, it means the machine cannot verify a second run actually happened (HYK-467 규율, HYK-480 1R 실사고 재발 방지) -- "2회 초록"으로 조용히 통과시키지 않는다`,
     };
   }
 
@@ -2150,10 +2309,14 @@ export function resolveConsecutiveRunnerReceiptsVerdict({
   const read = lastTwo.map((e) =>
     readNumberedRunnerReceipt(harnessDir, e.name),
   );
-  const unreadableVerdict = firstUnreadableReceiptVerdict(read);
+  const unreadableVerdict = firstUnreadableReceiptVerdict(read, contractSuffix);
   if (unreadableVerdict) return unreadableVerdict;
 
-  const invalidVerdict = firstInvalidReceiptVerdict(read, actualHead.sha);
+  const invalidVerdict = firstInvalidReceiptVerdict(
+    read,
+    actualHead.sha,
+    contractSuffix,
+  );
   if (invalidVerdict) return invalidVerdict;
 
   const [a, b] = read;
@@ -2161,7 +2324,7 @@ export function resolveConsecutiveRunnerReceiptsVerdict({
     return {
       ok: false,
       code: RUNNER_RECEIPT_REJECT_REASON.INVALID,
-      reason: `consecutive runner receipt gate (HYK-485): ${a.path} and ${b.path} share the same finished_at ('${a.receipt.finished_at}') -- two receipts claiming to be from two separate runs cannot share a timestamp`,
+      reason: `consecutive runner receipt gate (HYK-485): ${a.path} and ${b.path} share the same finished_at ('${a.receipt.finished_at}') -- two receipts claiming to be from two separate runs cannot share a timestamp${contractSuffix}`,
     };
   }
 
@@ -2499,19 +2662,32 @@ export function resolveDispatchRecordExistence({
 // AMBIGUOUS로 거부한다(HYK-486 선례 -- 조용히 하나를 고르지 않는다).
 //
 // HYK-434 2R(책임자 축 ⓐ -- 형식→값 대조 좁히기): 줄 앞 공백·목록 기호
-// (`- `/`* `)·키를 감싸는 굵게 장식(`**`)·키 대소문자·반각/전각 콜론은
+// ·키를 감싸는 굵게 장식(`**`)·키 대소문자·반각/전각 콜론은
 // «모양»일 뿐이라 거부 사유가 되지 않는다 -- 아래 세 정규식의
-// `[ \t]*(?:[-*][ \t]+)?\*{0,2}...\*{0,2}[ \t]*[:：][ \t]*`가 그 장식을
-// 구조적으로 흡수한다(대소문자는 `i` 플래그). 값 자체의 따옴표·백틱·
-// 굵게 장식은 stripG1ValueDecoration이 캡처 뒤에 벗긴다(regex는 가능한
-// 만큼만 구조적으로 흡수하고, 나머지는 후처리가 덮는다 -- 두 겹이라도
-// 중복 손실 없음, 아래 함수 주석 참조).
+// `[ \t]*(?:[-*+][ \t]+|\d+\.[ \t]+)?\*{0,2}...\*{0,2}[ \t]*[:：][ \t]*`가
+// 그 장식을 구조적으로 흡수한다(대소문자는 `i` 플래그). 값 자체의
+// 따옴표·백틱·굵게 장식은 stripG1ValueDecoration이 캡처 뒤에 벗긴다
+// (regex는 가능한 만큼만 구조적으로 흡수하고, 나머지는 후처리가 덮는다
+// -- 두 겹이라도 중복 손실 없음, 아래 함수 주석 참조).
+//
+// HYK-425 §2 item7(HYK-434 3R 검토 P2-2 편입, 2026-10-14 11:4x 책임자 판정
+// 원문 그대로): 목록 접두 범주가 세 키 모두 같아야 한다 -- 1R에는
+// `pane_match:`만 `+`/`1. ` 접두를 받고 `dispatch_verified:`/
+// `task_id_from_dispatch:`는 `-`/`*`만 받아, 같은 모양의 줄인데도 두 키는
+// "형식 거부"(found mid-line) 됐다(2026-10-10 1958 판정 "실해 0 · 회귀
+// 아님" + 2026-10-14 11:4x 판정 "H1에 편입"). 아래 두 정규식의 접두 그룹을
+// `PANE_MATCH_RE_G`(바로 아래)가 이미 쓰는 범주 문자열과 글자 단위로
+// 같게 맞춘다 -- 값 대조는 전혀 건드리지 않는다(새 정규식 설계를 만들지
+// 않고 이미 있는 모양을 세 번째 키에도 그대로 베낀다, §HYK-450② 복제
+// 금지 규율과 반대 방향으로 읽지 말 것: 여기서 "복제"는 세 키가 «같은
+// 모양을 공유»하게 만드는 것이고, 그 모양 자체를 재발명하지 않는다는
+// 뜻이다).
 const DISPATCH_VERIFIED_RE_G =
-  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}dispatch_verified\*{0,2}[ \t]*[:：][ \t]*(\S.*?)[ \t]*$/gim;
+  /^[ \t]*(?:[-*+][ \t]+|\d+\.[ \t]+)?\*{0,2}dispatch_verified\*{0,2}[ \t]*[:：][ \t]*(\S.*?)[ \t]*$/gim;
 const DISPATCH_VERIFIED_ANYWHERE_RE = /dispatch_verified[ \t]*[:：]/i;
 
 const TASK_ID_FROM_DISPATCH_RE_G =
-  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}task_id_from_dispatch\*{0,2}[ \t]*[:：][ \t]*(\S.*?)[ \t]*$/gim;
+  /^[ \t]*(?:[-*+][ \t]+|\d+\.[ \t]+)?\*{0,2}task_id_from_dispatch\*{0,2}[ \t]*[:：][ \t]*(\S.*?)[ \t]*$/gim;
 const TASK_ID_FROM_DISPATCH_ANYWHERE_RE = /task_id_from_dispatch[ \t]*[:：]/i;
 
 // pane_match 줄 모양(worker-dispatch-rule.md §1 원문): "<값1> == <값2> ?
@@ -3480,6 +3656,60 @@ function resolveHandshakeCore({ role, harnessDir, now, dispatchId }) {
   };
 }
 
+// checkRelayHandshake 자신의 줄 수를 줄이기 위해(eslint max-lines-per-
+// function, resolveDispatchAndG1Verdict/checkRewriteAndStaleness를 뽑은
+// 것과 같은 이유) 뽑는다 -- 판정/사유/순서는 조금도 바뀌지 않는다.
+// resolveDispatchAndG1Verdict와 같은 반환 관례: 실패 verdict 또는
+// null(통과, 호출자는 `if (result) return result;`로 이어받는다).
+//
+// HYK-425 §2: 발화 조건을 결과 파일의 `exit=` 주장에서 task 파일의 러너
+// 계약 줄(runner_contract:)로도 넓힌다 -- taskContent(배달된 task 파일
+// 그대로, resultContent처럼 깎지 않는다: 계약 줄은 워커가 쓰는 쪽이
+// 아니라 ORCH가 배달하는 쪽이라 완료 표지/재작성 지문과 무관하다)를
+// 읽어 "요구 회차 = max(계약 N, 주장 개수)"를 한 번만 계산하고, 아래 두
+// 소비 함수 모두에 같은 값을 넘긴다(§2 item2/item3). ambiguous 계약(같은
+// 키 2개 이상, 또는 값이 none/full-1x/full-2x 밖)은 여기서 바로 거부로
+// 끝난다 -- 조용히 하나를 고르지 않는다(HYK-486 선례). resultClaimsRunner
+// Results 자신은 이번 반려의 재현 대상이 아니었지만(검토 ⑷: "이번
+// postscript 경로의 직접 원인은 아니다"), 같은 축(judged vs 전체) 위에서
+// 같은 종류의 값 확인을 하는 게이트이므로 구조적으로 같은 범위를 쓰게
+// 맞춘다 -- head_commit 하나만 땜질하지 않는다는 이 라운드의 원칙
+// (coder.md ⑵) 그대로.
+function resolveRunnerContractGatedVerdict({
+  taskContent,
+  resultContent,
+  harnessDir,
+}) {
+  const runnerContractActivation = resolveRunnerContractActivation({
+    taskContent,
+    resultContent,
+  });
+  if (!runnerContractActivation.ok) return runnerContractActivation;
+
+  const runnerReceiptVerdict = resolveRunnerReceiptVerdict({
+    resultContent,
+    harnessDir,
+    requiredRuns: runnerContractActivation.requiredRuns,
+    contractDirective: runnerContractActivation.directive,
+  });
+  if (!runnerReceiptVerdict.ok) return runnerReceiptVerdict;
+
+  // HYK-485 §2-2: runnerReceiptVerdict와 같은 자리 원칙(§4 무회귀) -- 같은
+  // resultContent/harnessDir을 넘긴다. 0/1회 주장 라운드는 skip으로 빠져
+  // 나가 이 축이 존재하기 전과 완전히 동일하게 움직인다(과차단 금지).
+  const consecutiveRunnerReceiptsVerdict =
+    resolveConsecutiveRunnerReceiptsVerdict({
+      resultContent,
+      harnessDir,
+      requiredRuns: runnerContractActivation.requiredRuns,
+      contractDirective: runnerContractActivation.directive,
+    });
+  if (!consecutiveRunnerReceiptsVerdict.ok)
+    return consecutiveRunnerReceiptsVerdict;
+
+  return null;
+}
+
 export function checkRelayHandshake({
   role,
   harnessDir = join(repoRoot(), ".harness"),
@@ -3547,32 +3777,19 @@ export function checkRelayHandshake({
   });
   if (!headCommitVerdict.ok) return headCommitVerdict;
 
-  // HYK-411: headCommitVerdict와 같은 자리 원칙(§4 무회귀) -- role 무관(이번
-  // 실사고 HYK-408 1R도 CODER 라운드였다, resolveDispatchRecordExistence와
-  // 동일 논거). resultContent가 "전체 러너 결과"를 주장하지 않으면 즉시
-  // ok:true(skipped)로 빠져 나가 이 축이 존재하기 전과 완전히 동일하게
-  // 움직인다(과차단 금지). HYK-423 3R §2: 여기도 `judgedRegion`을 넘긴다
-  // -- resultClaimsRunnerResults 자신은 이번 반려의 재현 대상이 아니었지만
-  // (검토 ⑷: "이번 postscript 경로의 직접 원인은 아니다"), 같은 축(judged
-  // vs 전체) 위에서 같은 종류의 값 확인을 하는 게이트이므로 구조적으로
-  // 같은 범위를 쓰게 맞춘다 -- head_commit 하나만 땜질하지 않는다는
-  // 이 라운드의 원칙(coder.md ⑵) 그대로.
-  const runnerReceiptVerdict = resolveRunnerReceiptVerdict({
+  // HYK-411/HYK-425: headCommitVerdict와 같은 자리 원칙(§4 무회귀) -- role
+  // 무관(이번 실사고 HYK-408 1R도 CODER 라운드였다,
+  // resolveDispatchRecordExistence와 동일 논거). HYK-423 3R §2: 여기도
+  // `judgedRegion`을 넘긴다. quality-check max-lines-per-function 상한을
+  // 지키려고 checkRewriteAndStaleness 등과 같은 이유로 뽑았다(판정/사유/
+  // 순서는 조금도 바뀌지 않는다, resolveRunnerContractGatedVerdict 자체
+  // 헤더 참조).
+  const runnerContractVerdict = resolveRunnerContractGatedVerdict({
+    taskContent,
     resultContent: judgedRegion,
     harnessDir,
   });
-  if (!runnerReceiptVerdict.ok) return runnerReceiptVerdict;
-
-  // HYK-485 §2-2: runnerReceiptVerdict와 같은 자리 원칙(§4 무회귀) -- 같은
-  // judgedRegion/harnessDir을 넘긴다. 0/1회 주장 라운드는 skip으로 빠져
-  // 나가 이 축이 존재하기 전과 완전히 동일하게 움직인다(과차단 금지).
-  const consecutiveRunnerReceiptsVerdict =
-    resolveConsecutiveRunnerReceiptsVerdict({
-      resultContent: judgedRegion,
-      harnessDir,
-    });
-  if (!consecutiveRunnerReceiptsVerdict.ok)
-    return consecutiveRunnerReceiptsVerdict;
+  if (runnerContractVerdict) return runnerContractVerdict;
 
   // HYK-387/HYK-434: headCommitVerdict와 같은 자리 원칙(§4 무회귀) -- REVIEW
   // 한정 아님(오늘의 실사고는 CODER 라운드였다, coder-task.md §1 원문).
