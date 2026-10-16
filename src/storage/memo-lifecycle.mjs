@@ -85,8 +85,26 @@ export function createSoftDeleteLifecycle(adapter, options = {}) {
   // 끝났다) "남은 유예"(= 삭제시각 + graceMs - now, 즉 원래 예정됐던
   // 시각 그대로)만큼 다시 예약한다 -- put 실패 전까지 하드 삭제가
   // 전혀 안 미뤄진 것처럼 취급해, 실패해도 "원래 7초" 축은 그대로
-  // 유지된다(남은 유예가 0 이하면 scheduleHardDelete 가 바로 지운다).
-  // 그 뒤 실패를 그대로 호출자에 전파한다(기존 동작 유지).
+  // 유지된다.
+  //
+  // r3 P1-1(검토 2R F2 재현 · 책임자 판정 "남은 유예 ≤0 이라도 held
+  // 중엔 동기 삭제 금지"): 위 "남은 유예"가 이미 0 이하면, 예전에는
+  // scheduleHardDelete 가 그 자리에서 "동기로" runHardDelete 를 불러
+  // 레코드를 즉시 지웠다 -- mount 쪽은 이 catch 가 끝난 뒤에야(실패를
+  // 전파받은 뒤) holdPending 을 부르므로, 그 사이(cancelPending 이
+  // 이미 held 를 지운 뒤부터 holdPending 이 다시 held 를 세우기 전
+  // 까지)는 아무도 이 레코드를 보호하지 않는 창이 생겼다 -- held
+  // 상태로 restore 에 들어왔던 경우든, 이번이 "첫" 실패인데 put 이
+  // 남은 유예보다 오래 걸려 그 사이 유예가 다 지나버린 경우든 같은
+  // 창이다(검토 2R F2 · 책임자 판정 "변형"). 유예가 남아있으면(>0)
+  // 그 남은 시간만큼 정상적으로 다시 예약하고(아래), 이미 다
+  // 지났으면(<=0) 타이머를 걸지 않고 바로 "들고 있는 중"으로 표시
+  // 한다 -- mount 가 곧이어 holdPending 을 불러도(이미 held 라
+  // no-op) 안전하고, 끝까지 아무도 release 를 안 불러도(mount 를
+  // 거치지 않는 이 파일 자신의 시험처럼) 다음 시작의
+  // cleanupExpiredDeletes 가 결국 이 고아를 정리한다(ⓐ와 이어짐 --
+  // 세션 안에서만 held 가 "영원히" 보일 뿐, 재시작 뒤엔 평소처럼
+  // 쓸린다).
   async function restore(id) {
     cancelPending(id);
     const memo = await adapter.get(id);
@@ -96,7 +114,12 @@ export function createSoftDeleteLifecycle(adapter, options = {}) {
       await adapter.put(updated);
     } catch (err) {
       if (memo.deletedAt != null) {
-        scheduleHardDelete(id, memo.deletedAt + graceMs - now());
+        const remaining = memo.deletedAt + graceMs - now();
+        if (remaining > 0) {
+          scheduleHardDelete(id, remaining);
+        } else {
+          heldHardDeletes.add(id);
+        }
       }
       throw err;
     }

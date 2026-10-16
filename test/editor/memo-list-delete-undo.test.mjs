@@ -109,11 +109,20 @@ function cardIds(container) {
   );
 }
 
+// r3: now 를 넘기지 않으면 lifecycle 의 "남은 유예" 재계산(restore 실패
+// 분기 · releasePending)이 실제 벽시계(Date.now)를 본다 -- 이 시험
+// 파일의 가짜 시계(clock.advance)는 그 실제 시간엔 영향을 못 주므로,
+// 대부분의 시험(바로 holdPending/cancelPending 이 뒤따라 그 계산값을
+// 덮어쓰는 경로)에서는 숨겨져 있던 문제였다. "남은 유예"의 정확한 값
+// 자체를 재는 고정 칸(P1-1·P2-1 ⓐ)에는 이 간극이 바로 드러나므로,
+// memo-lifecycle.test.mjs 의 관례(now: () => Date.now(), Date 도 함께
+// 모킹)와 같게 이 화면 결선에서도 now 를 가짜 시계 자신에 묶는다.
 function makeList(container, adapter, clock, extra = {}) {
   const toast = makeToastElements();
   const list = mountMemoList(container, adapter, {
     onOpen: () => {},
     toast,
+    now: clock.now,
     setTimeoutFn: clock.setTimeoutFn,
     clearTimeoutFn: clock.clearTimeoutFn,
     ...extra,
@@ -1032,6 +1041,193 @@ test("저장 실패 2회 연속: 토스트 영역의 오류 표시는 항상 하
     toast.element.querySelectorAll("button").length,
     2,
     "토스트 영역의 버튼은 되돌리기 1 + 오류 1 = 2개로 고정이어야 한다(중복 생성 없음)",
+  );
+});
+
+// HYK-304-lifecycle-orphans-1-r3(§2 요구 1·6, 고정 칸 -- mount 경유 +
+// 가짜 시계가 lifecycle 의 now 까지 몲): 검토 2R F2 재현을 실제 화면
+// 결선(toast.undoButton/errorButton) 위에서 잰다. 3000 에 되돌리기 put
+// 실패(남은 유예(4000)로 정상 재예약 + mount holdPending) → 10000 에
+// 재시도 put 재실패(이 시점 남은 유예는 이미 음수 -- r2 는 여기서 동기로
+// 지웠다) → 메모는 살아있고 실패 표시가 유지돼야 한다 → 그 뒤 재시도가
+// 성공하면 복원되고(목록·deletedAt===null), 그 뒤로 남은 타이머가 없어야
+// 한다(한참 더 흘려보내도 안 지워짐).
+test("고정 칸: 3000 에 되돌리기 put 실패 → 10000 에 재시도 put 재실패해도 메모 생존·표시 유지 → 재시도 성공으로 복원(P1-1, 기준선 474530e 에서 RED)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "P1-1 고정 칸 메모", 100);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  swipe(container.querySelector(`[data-memo-id="${id}"]`));
+  await settle();
+  assert.deepEqual(cardIds(container), [], "스와이프 직후 숨겨져야 한다");
+
+  clock.advance(3000); // t=3000
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click(); // 1차 되돌리기 시도, put 실패(남은 유예 4000 > 0)
+  await settle();
+  await settle();
+  assert.equal(toast.errorButton.hidden, false, "1차 실패 표시가 떠야 한다");
+  assert.ok(await adapter.get(id), "1차 실패 뒤에도 메모는 살아있어야 한다");
+
+  clock.advance(7000); // t=10000(원래 마감 7000 을 이미 지남)
+  adapter.forceNextPutFailures(1);
+  toast.errorButton.click(); // 2차 재시도, put 재실패(이 시점 남은 유예는 이미 음수)
+  await settle();
+  await settle();
+  assert.ok(
+    await adapter.get(id),
+    "남은 유예가 이미 음수로 떨어진 채 재시도가 또 실패해도 메모가 동기로 지워지면 안 된다(P1-1)",
+  );
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "실패 표시가 그대로 유지돼야 한다",
+  );
+  assert.deepEqual(
+    cardIds(container),
+    [],
+    "아직 복원되지 않았으니 카드는 안 보여야 한다",
+  );
+
+  toast.errorButton.click(); // 3차 재시도, 이번엔 성공
+  await settle();
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container),
+    [id],
+    "재시도 성공으로 목록에 복원돼야 한다",
+  );
+  const record = await adapter.get(id);
+  assert.equal(record.deletedAt, null, "삭제시각이 null 로 복원돼야 한다");
+
+  clock.advance(100000); // 남은 타이머가 없어야 한다 -- 있었다면 이 사이에 지워졌을 것
+  await settle();
+  const after = await adapter.get(id);
+  assert.ok(after, "복원 뒤에는 남아있는 하드 삭제 타이머가 없어야 한다");
+  assert.equal(after.deletedAt, null);
+});
+
+// HYK-304-lifecycle-orphans-1-r3(§2 요구 1 동반, P1-1 동반): memo-lifecycle.mjs
+// 의 restore 는 이미 없는 메모엔 거부가 아니라 "조용히 null"을 돌려준다
+// -- 이 null 을 체크하지 않으면 mount 가 "복원됐다"처럼 목록을 갱신하고
+// 실패 표시를 지운다. 레코드가 실제로 이미 사라진 상황(예: 동시 정리)을
+// 직접 흉내내 재시도가 성공처럼 보이지 않는지를 잰다.
+test("P1-1 동반: 이미 사라진 메모의 되돌리기 재시도는 '복원됐다'로 보이지 않고 실패 표시를 유지한다", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(adapter, "이미 사라진 메모", 100);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  swipe(container.querySelector(`[data-memo-id="${id}"]`));
+  await settle();
+  assert.deepEqual(cardIds(container), [], "스와이프 직후 숨겨져야 한다");
+
+  // 레코드가 이미 저장소에서 사라진 상황을 직접 흉내낸다(되돌리기 토스트
+  // 는 아직 떠 있는 채로).
+  await adapter.remove(id);
+
+  toast.undoButton.click();
+  await settle();
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container),
+    [],
+    "이미 없는 메모를 '복원됐다'처럼 목록에 되살리면 안 된다",
+  );
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "이미 사라진 메모의 재시도는 성공 처리 대신 실패 표시를 유지해야 한다(P1-1 동반)",
+  );
+  assert.equal(
+    toast.element.hidden,
+    false,
+    "토스트 영역 자체도 숨겨지면 안 된다(성공으로 위장하면 전체가 숨는다)",
+  );
+});
+
+// HYK-304-lifecycle-orphans-1-r3(§2 요구 3, P2-1 ⓐ 판정 + P3-1 해제
+// 지점): A 의 실패 표시가 떠 있는 동안(held) B 의 저장 실패가 그 표시를
+// 덮어쓰면, A 는 "해소"로 보고 유예를 재개한다(원래 마감 기준). A 의
+// 레코드는 B 에게 자리를 "내준" 뒤부터는 toastCtrl 밖에서(값으로) 계속
+// 추적해야 한다 -- A 는 원래 마감(7000)에 그대로 사라지고, B 는(자기
+// 자신의 재시도 실패로 held) 그 사이 지워지지 않아야 한다.
+test("P2-1 ⓐ: 다른 메모의 저장 실패가 표시를 덮어쓰면 그 메모의 유예가 재개돼 원래 마감에 사라진다(P3-1 해제 지점)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idA = await createMemoAt(adapter, "A(덮어써짐)", 100);
+  const idB = await createMemoAt(adapter, "B(덮어씀)", 200);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  // A 스와이프(t=0) → A 되돌리기 put 1회 거부(t=1000) → A 실패 표시(held).
+  swipe(container.querySelector(`[data-memo-id="${idA}"]`));
+  await settle();
+  clock.advance(1000); // t=1000
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(toast.errorButton.hidden, false, "A 실패 표시가 떠야 한다");
+
+  // B 스와이프(t=1000) → B 토스트(되돌리기 버튼)가 뜨고, A 의 실패
+  // 표시와 공존한다(기존 공존 동작, 요구 ⓑ).
+  swipe(container.querySelector(`[data-memo-id="${idB}"]`));
+  await settle();
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "B 삭제 뒤 되돌리기 버튼이 보여야 한다",
+  );
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 의 실패 표시는 그대로 남아있어야 한다",
+  );
+
+  // B 의 되돌리기도 put 1회 거부 → B 실패 표시가 A 의 자리를 "덮어쓴다"
+  // (errorState.id 가 A -> B 로 바뀜 -- 여기서 A 가 해소·release 된다).
+  clock.advance(2000); // t=3000
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "B 의 실패 표시가 떠야 한다(덮어씀)",
+  );
+
+  // A 는 "원래 마감"(deletedAt(0)+graceMs(7000)=7000) 기준으로 재개돼야
+  // 한다 -- 지금 t=3000, 남은 시간 4000ms.
+  clock.advance(3999); // t=6999
+  await settle();
+  assert.ok(
+    await adapter.get(idA),
+    "A 는 6999ms 까지는 살아있어야 한다(덮어쓰기로 재개된 유예, 경계 -1ms)",
+  );
+
+  clock.advance(1); // t=7000
+  await settle();
+  assert.equal(
+    await adapter.get(idA),
+    undefined,
+    "A 는 덮어쓰기로 유예가 재개돼 원래 마감(7000ms)에 하드 삭제된다(P2-1 ⓐ · P3-1 해제 지점)",
+  );
+
+  // B 는 자기 자신의 실패로 held 중이니 아직 지워지면 안 된다(A 의
+  // 해제가 B 에 영향을 주면 안 된다 -- 교차 오염 없음).
+  assert.ok(
+    await adapter.get(idB),
+    "B 는 held 유지 중이라 A 의 해제와 무관하게 아직 살아있어야 한다",
   );
 });
 

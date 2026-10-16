@@ -40,7 +40,15 @@ export const UNDO_TOAST_MS = 7000;
 // 성공했다고 B 의 아직 안 풀린 실패 표시까지 같이 지워지는" 교차
 // 오염을 막는다(두 상태가 같은 영역을 나눠 쓸 때의 설계 선택 · 결과
 // 파일 §한계에 교차 사례 1건 기록).
-function createToastController(toast) {
+// r3 P3-1(검토 2R "죽은 releasePending" · 책임자 판정 "실제 해소 경로
+// (덮어쓰기 · 표시 닫힘)로"): 실패 표시가 "성공 없이" 사라지는 유일한
+// 자리가 바로 이 영역이다 -- 다른 메모의 새 실패가 지금 떠 있는
+// errorState 를 덮어쓸 때(아래 showSaveError 의 id!==errorState.id
+// 분기)뿐이다. onErrorOverwritten(prevId) 가 그 순간을 mount 쪽
+// (lifecycle.releasePending)에 알려준다 -- 같은 id 가 자기 자신을
+// 다시 보여주는 경우(재시도 재실패)는 "덮어씀"이 아니라 "그대로
+// 유지"이므로(P1-1 경계) 호출하지 않는다.
+function createToastController(toast, { onErrorOverwritten } = {}) {
   let active = null;
   let errorState = null;
 
@@ -98,6 +106,13 @@ function createToastController(toast) {
     if (!toast || !toast.errorButton) return;
     if (errorState) {
       toast.errorButton.removeEventListener("click", errorState.onClick);
+      // r3 P3-1/P2-1 ⓐ: errorState 가 "다른" id 를 가리키고 있었다면
+      // 이 호출이 그 표시를 성공 없이 덮어쓴 것이다 -- 그 메모의 유예를
+      // 재개한다(원래 마감 기준). 같은 id 가 자기 자신을 다시 보여주는
+      // 경우(재시도 재실패)는 덮어씀이 아니므로 그대로 둔다(P1-1 경계).
+      if (errorState.id !== id && onErrorOverwritten) {
+        onErrorOverwritten(errorState.id);
+      }
     }
     const onClick = () => retry();
     errorState = { id, onClick };
@@ -177,7 +192,15 @@ export function mountMemoList(
   });
   const scheduleFn = setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
   const cancelFn = clearTimeoutFn ?? ((id) => clearTimeout(id));
-  const toastCtrl = createToastController(toast);
+  const toastCtrl = createToastController(toast, {
+    // r3 P3-1 해제 지점: 덮어써진 메모의 유예를 재개한다 -- 실패해도
+    // (이미 없어졌거나 유예가 다 지났어도) releasePending 자신이
+    // 안전하므로 조용히 삼킨다(fire-and-forget, 타이머 콜백과 같은
+    // 이유로 unhandledRejection 방지).
+    onErrorOverwritten: (overwrittenId) => {
+      lifecycle.releasePending(overwrittenId).catch(() => {});
+    },
+  });
 
   let hideTimer = null;
 
@@ -202,16 +225,26 @@ export function mountMemoList(
         cancelFn(hideTimer);
       }
       try {
-        await lifecycle.restore(id);
-        // r2 P2-2 ⓐⓒ 최소 결선(coder-task.md §2 product_scope): 저장
-        // 실패 표시가 떠 있는 동안(바로 아래 catch 의 holdPending)은
-        // lifecycle 이 하드 삭제를 미뤄 둔다 -- 그 hold 가 "풀리는"
-        // 신호는 바로 이 자리(재시도 성공) 뿐 아니라 실패 표시가
-        // 성공 없이 닫히는 다른 자리(handleSwipeDelete 의 같은 짝
-        // 호출)에도 똑같이 필요하므로, clearSaveErrorFor 호출 바로
-        // 곁에 짝으로 둔다(없던 hold 에 불러도 releasePending 은
-        // 안전하게 no-op).
-        await lifecycle.releasePending(id);
+        const restored = await lifecycle.restore(id);
+        // r3 P1-1 동반(memo-lifecycle.mjs 의 restore 가 이미 없는
+        // 메모엔 거부가 아니라 "조용히 null"을 돌려준다): 이 null 을
+        // 체크하지 않으면 바로 아래 성공 경로로 흘러 "복원됐다"처럼
+        // 보인다(목록 갱신·실패 표시 지움) -- 실제로는 아무것도
+        // 복원되지 않았다. 새 문구를 만들지 않고, 기존 실패 표시를
+        // 그대로 유지하는 쪽을 골랐다(이미 없는 메모를 되돌릴 수단이
+        // 사실상 없으므로, 성공으로 위장하지 않는 것이 더 안전하다).
+        if (restored == null) {
+          toastCtrl.showSaveError(id, () => handler());
+          return;
+        }
+        // r3 P3-1(검토 2R "죽은 releasePending"): 여기서 releasePending
+        // 을 부르는 건 죽은 코드였다 -- 바로 위 lifecycle.restore 가
+        // 성공하면 그 함수 맨 앞의 cancelPending 이 이미 held 상태를
+        // 지운 뒤라, 이 자리에서 releasePending 을 불러도
+        // heldHardDeletes 에 이 id 가 없어 항상 no-op 이었다(검토 2R
+        // X4 생존). 실패 표시가 "성공 없이" 덮어써질 때의 실제 해제는
+        // 이제 toastCtrl 의 onErrorOverwritten(위 createToastController
+        // 호출부)이 맡는다.
         toastCtrl.clearSaveErrorFor(id);
         await refresh();
       } catch {
@@ -237,13 +270,13 @@ export function mountMemoList(
   async function handleSwipeDelete(id) {
     try {
       await lifecycle.softDelete(id);
-      // r2 P2-2 ⓒ 결선(위 handler 의 같은 짝): 이 id 가 "직전에" 저장
-      // 실패 표시로 hold 돼 있었을 수 있다(예: 되돌리기가 실패해 표시가
-      // 떠 있던 메모를 사용자가 다시 스와이프로 지우는 경로) -- softDelete
-      // 가 이미 cancelPending 으로 그 예약을 걷어내고 전체 유예로 새로
-      // 예약했으므로, 여기서는 "들고 있던 hold 기록"만 지워 새지 않게
-      // 한다(없던 hold 에 불러도 안전).
-      await lifecycle.releasePending(id);
+      // r3 P3-1(검토 2R "죽은 releasePending"): 여기서도 위 handler와
+      // 같은 이유로 releasePending 호출이 죽은 코드였다 -- softDelete
+      // 맨 앞의 cancelPending 이 이미 이 id 의 held 기록을 지운 뒤라
+      // (이 id 가 "직전에" 저장 실패 표시로 hold 돼 있었더라도) no-op
+      // 이었다(검토 2R X5 생존). 실패 표시가 성공 없이 덮어써질 때의
+      // 실제 해제는 toastCtrl 의 onErrorOverwritten 이 맡는다(위
+      // createToastController 호출부).
       toastCtrl.clearSaveErrorFor(id);
       await refresh();
       showUndoToast(id);

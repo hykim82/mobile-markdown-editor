@@ -284,6 +284,131 @@ test("P2-2 ⓒ: 실패 표시가 성공 없이 닫히면(releasePending) 유예�
   );
 });
 
+// HYK-304-lifecycle-orphans-1-r3(검토 2R F2 재현 · 책임자 판정 §2 요구 1
+// "남은 유예 ≤0 이라도 held 중엔 동기 삭제 금지"): r2 는 restore 실패를
+// "남은 유예"로 재예약했지만, 그 남은 유예가 이미 0 이하면 scheduleHardDelete
+// 가 그 자리에서 "동기로" 레코드를 지웠다(F2 5단계: cancelPending 이
+// held 를 지움 → put 실패 → 남은 유예 ≤0 → 동기 삭제 → 그 뒤에야 mount
+// 가 holdPending 을 부름 -- 이미 늦음). 여기서는 그 held 재진입 경로를
+// 직접 흉내낸다: 1차 실패(남은 유예 > 0) 뒤 holdPending 으로 held 진입 →
+// 유예를 한참 넘겨보냄(held 중이므로 안 지워짐, 전제 확인) → 2차 실패
+// (cancelPending 이 held 를 지운 뒤, 이번엔 남은 유예가 이미 음수) 때
+// 동기로 지워지면 안 된다.
+test("P1-1 r3(F2 재현): held 상태에서 재시도해 남은 유예가 이미 0 이하로 떨어져도 동기로 지우지 않는다(Z1 이 이 칸을 RED 로 만든다)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  const adapter = createFakeAdapter();
+  await seedMemo(adapter, "m1");
+  const lifecycle = createSoftDeleteLifecycle(adapter, {
+    now: () => Date.now(),
+  });
+
+  await lifecycle.softDelete("m1"); // t=0, 하드 삭제 예약 0+7000=7000
+
+  t.mock.timers.tick(3000); // t=3000
+  adapter.forceNextPutFailures(1);
+  await assert.rejects(lifecycle.restore("m1")); // 1차 실패, 남은 유예(4000)로 재예약
+  lifecycle.holdPending("m1"); // mount 의 showSaveError 지점과 같은 신호 -- held 진입
+
+  t.mock.timers.tick(7000); // t=10000: held 중이라 지워지지 않았어야 한다(전제)
+  await Promise.resolve();
+  assert.ok(
+    await adapter.get("m1"),
+    "held 중엔 7초가 넘어도 지워지지 않는다(전제 확인)",
+  );
+
+  adapter.forceNextPutFailures(1);
+  await assert.rejects(
+    lifecycle.restore("m1"),
+    "검토 2R F2: cancelPending 이 held 를 지운 뒤 put 이 다시 실패한다",
+  ); // 2차 실패 -- 이 시점(t=10000)의 남은 유예 = 0+7000-10000 = -3000(이미 0 이하)
+
+  assert.ok(
+    await adapter.get("m1"),
+    "남은 유예가 0 이하로 떨어진 채 실패해도 restore 가 동기로 지우면 안 된다(P1-1, Z1 이 이 칸을 RED 로 만든다)",
+  );
+});
+
+// HYK-304-lifecycle-orphans-1-r3(책임자 판정 §2 요구 1 "변형"): held 재진입
+// 없이도 같은 창이 생길 수 있다 -- 이번이 "첫" 실패인데 adapter.put 자체가
+// 남은 유예보다 오래 걸려, put 이 거부로 풀렸을 땐 이미 유예가 다 지난
+// 뒤인 경우(표시가 뜨기도 전에). put 을 게이트로 묶어 그 사이 시간을
+// 흘려보낸다(P-race 시험의 게이트 기법과 같음).
+test("P1-1 변형: 첫 되돌리기의 put 이 남은 유예보다 오래 걸려 실패해도(표시가 뜨기 전) 동기로 지우지 않는다(Z1 이 이 칸을 RED 로 만든다)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  const adapter = createFakeAdapter();
+  await seedMemo(adapter, "m1");
+  const lifecycle = createSoftDeleteLifecycle(adapter, {
+    now: () => Date.now(),
+  });
+
+  await lifecycle.softDelete("m1"); // t=0, 하드 삭제 예약 7000
+  t.mock.timers.tick(6990); // t=6990, 남은 유예 10ms
+
+  const realPut = adapter.put.bind(adapter);
+  let releasePut;
+  const gate = new Promise((resolve) => {
+    releasePut = resolve;
+  });
+  adapter.forceNextPutFailures(1);
+  adapter.put = async (memo) => {
+    await gate;
+    return realPut(memo);
+  };
+
+  const restorePromise = lifecycle.restore("m1");
+  // restore 는 adapter.put(게이트) 안에 멈춰 있다 -- cancelPending 은
+  // 이미 restore 맨 앞(동기 구간)에서 돌았으므로 이 tick 이 "복구 전"
+  // 타이머를 건드리지는 못한다. 문제는 put 이 거부로 풀렸을 때 남은
+  // 유예 재계산이 이미 음수가 되는 것이다.
+  t.mock.timers.tick(20); // t=7010, 남은 유예(= 0+7000-7010 = -10) 음수
+  await Promise.resolve();
+  releasePut();
+
+  await assert.rejects(restorePromise, "put 거부를 그대로 전파해야 한다");
+
+  assert.ok(
+    await adapter.get("m1"),
+    "put 이 남은 유예보다 오래 걸려 실패해도, 표시가 뜨기 전에 동기로 지워지면 안 된다(P1-1 변형, Z1 이 이 칸을 RED 로 만든다)",
+  );
+});
+
+// HYK-304-lifecycle-orphans-1-r3(책임자 판정 §2 요구 5, P3-2): "남은 유예"
+// 재예약(releasePending, restore 와 공유하는 remaining-grace 공식)이
+// "원래 마감"을 그대로 지키는지 경계값(±1ms)으로 고정한다 -- 전체
+// graceMs 로 되돌리는 변이(Z3)가 이 칸을 RED 로 만든다.
+test("P3-2: 남은 유예 재예약(releasePending) 은 '원래 마감'을 그대로 지킨다 -- 6999ms 생존/7000ms 소거(경계 ±1ms, Z3 이 이 칸을 RED 로 만든다)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  const adapter = createFakeAdapter();
+  await seedMemo(adapter, "m1");
+  const lifecycle = createSoftDeleteLifecycle(adapter, {
+    now: () => Date.now(),
+  });
+
+  await lifecycle.softDelete("m1"); // t=0, 하드 삭제 예약 0+7000=7000
+  t.mock.timers.tick(3000); // t=3000
+
+  adapter.forceNextPutFailures(1);
+  await assert.rejects(lifecycle.restore("m1")); // t=3000 실패, 남은 유예(4000)로 재예약(여전히 7000 에 돈다)
+  lifecycle.holdPending("m1"); // 실패 표시 뜸 -- 아래 releasePending 으로 "남은 유예" 공식을 직접 잰다
+
+  await lifecycle.releasePending("m1"); // t=3000: 바로 해제 -- 남은 유예 = 0+7000-3000 = 4000
+
+  t.mock.timers.tick(3999); // t=6999
+  await Promise.resolve();
+  assert.ok(
+    await adapter.get("m1"),
+    "남은 유예(4000ms)가 아직 안 끝났다(6999, 경계 -1ms)",
+  );
+
+  t.mock.timers.tick(1); // t=7000
+  await Promise.resolve();
+  assert.equal(
+    await adapter.get("m1"),
+    undefined,
+    "남은 유예가 정확히 원래 마감(7000)에 소거된다(P3-2, Z3 이 이 칸을 RED 로 만든다)",
+  );
+});
+
 // HYK-304-lifecycle-orphans-1 ⓒ(책임자 판정 §2 요구 3): 타이머 콜백 안
 // adapter.remove() 가 거부해도 unhandledRejection 으로 새면 안 된다(타이머
 // 콜백은 try/catch 로 못 잡는 비동기 경계라 삼키지 않으면 그대로 샌다).
