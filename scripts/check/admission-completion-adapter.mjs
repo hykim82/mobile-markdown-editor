@@ -267,6 +267,69 @@ function maskQuotedMarkerRegionsLocal(content) {
   return maskHtmlComments(maskFencedBlocks(content));
 }
 
+// HYK-209 ⓑ 로컬 복제 -- reject-streak.mjs 의 unclosedFenceOpenLine ·
+// unclosedCommentOpenLine · unclosedQuoteOpenLine · droppedAtScanText 와 같은
+// 로직(고정 sibling 목록 때문에 import 불가 · 이 파일 헤더 참조). 정본과 어긋나면
+// 회귀다 -- 고칠 때는 정본과 대조하라. 시험은 __probeDroppedAtScanTextLocal 로
+// 정본과 같은 입력에 같은 출력을 내는지 직접 비교한다.
+function unclosedFenceOpenLine(content) {
+  const lines = content.split("\n");
+  let fence = null;
+  let openedAt = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fence === null) {
+      const opened = FENCE_OPEN_RE.exec(line);
+      if (!opened) continue;
+      fence = { char: opened[1][0], len: opened[1].length };
+      openedAt = i;
+      continue;
+    }
+    const closer = new RegExp(`^ {0,3}\\${fence.char}{${fence.len},}[ \t\r]*$`);
+    if (closer.test(line)) fence = null;
+  }
+  return fence === null ? -1 : openedAt;
+}
+
+function unclosedCommentOpenLine(content) {
+  const fenced = maskFencedBlocks(content);
+  const codeRanges = inlineCodeRanges(fenced);
+  let from = 0;
+  for (;;) {
+    const start = findOutsideInlineCode(fenced, "<!--", from, codeRanges);
+    if (start === -1) return -1;
+    const closeAt = findOutsideInlineCode(fenced, "-->", start + 4, codeRanges);
+    if (closeAt === -1) return fenced.slice(0, start).split("\n").length - 1;
+    from = closeAt + 3;
+  }
+}
+
+function unclosedQuoteOpenLine(content) {
+  const fence = unclosedFenceOpenLine(content);
+  const comment = unclosedCommentOpenLine(content);
+  if (fence === -1) return comment;
+  if (comment === -1) return fence;
+  return Math.min(fence, comment);
+}
+
+const QUOTE_FENCE_OPENER_RE = /^( {0,3})(`{3,}|~{3,})/;
+function neutralizeQuoteOpenerLine(text, lineIndex) {
+  const lines = text.split("\n");
+  lines[lineIndex] = lines[lineIndex]
+    .replace(QUOTE_FENCE_OPENER_RE, (m) => m.replace(/[`~]/g, " "))
+    .replace(/<!--/g, "    ");
+  return lines.join("\n");
+}
+
+function droppedAtScanTextLocal(text) {
+  let scan = text;
+  for (;;) {
+    const openLine = unclosedQuoteOpenLine(scan);
+    if (openLine === -1) return maskQuotedMarkerRegionsLocal(scan);
+    scan = neutralizeQuoteOpenerLine(scan, openLine);
+  }
+}
+
 function resolveHeaderTaskId(content) {
   const lines = maskQuotedMarkerRegionsLocal(
     (content ?? "").replace(/\r\n/g, "\n"),
@@ -303,6 +366,7 @@ export { resolveHeaderTaskId as __probeResolveHeaderTaskId };
 // 판정을 내리는지 직접 비교하려면 이 로컬 복제 자체를 시험이 호출할 수
 // 있어야 한다.
 export { maskQuotedMarkerRegionsLocal as __probeMaskQuotedMarkerRegionsLocal };
+export { droppedAtScanTextLocal as __probeDroppedAtScanTextLocal };
 
 // resolveResultBlockedState(relay-handshake.mjs)의 최소 재현 -- "정확히
 // 하나의 well-formed '>>> BLOCKED:'/'>>> NEEDS_INPUT:' 줄만 인정"은 그대로
@@ -723,7 +787,17 @@ function verifyBlockedTerminationEvidence({
 // 스스로 하는 일은 오직 "그 코어가 요구하는 사실들을 harnessDir 아래
 // 실제 파일에서 다시 읽어 구조화하는 것"뿐이다(§2 zero-import 코어
 // 계약과 동일한 분업, 위 import 헤더 참조).
-const RETIREMENT_DROPPED_AT_RE = /^dropped_at:\s*(.+)$/im;
+// HYK-209 깊이 방어: `[ \t]*\S` 로 통일(relay-handshake.mjs DROPPED_AT_RE 와 동일).
+const RETIREMENT_DROPPED_AT_RE = /^dropped_at:[ \t]*(\S.*)$/im;
+// HYK-209 mask-readers: 은퇴 판독의 낙하 시각 = 가림 뒤 첫 매치. verifyRetirementEvidence
+// 가 이 함수 하나로만 부른다(호출 배선은 시험 파일의 소스 단정이 고정한다).
+function readTaskDroppedAtRaw(taskContent) {
+  const droppedMatch = droppedAtScanTextLocal(taskContent).match(
+    RETIREMENT_DROPPED_AT_RE,
+  );
+  return droppedMatch ? droppedMatch[1].trim() : null;
+}
+export { readTaskDroppedAtRaw as __probeReadTaskDroppedAtRaw };
 const RETIREMENT_ARCHIVE_ENVELOPE_HEADER_RE =
   /^<!-- envelope-archive: role=\S+ archived_at=.*? -->\n/;
 
@@ -1085,9 +1159,7 @@ function verifyRetirementEvidence({
   // assignment, 동작은 바이트 하나 안 바뀐다).
   let droppedAtRaw;
   try {
-    const taskContent = readFileSync(taskPath, "utf8");
-    const droppedMatch = taskContent.match(RETIREMENT_DROPPED_AT_RE);
-    droppedAtRaw = droppedMatch ? droppedMatch[1].trim() : null;
+    droppedAtRaw = readTaskDroppedAtRaw(readFileSync(taskPath, "utf8"));
   } catch {
     droppedAtRaw = null;
   }
