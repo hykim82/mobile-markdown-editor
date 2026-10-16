@@ -38,6 +38,34 @@
       [hidden] {
         display: none !important;
       }
+      /* PRD §5b "최초 실행 1회 고지" / §8 보존 "조용한 고지"(coder-task.md
+         §1): 모달이 아니라 입력을 막지 않는 작은 안내다 -- 화면 전환
+         (list-screen/editor-screen hidden 토글)과 무관하게 body 바로
+         아래 평범한 흐름(in-flow) 요소로 둬서 두 화면 어디서든(또는
+         화면이 바뀌어도) 겹침·오버레이 없이 보인다. 닫기 전까지는 다시
+         열어도 그대로 보인다(제품 결정, 결과 파일 §선택 근거). */
+      #first-run-notice {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 6px 16px;
+        background: var(--color-bg-elevated);
+        border-bottom: 1px solid var(--color-border);
+        color: var(--color-text-muted);
+        font-size: 13px;
+      }
+      #first-run-notice-close-button {
+        flex: none;
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        font: inherit;
+        min-height: 44px;
+        min-width: 44px;
+        padding: 0;
+        cursor: pointer;
+      }
       #list-screen .topbar {
         display: flex;
         align-items: center;
@@ -343,6 +371,16 @@
     </style>
   </head>
   <body>
+    <div id="first-run-notice" hidden>
+      <span id="first-run-notice-text"></span>
+      <button
+        id="first-run-notice-close-button"
+        type="button"
+        aria-label="닫기"
+      >
+        ✕
+      </button>
+    </div>
     <div id="list-screen" hidden>
       <div class="topbar">
         <h1>메모</h1>

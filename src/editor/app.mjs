@@ -9,6 +9,7 @@ import { mountStorage, openMemoInEditor } from "./storage-mount.mjs";
 import { mountNotionCopy } from "./notion-copy.mjs";
 import { mountShortcutBar } from "./shortcut-bar.mjs";
 import { mountMemoList } from "./memo-list-mount.mjs";
+import { mountFirstRunNotice } from "./first-run-notice.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
 import { writeCurrentMemoId } from "../storage/current-memo-pointer.mjs";
 
@@ -65,6 +66,11 @@ function showScreen(screens, name) {
 
 function grabElements() {
   return {
+    firstRunNotice: {
+      element: document.getElementById("first-run-notice"),
+      textEl: document.getElementById("first-run-notice-text"),
+      closeButton: document.getElementById("first-run-notice-close-button"),
+    },
     editorRoot: document.getElementById("editor-root"),
     rawPanel: document.getElementById("raw-panel"),
     saveNotice: document.getElementById("save-notice"),
@@ -109,6 +115,11 @@ function wireListNavigation({ newMemoButton, backButton, screens }, ctx) {
 function main() {
   applyDesignTokens();
   const elements = grabElements();
+  // PRD §5b "최초 실행 1회 고지": 동기 호출이고(localStorage 읽기만,
+  // await 없음) 입력을 막지 않는 배너라 그 뒤 에디터 마운트·입력 가능
+  // 시점과 경합하지 않는다(실행→입력 1초 NFR, first-run-notice.mjs
+  // 머리 주석).
+  mountFirstRunNotice(elements.firstRunNotice);
   const adapter = createIndexedDbAdapter();
   const editor = mountEditor(elements.editorRoot);
   mountRawPanel(editor, elements.rawPanel);
