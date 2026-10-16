@@ -21,6 +21,24 @@ import {
 } from "../../src/storage/current-memo-pointer.mjs";
 import { IDBObjectStore } from "fake-indexeddb";
 
+// HYK-304-lifecycle-orphans-1 ⓐ: adapter.get 이 async 라 waitFor(동기
+// predicate 전용)로는 못 잰다 -- 같은 모양의 폴링 루프를 직접 둔다.
+async function waitForMemoGone(
+  adapter,
+  id,
+  { timeout = 3000, interval = 20 } = {},
+) {
+  const start = Date.now();
+  for (;;) {
+    const memo = await adapter.get(id);
+    if (memo === undefined) return;
+    if (Date.now() - start > timeout) {
+      throw new Error("waitForMemoGone: 시간 안에 지워지지 않았다");
+    }
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const indexHtmlPath = join(here, "..", "..", "public", "index.html");
 
@@ -284,4 +302,79 @@ test("배선 7: 메모 스와이프 삭제 저장이 실패하면 #list-save-err
   } finally {
     IDBObjectStore.prototype.put = originalPut;
   }
+});
+
+// 번호 8 (HYK-304-lifecycle-orphans-1 ⓐ, V1 생존 대상): app.mjs main() 의
+// "시작 결선"(cleanupExpiredDeletes(adapter).catch(() => {}) 호출 줄,
+// app.mjs 의 adapter 생성 바로 다음)이 실제로 살아있는지를 번들 전체
+// 부팅으로 잰다 -- 아래 memo-lifecycle.test.mjs/list-query.test.mjs 는
+// cleanupExpiredDeletes/expiredDeletedMemoIds 를 직접 불러 6999ms/7000ms
+// 경계를 결정적으로 재지만, 그 함수가 app.mjs 에 "실제로 결선돼 있는가"는
+// 이 결선 자체가 없으면(V1: 그 한 줄 삭제) 통째로 거짓일 수 있다 -- 이
+// 시험이 그 결선 한 줄을 값으로 잡는다. 정확한 경계(6999/7000)는 실제
+// Date.now() 로 재면 타이밍이 불안정해지므로 여기서는 "충분히 지난"
+// (20초 전) 고아로만 재고, 정밀한 경계는 아래 데이터 계층 시험이 잡는다.
+async function seedDeletedMemo(id, body, deletedAt) {
+  const adapter = createIndexedDbAdapter();
+  await adapter.put({
+    id,
+    title: body,
+    body,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt,
+  });
+}
+
+test("배선 8: 앱이 뜨면 시작 결선이 유예가 지난 soft-delete 고아를 저장소에서 지운다(ⓐ, V1 생존 대상)", async () => {
+  const expiredId = "orphan-expired-1";
+  const dom = await bootApp({
+    seed: () =>
+      seedDeletedMemo(expiredId, "지워져야 하는 고아", Date.now() - 20000),
+  });
+  const { document } = dom.window;
+  await waitFor(
+    () => document.querySelector("#list-root .memo-list-empty") !== null,
+  );
+
+  const adapter = createIndexedDbAdapter();
+  await waitForMemoGone(adapter, expiredId, { timeout: 3000 });
+  assert.equal(
+    await adapter.get(expiredId),
+    undefined,
+    "시작 결선이 유예 지난 고아를 저장소에서 지웠어야 한다",
+  );
+  assert.equal(
+    document.querySelector(`[data-memo-id="${expiredId}"]`),
+    null,
+    "당연히 목록에도 없어야 한다",
+  );
+});
+
+// 대조(책임자 판정 §2 요구 1-ⓐ "유예 중인 레코드는 지우지 마라"): 방금
+// 삭제된(유예가 아직 많이 남은) 메모는 부팅 뒤에도 저장소에 그대로
+// 남아있어야 한다(목록에는 deletedAt!==null 이라 원래부터 안 보인다).
+test("배선 8 대조: 유예가 아직 많이 남은 soft-delete 레코드는 부팅 뒤에도 저장소에서 지워지지 않는다", async () => {
+  const inGraceId = "orphan-in-grace-1";
+  const dom = await bootApp({
+    seed: () => seedDeletedMemo(inGraceId, "유예 중인 메모", Date.now()),
+  });
+  const { document } = dom.window;
+  await waitFor(
+    () => document.querySelector("#list-root .memo-list-empty") !== null,
+  );
+
+  const adapter = createIndexedDbAdapter();
+  // cleanupExpiredDeletes 는 fire-and-forget 이라 완료 시점을 직접 못
+  // 기다린다 -- 짧게 settle 한 뒤에도 "아직" 남아있는지를 값으로 본다
+  // (유예 7000ms 중 지금 막 지난 수백 ms 뿐이므로 거짓 초록이 아니다).
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const memo = await adapter.get(inGraceId);
+  assert.ok(memo, "유예가 아직 많이 남은 레코드는 지우면 안 된다");
+  assert.equal(memo.deletedAt !== null, true);
+  assert.equal(
+    document.querySelector(`[data-memo-id="${inGraceId}"]`),
+    null,
+    "삭제시각이 있으니 목록에는 원래부터 안 보인다",
+  );
 });

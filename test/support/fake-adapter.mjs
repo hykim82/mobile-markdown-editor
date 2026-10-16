@@ -11,6 +11,8 @@ export function createFakeAdapter() {
   let failureToThrow = null;
   let listFailuresLeft = 0;
   let listFailureToThrow = null;
+  let removeFailuresLeft = 0;
+  let removeFailureToThrow = null;
 
   return {
     async put(memo) {
@@ -34,6 +36,13 @@ export function createFakeAdapter() {
       return [...rows.values()].map((memo) => ({ ...memo }));
     },
     async remove(id) {
+      if (removeFailuresLeft > 0) {
+        removeFailuresLeft -= 1;
+        throw (
+          removeFailureToThrow ??
+          new Error("fake-adapter: forced remove failure")
+        );
+      }
       rows.delete(id);
     },
     // 계약 밖의 시험 전용 제어 훅 -- runAdapterContractTests 는 이 메서드를
@@ -47,6 +56,12 @@ export function createFakeAdapter() {
     forceNextListFailures(times, error) {
       listFailuresLeft = times;
       listFailureToThrow = error ?? null;
+    },
+    // HYK-304-lifecycle-orphans-1 ⓒ: 하드 삭제 타이머 안 adapter.remove()
+    // 실패를 결정적으로 재현하는 훅 -- forceNextPutFailures 와 같은 모양.
+    forceNextRemoveFailures(times, error) {
+      removeFailuresLeft = times;
+      removeFailureToThrow = error ?? null;
     },
   };
 }

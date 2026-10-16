@@ -12,6 +12,7 @@ import { mountMemoList } from "./memo-list-mount.mjs";
 import { mountFirstRunNotice } from "./first-run-notice.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
 import { writeCurrentMemoId } from "../storage/current-memo-pointer.mjs";
+import { cleanupExpiredDeletes } from "../storage/memo-lifecycle.mjs";
 
 function applyDesignTokens() {
   const root = document.documentElement;
@@ -121,6 +122,14 @@ function main() {
   // 머리 주석).
   mountFirstRunNotice(elements.firstRunNotice);
   const adapter = createIndexedDbAdapter();
+  // HYK-304-lifecycle-orphans-1 ⓐ: 저장소를 연 직후 · 입력과는 독립으로
+  // soft-delete 고아(유예가 이미 지난 레코드)를 지운다. list.refresh()
+  // 는 이 정리가 끝나길 기다리지 않는다(아래에서 먼저 fire-and-forget 으로
+  // 불러 두므로) -- 어차피 그 레코드는 list-query.mjs 필터로 목록에서
+  // 이미 숨어 있어 정리 시점과 화면은 무관하다. .catch 로 실패를 삼켜
+  // 입력을 막지 않는다(실행→입력 1초 NFR, cleanupExpiredDeletes 자신도
+  // 개별 실패를 이미 삼키지만 이중 방어).
+  cleanupExpiredDeletes(adapter).catch(() => {});
   const editor = mountEditor(elements.editorRoot);
   mountRawPanel(editor, elements.rawPanel);
   // 한용 확정 ㄱ(HYK-304-home-list-updatedat-1): 앱을 열면 첫 화면은 항상

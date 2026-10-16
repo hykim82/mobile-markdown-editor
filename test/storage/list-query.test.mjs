@@ -4,7 +4,10 @@
 // 가 잇는다.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { visibleMemosSortedByUpdatedAt } from "../../src/storage/list-query.mjs";
+import {
+  visibleMemosSortedByUpdatedAt,
+  expiredDeletedMemoIds,
+} from "../../src/storage/list-query.mjs";
 import { createMemoStore } from "../../src/storage/memo-store.mjs";
 import { createFakeAdapter } from "../support/fake-adapter.mjs";
 
@@ -122,4 +125,45 @@ test("순서 축: 오래된 메모를 다시 수정해 저장하면 목록 맨 �
     (m) => m.id,
   );
   assert.deepEqual(after, [idA, idB], "후: 방금 고친 A 가 위로 올라온다");
+});
+
+// HYK-304-lifecycle-orphans-1 ⓐ: expiredDeletedMemoIds -- "무엇이 지워져야
+// 하는가"만 순수하게 재는 필터(실제 삭제는 memo-lifecycle.mjs 의
+// cleanupExpiredDeletes). memo-lifecycle.test.mjs 의 6999ms/7000ms 경계와
+// 같은 자릿수로 경계를 잰다.
+test("고아 필터: deletedAt 이 없는(null) 메모는 절대 포함되지 않는다", () => {
+  const ids = expiredDeletedMemoIds([memo("a", { deletedAt: null })], {
+    now: 1_000_000,
+    graceMs: 7000,
+  });
+  assert.deepEqual(ids, []);
+});
+
+test("고아 필터: 경계 -- deletedAt + graceMs 가 now 보다 1ms 작으면(6999ms 지남) 아직 포함 안 된다", () => {
+  const ids = expiredDeletedMemoIds([memo("a", { deletedAt: 1000 })], {
+    now: 1000 + 6999,
+    graceMs: 7000,
+  });
+  assert.deepEqual(ids, [], "유예 중인 레코드는 지우면 안 된다");
+});
+
+test("고아 필터: 경계 -- deletedAt + graceMs 가 now 와 같으면(7000ms 지남) 포함된다", () => {
+  const ids = expiredDeletedMemoIds([memo("a", { deletedAt: 1000 })], {
+    now: 1000 + 7000,
+    graceMs: 7000,
+  });
+  assert.deepEqual(ids, ["a"]);
+});
+
+test("고아 필터: 여러 메모 중 유예 지난 것만 id 로 걸러낸다", () => {
+  const ids = expiredDeletedMemoIds(
+    [
+      memo("live", { deletedAt: null }),
+      memo("in-grace", { deletedAt: 9000 }), // 9000+7000=16000 > now
+      memo("expired-1", { deletedAt: 1000 }), // 1000+7000=8000 <= now
+      memo("expired-2", { deletedAt: 500 }), // 500+7000=7500 <= now
+    ],
+    { now: 8000, graceMs: 7000 },
+  );
+  assert.deepEqual(ids.sort(), ["expired-1", "expired-2"]);
 });
