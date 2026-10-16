@@ -17,7 +17,10 @@ import {
 } from "../../src/editor/memo-list-mount.mjs";
 import { SAVE_ERROR_MESSAGE } from "../../src/editor/memo-list-view.mjs";
 import { createMemoStore } from "../../src/storage/memo-store.mjs";
-import { createSoftDeleteLifecycle } from "../../src/storage/memo-lifecycle.mjs";
+import {
+  createSoftDeleteLifecycle,
+  GRACE_MS,
+} from "../../src/storage/memo-lifecycle.mjs";
 import { createFakeAdapter } from "../support/fake-adapter.mjs";
 
 const { window } = globalThis;
@@ -608,6 +611,59 @@ test("토스트가 떠 있을 때 다른 메모의 저장이 실패하면 실패
   );
 });
 
+// HYK-304-lifecycle-orphans-1-r2(책임자 판정 §2 요구 2, P2-2 ⓐⓑ 결선
+// 닫힘): 바로 아래 "되돌리기 쪽 저장 실패" 시험의 재시도는 "시간이
+// 지나기 전"에 일어난다 -- holdPending/releasePending 결선이 없어도
+// (restore 의 실패 재예약만으로도) 그 시험은 초록이다. 여기서는 실패
+// 표시가 "7초 이상" 떠 있는 동안에도 하드 삭제가 held 로 미뤄지는지를
+// mount.mjs 결선(showSaveError 지점의 holdPending) 경유로 값으로 잰다 --
+// 이 결선이 없으면(혹은 releasePending 결선이 없으면) 재시도를 아무리
+// 늦게 눌러도 그 사이 저장소에서 먼저 지워져 재시도가 "복원 실패"로
+// 끝난다.
+test("되돌리기 쪽 저장 실패 표시가 7초 넘게 떠 있어도 메모는 살아있고, 그 뒤 재시도하면 복원된다(P2-2 ⓐⓑ 결선 닫힘)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const id = await createMemoAt(
+    adapter,
+    "되돌리기 저장 실패 후 오래 대기",
+    100,
+  );
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  swipe(container.querySelector(`[data-memo-id="${id}"]`));
+  await settle();
+  assert.deepEqual(cardIds(container), [], "스와이프 직후 숨겨져야 한다");
+
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(toast.errorButton.hidden, false, "저장 실패 표시가 떠야 한다");
+
+  // 실패 표시가 떠 있는 동안 UNDO_TOAST_MS(=GRACE_MS) 를 넘겨 흘려보낸다
+  // -- hold 결선이 없으면 이 사이에 저장소에서 하드 삭제된다.
+  clock.advance(UNDO_TOAST_MS + 1000);
+  await settle();
+  assert.ok(
+    await adapter.get(id),
+    "실패 표시가 떠 있는 동안은 7초가 넘어도 메모가 저장소에서 지워지면 안 된다(ⓐ 결선)",
+  );
+
+  toast.errorButton.click();
+  await settle();
+  await settle();
+
+  assert.deepEqual(
+    cardIds(container),
+    [id],
+    "늦게 재시도해도 성공하면 복원돼야 한다(ⓑ 결선)",
+  );
+  const record = await adapter.get(id);
+  assert.equal(record.deletedAt, null, "삭제시각이 null 로 복원돼야 한다");
+});
+
 // 책임자 판정 §2 풀어 쓴 요구 2(되돌리기 쪽 고정 칸): 스와이프 →
 // (되돌리기 시점의) put 1회 거부 → 되돌리기 → unhandledRejection 0 ·
 // 표시 · 재시도 → 복원(mount 경유). 검토 2R P2-2 가 지적한 "되돌리기
@@ -924,6 +980,23 @@ test("graceMs 전달 고정: createLifecycle 에 UNDO_TOAST_MS 가 명시로 전
     capturedOptions.graceMs,
     UNDO_TOAST_MS,
     "graceMs 는 UNDO_TOAST_MS 와 명시로 같은 값이 전달돼야 한다(이 줄이 지워지면 undefined 가 되어 실패한다)",
+  );
+});
+
+// HYK-304-lifecycle-orphans-1-r2(책임자 판정 §2 요구 4, P3-1 ⑵ "한 원천"
+// 양방향): 위 memo-list-mount.mjs 머리 주석 정정(§2-4)이 말하는 "GRACE_MS
+// 와 UNDO_TOAST_MS 는 같은 값을 따로 든다"를 양방향으로 직접 단언한다 --
+// 지금까지의 시험(graceMs 전달 고정·6999/7000 경계)은 "UNDO_TOAST_MS 가
+// createLifecycle 에 그대로 전달되는지"만 보고, 데이터 계층의 GRACE_MS
+// 리터럴 자체와는 비교하지 않았다(검토 2R P3-1: M2a 처럼 GRACE_MS 만
+// 줄이는 변이는 그 시험을 통과한다 -- 한쪽 방향만 걸린다). 이 시험은
+// 두 상수를 직접 import 해 비교하므로, 둘 중 하나만 바꾸는 변이(W5:
+// UNDO_TOAST_MS 만 7001) 모두 RED 가 된다.
+test('"한 원천" 양방향: GRACE_MS(데이터 계층)와 UNDO_TOAST_MS(이 화면)는 같은 값이어야 한다(P3-1 ⑵, W5 가 이 칸을 RED 로 만든다)', () => {
+  assert.equal(
+    UNDO_TOAST_MS,
+    GRACE_MS,
+    "둘 중 하나만 바뀌면(기본값 어긋남) 이 칸이 바로 걸려야 한다 -- 한쪽만 보는 간접 시험(graceMs 전달 고정 등)으로는 못 가른다",
   );
 });
 

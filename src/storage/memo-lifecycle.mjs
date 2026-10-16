@@ -21,13 +21,48 @@ export function createSoftDeleteLifecycle(adapter, options = {}) {
   const clearTimeoutFn = options.clearTimeoutFn ?? ((id) => clearTimeout(id));
 
   const pendingHardDeletes = new Map();
+  // HYK-304-lifecycle-orphans-1-r2 P2-2 ⓐ: "저장 실패 표시가 떠 있는
+  // 동안" hard delete 를 미루라는 요구를 이 모듈이 알아채려면, mount
+  // 쪽(어느 버튼이 떠 있는지 아는 쪽)이 그 사실을 신호로 넘겨야 한다 --
+  // holdPending/releasePending 이 그 통로다. heldHardDeletes 는 "지금
+  // 유예가 멈춰 있는 id" 집합일 뿐, 복원 시각 계산은 releasePending 이
+  // adapter.get 으로 다시 읽은 deletedAt 으로 한다(이 Map 에 시각을
+  // 들고 다니면 그 시각이 실제 레코드의 deletedAt 과 어긋날 길이
+  // 생긴다).
+  const heldHardDeletes = new Set();
 
   function cancelPending(id) {
+    heldHardDeletes.delete(id);
     const pending = pendingHardDeletes.get(id);
     if (pending) {
       clearTimeoutFn(pending);
       pendingHardDeletes.delete(id);
     }
+  }
+
+  function runHardDelete(id) {
+    pendingHardDeletes.delete(id);
+    // HYK-304-lifecycle-orphans-1 ⓒ: remove() 가 거부해도 삼키지 않고
+    // "다음 시작 정리에 맡김" 쪽으로 처리한다 -- deletedAt 은 이미 put
+    // 으로 저장돼 있으므로, 지금 실패해도 레코드는 deletedAt 이 찍힌
+    // 채 남아 cleanupExpiredDeletes(아래)가 다음 시작 때 같은 id 를
+    // 다시 집어내 재시도한다(ⓐ와 연결). 여기서 그냥 두면 타이머
+    // 콜백이라 try/catch 로 못 잡고 unhandledRejection 으로 샌다.
+    Promise.resolve(adapter.remove(id)).catch(() => {});
+  }
+
+  // P2-1/P2-2 r2 공용 예약 통로: softDelete(신규 전체 유예) · restore
+  // 실패 시 재예약(남은 유예) · releasePending(남은 유예 재개) 셋이
+  // 전부 이 함수를 거친다. delay<=0 이면 "이미 유예가 다 지났다"는
+  // 뜻이라 기다려 줄 이유가 없다 -- 공짜로 유예를 늘려주지 않기 위해
+  // 바로 hard delete 한다(책임자 판정 §2 요구 1 "0 이하이면" 근거).
+  function scheduleHardDelete(id, delay) {
+    if (delay <= 0) {
+      runHardDelete(id);
+      return;
+    }
+    const timer = setTimeoutFn(() => runHardDelete(id), delay);
+    pendingHardDeletes.set(id, timer);
   }
 
   async function softDelete(id) {
@@ -36,37 +71,71 @@ export function createSoftDeleteLifecycle(adapter, options = {}) {
     const updated = { ...memo, deletedAt: now() };
     await adapter.put(updated);
     cancelPending(id);
-    const timer = setTimeoutFn(() => {
-      pendingHardDeletes.delete(id);
-      // HYK-304-lifecycle-orphans-1 ⓒ: remove() 가 거부해도 삼키지 않고
-      // "다음 시작 정리에 맡김" 쪽으로 처리한다 -- deletedAt 은 이미 put
-      // 으로 저장돼 있으므로(위 softDelete), 지금 실패해도 레코드는
-      // deletedAt 이 찍힌 채 남아 cleanupExpiredDeletes(아래)가 다음
-      // 시작 때 같은 id 를 다시 집어내 재시도한다(ⓐ와 연결). 여기서
-      // 그냥 두면 타이머 콜백이라 try/catch 로 못 잡고 unhandledRejection
-      // 으로 샌다.
-      Promise.resolve(adapter.remove(id)).catch(() => {});
-    }, graceMs);
-    pendingHardDeletes.set(id, timer);
+    scheduleHardDelete(id, graceMs);
     return updated;
   }
 
-  // 되돌리기: 삭제시각을 null로 되돌리고, 아직 안 지난 7초 하드 삭제
-  // 예약이 있으면 취소한다 -- 안 그러면 "되돌렸는데 몇 초 뒤 사라짐"이
-  // 된다. HYK-304-lifecycle-orphans-1 ⓑ: 예약 취소는 put 성공 "뒤"에만
-  // 한다(순서 교정) -- put 이 실패하면 restore 는 거부를 그대로 호출자에
-  // 전파하고, 하드 삭제 예약은 살아있어야 한다(원래는 cancelPending 을
-  // put 전에 불러 put 실패 시에도 예약이 사라져 버리는 고아가 생겼다).
+  // 되돌리기: 검토 2R P2-1 수리(책임자 판정 §2 요구 1) -- cancelPending
+  // 을 "맨 처음"(어떤 await 보다도 먼저, 동기 구간) 부른다. 1R 은
+  // put "성공 뒤"에만 취소해, put 이 저장소에 반영된 뒤 완료 콜백이
+  // 늦게 오는 사이 7초 타이머가 발화할 수 있었다(P-race, 결과 파일
+  // §1 참고) -- restore 가 이미 "성공"으로 끝났는데 저장소는 지워진
+  // 뒤였다. 지금은 restore 가 불리는 순간 즉시 취소하므로 그 창이
+  // 생기지 않는다. put 이 그래도 실패하면(cancelPending 은 이미
+  // 끝났다) "남은 유예"(= 삭제시각 + graceMs - now, 즉 원래 예정됐던
+  // 시각 그대로)만큼 다시 예약한다 -- put 실패 전까지 하드 삭제가
+  // 전혀 안 미뤄진 것처럼 취급해, 실패해도 "원래 7초" 축은 그대로
+  // 유지된다(남은 유예가 0 이하면 scheduleHardDelete 가 바로 지운다).
+  // 그 뒤 실패를 그대로 호출자에 전파한다(기존 동작 유지).
   async function restore(id) {
+    cancelPending(id);
     const memo = await adapter.get(id);
     if (!memo) return null;
     const updated = { ...memo, deletedAt: null };
-    await adapter.put(updated);
-    cancelPending(id);
+    try {
+      await adapter.put(updated);
+    } catch (err) {
+      if (memo.deletedAt != null) {
+        scheduleHardDelete(id, memo.deletedAt + graceMs - now());
+      }
+      throw err;
+    }
     return updated;
   }
 
-  return { softDelete, restore };
+  // P2-2 ⓐ(책임자 판정 §2 요구 2): mount 쪽이 "이 메모의 저장 실패
+  // 표시가 지금 떠 있다"를 알게 되는 순간(showSaveError 호출 지점)
+  // 부르는 신호다 -- 지금 예약돼 있는 하드 삭제 타이머(있다면)를
+  // 지우고 "들고 있는 중"으로만 표시한다. 타이머가 아직 없어도(예:
+  // 이번이 softDelete 자체의 최초 실패라 애초에 예약이 없는 경우)
+  // 안전하게 no-op 이다 -- heldHardDeletes 에 id 를 추가해 두면 나중에
+  // releasePending 이 "복원할 유예가 있었는지"를 판단할 뿐, 레코드가
+  // 실제로 지워지는 효과는 없다.
+  function holdPending(id) {
+    const pending = pendingHardDeletes.get(id);
+    if (pending) {
+      clearTimeoutFn(pending);
+      pendingHardDeletes.delete(id);
+    }
+    heldHardDeletes.add(id);
+  }
+
+  // P2-2 ⓒ(책임자 판정 §2 요구 2): "실패 표시가 닫혔다"(성공이든 아니든)
+  // 신호다 -- held 가 아니면 조용히 반환한다(hold 없이 불려도, 이미
+  // 복원/하드삭제돼 레코드가 없거나 deletedAt 이 null 이어도 안전).
+  // held 였다면 adapter.get 으로 "지금" deletedAt 을 다시 읽어 남은
+  // 유예(= deletedAt + graceMs - now)만큼 재예약한다 -- hold 가 떠 있던
+  // 동안 시간은 계속 흘렀으므로, "원래 예정 시각"을 그대로 복원하는
+  // 것이지 유예를 통째로 다시 주는 게 아니다(0 이하면 즉시 지운다).
+  async function releasePending(id) {
+    if (!heldHardDeletes.has(id)) return;
+    heldHardDeletes.delete(id);
+    const memo = await adapter.get(id);
+    if (!memo || memo.deletedAt == null) return;
+    scheduleHardDelete(id, memo.deletedAt + graceMs - now());
+  }
+
+  return { softDelete, restore, holdPending, releasePending };
 }
 
 // HYK-304-lifecycle-orphans-1 ⓐ: 앱 시작 시(저장소를 연 직후) 불러

@@ -11,16 +11,24 @@ import {
 import { createSoftDeleteLifecycle } from "../storage/memo-lifecycle.mjs";
 
 // PRD §5.5 수용 기준③ "7초 경과 시 hard delete" -- memo-lifecycle.mjs
-// 자신의 GRACE_MS(7000, 그 파일 내부 상수라 export 되지 않음 -- 데이터
-// 계층은 호출만 하고 고치지 말라는 범위 제약, coder-task.md §0)와 같은
-// 길이로 되돌리기 토스트를 띄워 둔다. 두 숫자가 같은 값을 "따로" 들고
-// 있는 것이라 memo-lifecycle.mjs 의 기본값이 바뀌면 이 숫자도 같이
-// 바꿔야 한다(결과 파일 §한계에 기록). export 하는 이유: 검토 2R
-// P3-3 -- 이 값을 그대로 아래 createLifecycle(adapter, { graceMs }) 로
-// "명시로" 넘기는 줄이 지워져도(데이터 계층 기본값과 우연히 같은 7000
-// 이라) 시험이 타이밍만으로는 못 가른다. 시험은 이 상수를 import 해
-// createLifecycle 스파이에 실제로 전달된 값과 직접 비교한다(결과 파일
-// §2-3 참고, test/editor/memo-list-delete-undo.test.mjs).
+// 자신의 GRACE_MS(7000)와 같은 길이로 되돌리기 토스트를 띄워 둔다.
+// ⚠️낡은 주석 정정(검토 2R 1R P3-1, HYK-304-lifecycle-orphans-1-r2
+// §2-4): 이 주석은 한때 "GRACE_MS 가 그 파일 내부 상수라 export 되지
+// 않는다"고 적고 있었으나, memo-lifecycle.mjs 는 GRACE_MS 를 이미
+// export 한다(그 파일 자신의 cleanupExpiredDeletes 기본값 용도 ·
+// 아래 import 된 createSoftDeleteLifecycle 과 같은 모듈). export 돼
+// 있어도 이 파일은 그 상수를 "직접 쓰지" 않고 UNDO_TOAST_MS 를 따로
+// 리터럴로 들고 있다 -- 데이터 계층은 호출만 하고 고치지 말라는 범위
+// 제약(coder-task.md §0) 때문에 두 숫자가 "같은 값을 따로" 든 채로
+// 남아있다(r2 §2-4 가 이 파일 아래 "한 원천" 시험으로 둘을 양방향
+// 대조한다 -- test/storage/memo-lifecycle.test.mjs 가 GRACE_MS 를,
+// 이 파일 아래 자신의 시험이 UNDO_TOAST_MS 를 각각 import 해 서로
+// 비교하는 식). UNDO_TOAST_MS 를 export 하는 이유는 그와 별개로 검토
+// 2R P3-3 -- 이 값을 그대로 아래 createLifecycle(adapter, { graceMs })
+// 로 "명시로" 넘기는 줄이 지워져도(데이터 계층 기본값과 우연히 같은
+// 7000 이라) 시험이 타이밍만으로는 못 가른다. 시험은 이 상수를 import
+// 해 createLifecycle 스파이에 실제로 전달된 값과 직접 비교한다(결과
+// 파일 §2-3 참고, test/editor/memo-list-delete-undo.test.mjs).
 export const UNDO_TOAST_MS = 7000;
 
 // 책임자 판정 §2(위치 요구): 되돌리기 토스트와 저장 실패 표시가 같은
@@ -195,6 +203,15 @@ export function mountMemoList(
       }
       try {
         await lifecycle.restore(id);
+        // r2 P2-2 ⓐⓒ 최소 결선(coder-task.md §2 product_scope): 저장
+        // 실패 표시가 떠 있는 동안(바로 아래 catch 의 holdPending)은
+        // lifecycle 이 하드 삭제를 미뤄 둔다 -- 그 hold 가 "풀리는"
+        // 신호는 바로 이 자리(재시도 성공) 뿐 아니라 실패 표시가
+        // 성공 없이 닫히는 다른 자리(handleSwipeDelete 의 같은 짝
+        // 호출)에도 똑같이 필요하므로, clearSaveErrorFor 호출 바로
+        // 곁에 짝으로 둔다(없던 hold 에 불러도 releasePending 은
+        // 안전하게 no-op).
+        await lifecycle.releasePending(id);
         toastCtrl.clearSaveErrorFor(id);
         await refresh();
       } catch {
@@ -202,6 +219,11 @@ export function mountMemoList(
         // 거부돼도 unhandledRejection 으로 새면 안 된다 -- 책임자
         // 결정④ 문구를 토스트 고정 영역에 보여주고, 재시도는 이
         // handler 자신을 다시 부른다(restore 를 다시 시도).
+        // r2 P2-2 ⓐ: 이 실패 표시를 보이기 "직전"에 하드 삭제 예약을
+        // hold 한다 -- restore() 가 이미 (put 실패 시) 남은 유예로
+        // 재예약해 뒀으므로, 그 타이머를 held 로 바꿔 "표시가 떠 있는
+        // 동안은 돌지 않게" 만든다.
+        lifecycle.holdPending(id);
         toastCtrl.showSaveError(id, () => handler());
       }
     };
@@ -215,6 +237,13 @@ export function mountMemoList(
   async function handleSwipeDelete(id) {
     try {
       await lifecycle.softDelete(id);
+      // r2 P2-2 ⓒ 결선(위 handler 의 같은 짝): 이 id 가 "직전에" 저장
+      // 실패 표시로 hold 돼 있었을 수 있다(예: 되돌리기가 실패해 표시가
+      // 떠 있던 메모를 사용자가 다시 스와이프로 지우는 경로) -- softDelete
+      // 가 이미 cancelPending 으로 그 예약을 걷어내고 전체 유예로 새로
+      // 예약했으므로, 여기서는 "들고 있던 hold 기록"만 지워 새지 않게
+      // 한다(없던 hold 에 불러도 안전).
+      await lifecycle.releasePending(id);
       toastCtrl.clearSaveErrorFor(id);
       await refresh();
       showUndoToast(id);
@@ -225,7 +254,10 @@ export function mountMemoList(
       // 책임자 결정④ 문구를 토스트 고정 영역(검토 2R P2-1)에 보여준다 --
       // refresh() 를 안 불렀으니 카드는 그대로 남아 있다(P2-3 "카드
       // 남음" 요구). 이때 다른 메모의 되돌리기 토스트가 떠 있었다면
-      // active 는 그대로 둬 되돌리기 버튼이 함께 보인다(요구 ⓑ).
+      // active 는 그대로 둬 되돌리기 버튼이 함께 보인다(요구 ⓑ). 이
+      // 경로는 softDelete 자체의 최초 실패라 애초에 하드 삭제 예약이
+      // 없으므로 holdPending 은 호출하지 않는다(예약이 없는 id 에
+      // 불러도 안전은 하지만, "무엇을 막는지" 짝이 없어 혼동을 피한다).
       toastCtrl.showSaveError(id, () => handleSwipeDelete(id));
     }
   }
