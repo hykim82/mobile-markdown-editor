@@ -102,7 +102,7 @@ function createToastController(toast, { onErrorOverwritten } = {}) {
     syncToastVisibility();
   }
 
-  function showSaveError(id, retry) {
+  function showSaveError(id, retry, { goneRestore = false } = {}) {
     if (!toast || !toast.errorButton) return;
     if (errorState) {
       toast.errorButton.removeEventListener("click", errorState.onClick);
@@ -115,9 +115,42 @@ function createToastController(toast, { onErrorOverwritten } = {}) {
       }
     }
     const onClick = () => retry();
-    errorState = { id, onClick };
+    // r3 P2-1(검토 3R §3, HYK-304-notice-polish-1 §2-6ⓐ): goneRestore 는
+    // "이미 없는 메모"(restore 가 null)의 표시임을 따로 적어 둔다 -- 이
+    // 표시는 재시도로도, 시간이 지나도 스스로 닫히지 않으므로(복원 수단이
+    // 사실상 없다) 아래 clearGoneRestoreOnSuccess 가 "다른 메모의 성공
+    // 조작"에서 대신 닫아준다. 진짜 저장 실패(held)는 이 표식이 없으므로
+    // 그 조작으로 닫히지 않는다(판정 "실패 표시 중 hard delete 미룸" 보존).
+    errorState = { id, onClick, goneRestore };
     toast.errorButton.addEventListener("click", onClick);
     syncToastVisibility();
+  }
+
+  // r3 P2-1 해제 지점(위 showSaveError 의 goneRestore 와 짝): "다른 메모의
+  // 성공 조작"(스와이프 삭제 성공 · 되돌리기 성공) 뒤에 불러, 지금 떠
+  // 있는 표시가 goneRestore 가 아니면 아무 일도 하지 않는다 -- 진짜
+  // 저장 실패(held) 표시가 다른 메모의 성공으로 함께 닫히면 안 되기
+  // 때문이다. goneRestore 가 자기 자신의 id 로 성공하는 경로는 없다
+  // (이미 없는 메모는 restore 가 계속 null 을 돌려주므로 재시도로는
+  // 절대 벗어나지 못한다, §한계) -- 그래서 id 비교 없이 "성공한 조작이
+  // 있었다"는 사실만으로 닫아도 자기 자신을 잘못 닫을 길이 없다.
+  function clearGoneRestoreOnSuccess() {
+    if (!errorState || !errorState.goneRestore) return;
+    if (toast?.errorButton) {
+      toast.errorButton.removeEventListener("click", errorState.onClick);
+    }
+    errorState = null;
+    syncToastVisibility();
+  }
+
+  // r3 P2-1 호출부 압축(mount 쪽 max-lines-per-function 예산, ESLint):
+  // handler/handleSwipeDelete 의 성공 분기는 둘 다 "이 id 자신의 표시를
+  // 지우고(clearSaveErrorFor) + 다른(이미 없어진) 메모의 표시를 닫는다
+  // (clearGoneRestoreOnSuccess)"를 그대로 짝으로 부른다 -- 한 호출로
+  // 묶는다.
+  function clearOnSuccess(id) {
+    clearSaveErrorFor(id);
+    clearGoneRestoreOnSuccess();
   }
 
   // 연속 삭제(ⓕ)에서 새 토스트가 뜰 때 이전 되돌리기 리스너가 남아
@@ -134,7 +167,7 @@ function createToastController(toast, { onErrorOverwritten } = {}) {
 
   return {
     detachActiveUndo,
-    clearSaveErrorFor,
+    clearOnSuccess,
     showSaveError,
     setActiveUndo,
     isActiveUndo,
@@ -234,18 +267,22 @@ export function mountMemoList(
         // 그대로 유지하는 쪽을 골랐다(이미 없는 메모를 되돌릴 수단이
         // 사실상 없으므로, 성공으로 위장하지 않는 것이 더 안전하다).
         if (restored == null) {
-          toastCtrl.showSaveError(id, () => handler());
+          // r3 P2-1(검토 3R §3, HYK-304-notice-polish-1 §2-6ⓐ): goneRestore
+          // 로 표시해 둬야 이 표시가 "다른 메모의 성공 조작"에서 닫힌다
+          // (아래 clearOnSuccess 호출부). 새 문구는 0 -- showSaveError 는
+          // 그대로 기존 SAVE_ERROR_MESSAGE 를 쓴다.
+          toastCtrl.showSaveError(id, () => handler(), { goneRestore: true });
           return;
         }
-        // r3 P3-1(검토 2R "죽은 releasePending"): 여기서 releasePending
-        // 을 부르는 건 죽은 코드였다 -- 바로 위 lifecycle.restore 가
-        // 성공하면 그 함수 맨 앞의 cancelPending 이 이미 held 상태를
-        // 지운 뒤라, 이 자리에서 releasePending 을 불러도
-        // heldHardDeletes 에 이 id 가 없어 항상 no-op 이었다(검토 2R
-        // X4 생존). 실패 표시가 "성공 없이" 덮어써질 때의 실제 해제는
-        // 이제 toastCtrl 의 onErrorOverwritten(위 createToastController
-        // 호출부)이 맡는다.
-        toastCtrl.clearSaveErrorFor(id);
+        // r3 P3-1(검토 2R "죽은 releasePending") + r3 P2-1 해제 지점: 앞
+        // releasePending 호출은 죽은 코드였다(복원 성공이면 그 함수 맨
+        // 앞의 cancelPending 이 이미 held 를 지운 뒤라 heldHardDeletes
+        // 에 이 id 가 없어 항상 no-op, 검토 2R X4 생존) -- 실제 해제는
+        // onErrorOverwritten(위 createToastController 호출부)이 맡는다.
+        // clearOnSuccess 는 이 id 자신의 표시를 지우고, 다른(이미 없어진)
+        // 메모의 goneRestore 표시가 떠 있었다면 그것도 닫는다(판정 "실패
+        // 표시 중 hard delete 미룸" 보존 -- held 표시는 그대로 유지).
+        toastCtrl.clearOnSuccess(id);
         await refresh();
       } catch {
         // 검토 1R P2-3 근거 + 2R P2-1 위치 수정: 되돌리기 저장이
@@ -277,7 +314,10 @@ export function mountMemoList(
       // 이었다(검토 2R X5 생존). 실패 표시가 성공 없이 덮어써질 때의
       // 실제 해제는 toastCtrl 의 onErrorOverwritten 이 맡는다(위
       // createToastController 호출부).
-      toastCtrl.clearSaveErrorFor(id);
+      // r3 P2-1 해제 지점(위 handler 와 같은 이유): clearOnSuccess 가
+      // 이 스와이프 삭제 성공으로 이 id 자신의 표시와, 다른(이미 없어진)
+      // 메모의 goneRestore 표시를 함께 닫는다.
+      toastCtrl.clearOnSuccess(id);
       await refresh();
       showUndoToast(id);
     } catch {

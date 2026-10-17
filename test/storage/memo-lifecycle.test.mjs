@@ -409,6 +409,100 @@ test("P3-2: 남은 유예 재예약(releasePending) 은 '원래 마감'을 그�
   );
 });
 
+// HYK-304-notice-polish-1(§2-2, E3 P3-1 · 검토 3R §3 지적): restore catch
+// 의 "남은 유예" 재예약(이 파일의 118-119행 근방)은 r2 부터 있었지만
+// 어느 lifecycle 칸도 이를 "holdPending 없이" 직접 고정하지 않았다 --
+// M7(restore catch 재예약을 전체 graceMs 로 바꾼 변이)이 저장소 64/64
+// 초록으로 생존했다(검토 3R §2-ⓗ). mount 의 holdPending 이 곧바로
+// 덮어써 UI 경로에서는 관찰되지 않지만(§한계), lifecycle API 자체의
+// 의미로는 이 재예약이 "원래 마감"을 지켜야 한다 -- holdPending 을 전혀
+// 부르지 않고 이 경계를 직접 잰다.
+test("E3 P3-1: restore catch 의 '남은 유예' 재예약은 holdPending 없이도 원래 마감을 지킨다 -- 6999ms 생존/7000ms 소거(M7 이 이 칸을 RED 로 만든다)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  const adapter = createFakeAdapter();
+  await seedMemo(adapter, "m1");
+  const lifecycle = createSoftDeleteLifecycle(adapter, {
+    now: () => Date.now(),
+  });
+
+  await lifecycle.softDelete("m1"); // t=0, 하드 삭제 예약 0+7000=7000
+  t.mock.timers.tick(3000); // t=3000
+
+  adapter.forceNextPutFailures(1);
+  await assert.rejects(lifecycle.restore("m1")); // t=3000 실패, 남은 유예(4000)로 재예약 -- holdPending 호출 없음
+
+  t.mock.timers.tick(3999); // t=6999
+  await Promise.resolve();
+  assert.ok(
+    await adapter.get("m1"),
+    "holdPending 없이도 남은 유예(4000ms)가 아직 안 끝났다(6999)",
+  );
+
+  t.mock.timers.tick(1); // t=7000
+  await Promise.resolve();
+  assert.equal(
+    await adapter.get("m1"),
+    undefined,
+    "holdPending 없이도 restore catch 의 재예약이 원래 마감(7000)에 그대로 소거한다(E3 P3-1, M7 이 이 칸을 RED 로 만든다)",
+  );
+});
+
+// HYK-304-notice-polish-1(§2-3, E3 P3-2 · 검토 3R §3 지적): `remaining > 0`
+// 경계(memo-lifecycle.mjs 118행)에서 "정확히 0ms" 인 실패가 고정되지
+// 않았다(M10: `>= 0` 으로 바꿔도 저장소 64/64 초록). put 을 게이트로
+// 묶어(P1-1 변형 시험과 같은 기법) remaining 이 "정확히" 0 이 되는
+// 시각에 실패하도록 만든다 -- `>0` 이면 else 분기(held, 재예약 없음)로
+// 들어가 동기 삭제가 없어야 하고, `>=0` 으로 바뀌면 delay<=0 분기
+// (scheduleHardDelete 의 동기 runHardDelete)를 타 바로 지워진다.
+test("E3 P3-2: 남은 유예가 정확히 0 인 실패는 동기 삭제 대신 held 로 들어간다(경계, M10 이 이 칸을 RED 로 만든다)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  const adapter = createFakeAdapter();
+  await seedMemo(adapter, "m1");
+  const lifecycle = createSoftDeleteLifecycle(adapter, {
+    now: () => Date.now(),
+  });
+
+  await lifecycle.softDelete("m1"); // t=0, 예약 7000
+  t.mock.timers.tick(6980); // t=6980, 남은 유예 20ms(게이트 전에 자연 타이머가 안 돈다)
+
+  const realPut = adapter.put.bind(adapter);
+  let releasePut;
+  const gate = new Promise((resolve) => {
+    releasePut = resolve;
+  });
+  adapter.forceNextPutFailures(1);
+  adapter.put = async (memo) => {
+    await gate;
+    return realPut(memo);
+  };
+
+  const restorePromise = lifecycle.restore("m1");
+  // cancelPending 은 restore 맨 앞(동기 구간)에서 이미 돌았다 -- put 을
+  // 게이트에 막아 둔 채 시계를 "정확히" 마감(7000)까지 흘려보낸 뒤
+  // 풀어준다. now() 는 put 이 거부로 풀린 뒤(catch 안)에 읽히므로,
+  // remaining = deletedAt(0)+graceMs(7000)-now(7000) = 0 이 된다.
+  t.mock.timers.tick(20); // t=7000, 마감과 정확히 같다
+  await Promise.resolve();
+  releasePut();
+
+  await assert.rejects(restorePromise, "put 거부를 그대로 전파해야 한다");
+  await Promise.resolve(); // M10(>=0) 이면 scheduleHardDelete 가 fire-and-forget remove 를 거는 자리
+
+  assert.ok(
+    await adapter.get("m1"),
+    "남은 유예가 정확히 0 이어도 동기로 지우면 안 된다(경계, E3 P3-2)",
+  );
+
+  // held 로 들어갔다면(재예약 없음) release 없이는 영원히 보존된다 --
+  // 한참 더 흘려보내도 그대로 살아있어야 한다(M10 이면 이미 지워져 RED).
+  t.mock.timers.tick(1000000);
+  await Promise.resolve();
+  assert.ok(
+    await adapter.get("m1"),
+    "남은 유예가 정확히 0 이면 held 로 들어가 release 없이는 계속 살아있어야 한다(M10 이 이 칸을 RED 로 만든다)",
+  );
+});
+
 // HYK-304-lifecycle-orphans-1 ⓒ(책임자 판정 §2 요구 3): 타이머 콜백 안
 // adapter.remove() 가 거부해도 unhandledRejection 으로 새면 안 된다(타이머
 // 콜백은 try/catch 로 못 잡는 비동기 경계라 삼키지 않으면 그대로 샌다).

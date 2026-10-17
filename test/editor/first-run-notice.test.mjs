@@ -43,8 +43,11 @@ test("①첫 실행(기록 없음): 최초 실행 고지가 문구 그대로 보
   );
 });
 
-// ⓑ 닫으면 기록되고 고지가 사라진다(N1 생존 전제: 닫기 자체는 기록과
-// 별개로 항상 숨긴다 -- 기록 실패 분기는 아래 ④ 시험이 ⓓ 로 잰다).
+// ⓑ 닫기 버튼은 고지를 숨긴다(N1 생존 전제: 닫기 자체는 기록과 별개로
+// 항상 숨긴다 -- 기록 실패 분기는 아래 ④ 시험이 ⓓ 로 잰다). ⚠️주석
+// 정정(검토 2R P3-1, HYK-304-notice-polish-1 §2-6ⓕ): "본 것" 기록은
+// 닫을 때가 아니라 표시 순간(⑥ 시험)에 이미 끝나 있다 -- 이 시험은
+// 닫기가 숨김 동작 자체를 하는지만 잰다.
 test("②닫기 버튼을 누르면 고지가 사라진다", async () => {
   const dom = await bootApp();
   const { document } = dom.window;
@@ -255,10 +258,15 @@ test("⑦저장소 읽기(getItem)가 실패하면 부팅할 때마다 고지가
 // fixed/absolute, inset 단축, top+right+bottom+left 네 변 동시 선언)이
 // 없는지를 단언한다. jsdom getComputedStyle 은 레이아웃을 계산하지
 // 않으므로(한계 -- 결과 파일 §9) 구조 검사의 보조 신호로만 병행한다.
-test("⑧비오버레이(넓힘): #first-run-notice 를 가리키는 모든 CSS 규칙에 전체 덮개 선언이 없다", async () => {
+// ⚠️2R 검토 P3-2(HYK-304-notice-polish-1 §2-6ⓖ): 옛 정규식
+// `#first-run-notice\s*\{` 는 `::before`/`::after` 가상 요소 규칙
+// (`#first-run-notice::before { position: fixed; … }`)을 놓쳤다(M4e
+// 생존 -- 요소 자신이 아니라 가상 요소가 전체 덮개가 되는 모양). 선택자와
+// `{` 사이에 그 둘을 허용해 같은 방식으로 잡는다.
+test("⑧비오버레이(넓힘): #first-run-notice 를 가리키는 모든 CSS 규칙(::before/::after 가상 요소 포함)에 전체 덮개 선언이 없다", async () => {
   const html = await readFile(indexHtmlPath, "utf8");
   const withoutComments = html.replace(/\/\*[\s\S]*?\*\//g, "");
-  const ruleRegex = /#first-run-notice\s*\{([^}]*)\}/gs;
+  const ruleRegex = /#first-run-notice(?:::(?:before|after))?\s*\{([^}]*)\}/gs;
   const blocks = [...withoutComments.matchAll(ruleRegex)].map((m) => m[1]);
   assert.ok(
     blocks.length >= 1,
@@ -304,7 +312,13 @@ test("⑧비오버레이(넓힘): #first-run-notice 를 가리키는 모든 CSS 
 // "표시(=기록 시도)" 자체가 setItem 예외를 삼키는지, 그리고 그 뒤
 // 닫기도 정상 동작하는지를 함께 잰다(V5 생존: try 를 없애면 표시 중
 // main() 이 죽어 waitForListScreen 타임아웃으로 RED).
-test("⑨저장소 쓰기(setItem)가 실패해도 고지가 정상적으로 보였다가 닫힌다(예외가 밖으로 새지 않는다)", async () => {
+// ⚠️2R 검토 P3-3(HYK-304-notice-polish-1 §2-6ⓗ): "예외가 밖으로 새지
+// 않는다"는 제목이지만 아래 hidden 단언만으로는 onClose 가 "숨긴 뒤"
+// 보호 없이 던지는 모양(M6b)을 못 잡는다 -- jsdom 은 리스너 예외를
+// click() 호출자에게 다시 던지지 않고 window 의 error 이벤트로만 알린다
+// (지금 onClose 는 setItem 을 부르지 않아 해당 없지만, 그 분기가 생겨도
+// 이 시험이 걸리도록 window error 이벤트 수를 함께 잰다).
+test("⑨저장소 쓰기(setItem)가 실패해도 고지가 정상적으로 보였다가 닫히고, 닫기 리스너가 예외를 던지지 않는다(예외가 밖으로 새지 않는다)", async () => {
   const dom = await bootApp({
     seed: (d) => {
       d.window.Storage.prototype.setItem = function throwingSetItem() {
@@ -314,7 +328,7 @@ test("⑨저장소 쓰기(setItem)가 실패해도 고지가 정상적으로 보
       };
     },
   });
-  const { document } = dom.window;
+  const { document, window: domWindow } = dom.window;
 
   // main() 이 동기 구간까지 끝까지 돌아 여기 도달했다는 것 자체가
   // "표시(기록 시도)가 예외를 밖으로 던지지 않았다"는 증거다.
@@ -326,11 +340,43 @@ test("⑨저장소 쓰기(setItem)가 실패해도 고지가 정상적으로 보
     "쓰기 실패가 있어도 고지는 정상적으로 보여야 한다",
   );
 
+  const windowErrors = [];
+  domWindow.addEventListener("error", (e) => windowErrors.push(e));
+
   document.getElementById("first-run-notice-close-button").click();
 
   assert.equal(
     document.getElementById("first-run-notice").hidden,
     true,
     "쓰기 실패가 있어도 닫기는 예외 없이 정상 동작해야 한다",
+  );
+  assert.equal(
+    windowErrors.length,
+    0,
+    "닫기 리스너는 숨긴 뒤에도 예외를 던지면 안 된다(M6b: 숨긴 뒤 보호 없는 setItem 을 추가하면 이 칸이 RED 가 된다)",
+  );
+});
+
+// ⑩ PR #39 "남은 것" 3(HYK-304-notice-polish-1 §2-6ⓘ): 닫기 버튼 ✕는
+// 44px 이상이어야 한다(책임자 결정 ⓐ, shortcut-bar.test.mjs ④ 와 같은
+// 선례). jsdom 은 레이아웃을 계산하지 않아 실제 히트테스트 크기를
+// getBoundingClientRect 로 재지 못한다(한계 -- §8) -- 출하 CSS 규칙
+// 자체를 읽는 "규칙 단언"으로 좁혀 고정한다.
+test("⑩닫기 버튼(✕)은 44px 이상으로 CSS 에 고정돼 있다(min-height/min-width, 규칙 단언)", async () => {
+  const html = await readFile(indexHtmlPath, "utf8");
+  const withoutComments = html.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = withoutComments.match(
+    /#first-run-notice-close-button\s*\{([^}]*)\}/,
+  );
+  assert.ok(rule, "닫기 버튼 규칙이 출하 CSS 에 있어야 한다");
+  assert.match(
+    rule[1],
+    /min-height\s*:\s*44px/,
+    "닫기 버튼은 min-height: 44px 이상으로 고정돼 있어야 한다",
+  );
+  assert.match(
+    rule[1],
+    /min-width\s*:\s*44px/,
+    "닫기 버튼은 min-width: 44px 이상으로 고정돼 있어야 한다",
   );
 });
