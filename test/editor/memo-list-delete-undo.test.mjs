@@ -1153,6 +1153,102 @@ test("P1-1 동반: 이미 사라진 메모의 되돌리기 재시도는 '복원�
   );
 });
 
+// HYK-304-notice-polish-1(§2-1, E3 P2-1 · 검토 3R §3 지적): 바로 위
+// "P1-1 동반" 시험이 보인 실패 표시는 재시도로도, 시간이 지나도, 다른
+// 메모의 되돌리기 "성공"으로도 닫히지 않았다(검토 3R MP-null `[true,
+// true,true,true]` · `afterSwipeOkB=true`) -- 벗어나는 길이 전혀 없으면
+// 사용자가 갇힌다. 여기서는 "다른 메모의 스와이프 삭제 성공"에서 그
+// 표시가 닫히는지를 mount 경유로 잰다(MP-null 모양: 레코드 삭제 →
+// 되돌리기 → 표시 뜸 → 다른 메모 스와이프 성공 → 표시 닫힘). 새 문구는
+// 0 이다(기존 SAVE_ERROR_MESSAGE 그대로, 아래 textContent 로 재확인).
+// ⚠️"다른 메모의 되돌리기 성공"(계약 §2-1 의 또 다른 예시)도 코드상
+// 같은 clearGoneRestoreOnSuccess() 호출(memo-list-mount.mjs 의 handler
+// 성공 분기)로 닫히지만, 이 mount 는 되돌리기 토스트 슬롯이 하나뿐이라
+// "다른 메모를 되돌릴 수 있는 상태로" 만드는 유일한 길(스와이프)이 그
+// 자체로 스와이프 성공 분기를 먼저 태워 이 표시를 닫아버린다 -- 그래서
+// "되돌리기 성공만" 분리해 mount 경유로 재현하지 못한다(〔못쟀다〕, 결과
+// 파일 §한계). 두 분기가 같은 함수를 부른다는 것은 코드 읽기로 확인했다.
+test("E3 P2-1: 이미 없는 메모의 실패 표시는 다른 메모의 스와이프 삭제 성공에서 닫힌다", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idGone = await createMemoAt(adapter, "이미 사라진 메모(닫힘 칸)", 100);
+  const idOther = await createMemoAt(adapter, "다른 메모(스와이프 성공)", 200);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  swipe(container.querySelector(`[data-memo-id="${idGone}"]`));
+  await settle();
+  await adapter.remove(idGone); // 되돌리기 전에 레코드가 이미 사라진 상황
+
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "전제: 이미 없는 메모의 되돌리기는 실패 표시를 띄워야 한다",
+  );
+  assert.equal(
+    toast.errorButton.textContent,
+    SAVE_ERROR_MESSAGE,
+    "새 문구 없이 기존 SAVE_ERROR_MESSAGE 를 그대로 재사용해야 한다",
+  );
+
+  // 다른 메모(idOther)를 스와이프해 삭제 성공시킨다 -- 이 성공 조작이
+  // "이미 없는 메모" 표시를 닫아야 한다.
+  swipe(container.querySelector(`[data-memo-id="${idOther}"]`));
+  await settle();
+  await settle();
+
+  assert.equal(
+    toast.errorButton.hidden,
+    true,
+    "다른 메모의 스와이프 삭제 성공에서 '이미 없는 메모' 표시가 닫혀야 한다(E3 P2-1)",
+  );
+});
+
+// HYK-304-notice-polish-1(§2-1 경계, E3 P2-1 · 검토 3R 판정 보존): 위
+// 칸과 짝을 이루는 경계 칸 -- "진짜" 저장 실패(held, goneRestore 가
+// 아님)는 다른 메모의 성공 조작으로 닫히면 안 된다(판정 "실패 표시 중
+// hard delete 미룸" 보존). clearGoneRestoreOnSuccess 가 goneRestore 가
+// 아닌 errorState 를 건너뛰는지를 직접 잰다.
+test("E3 P2-1 경계: 진짜 저장 실패(held) 표시는 다른 메모의 성공 조작에도 닫히지 않는다", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idHeld = await createMemoAt(adapter, "진짜 저장 실패(held)", 100);
+  const idOther = await createMemoAt(adapter, "다른 메모(성공)", 200);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  swipe(container.querySelector(`[data-memo-id="${idHeld}"]`));
+  await settle();
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click(); // 진짜 put 거부 -- goneRestore 가 아니다
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "전제: 진짜 저장 실패 표시가 떠야 한다",
+  );
+
+  swipe(container.querySelector(`[data-memo-id="${idOther}"]`));
+  await settle();
+  await settle();
+
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "진짜 저장 실패(held) 표시는 다른 메모의 성공 조작으로 닫히면 안 된다(E3 P2-1 경계)",
+  );
+  assert.ok(
+    await adapter.get(idHeld),
+    "held 중인 메모는 다른 메모의 성공과 무관하게 저장소에서도 살아있어야 한다",
+  );
+});
+
 // HYK-304-lifecycle-orphans-1-r3(§2 요구 3, P2-1 ⓐ 판정 + P3-1 해제
 // 지점): A 의 실패 표시가 떠 있는 동안(held) B 의 저장 실패가 그 표시를
 // 덮어쓰면, A 는 "해소"로 보고 유예를 재개한다(원래 마감 기준). A 의
@@ -1223,11 +1319,16 @@ test("P2-1 ⓐ: 다른 메모의 저장 실패가 표시를 덮어쓰면 그 메
     "A 는 덮어쓰기로 유예가 재개돼 원래 마감(7000ms)에 하드 삭제된다(P2-1 ⓐ · P3-1 해제 지점)",
   );
 
-  // B 는 자기 자신의 실패로 held 중이니 아직 지워지면 안 된다(A 의
-  // 해제가 B 에 영향을 주면 안 된다 -- 교차 오염 없음).
+  // ⚠️검토 3R P3-3(HYK-304-notice-polish-1 §2-6ⓓ) 교정: B 는 자기 마감
+  // (deletedAt(1000)+graceMs(7000)=8000)이 t=7000 에는 아직 지나지 않아,
+  // 이 시점의 "생존" 은 hold 와 무관하게 참이다(헛단언). hold 가 실제로
+  // 효과가 있는지는 B 의 "자기 마감 뒤"(예: 20000)에 재야 값으로 걸린다
+  // -- M12(mount catch 의 holdPending 제거)가 이 재측정에서만 RED 다.
+  clock.advance(13000); // t=20000(B 자기 마감 8000 을 한참 지남)
+  await settle();
   assert.ok(
     await adapter.get(idB),
-    "B 는 held 유지 중이라 A 의 해제와 무관하게 아직 살아있어야 한다",
+    "B 는 자기 마감(8000)을 한참 지난 20000ms 에도 held 유지 중이라 A 의 해제와 무관하게 살아있어야 한다(P3-3 교정)",
   );
 });
 
