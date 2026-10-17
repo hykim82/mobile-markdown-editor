@@ -75,6 +75,7 @@ function grabElements() {
     editorRoot: document.getElementById("editor-root"),
     rawPanel: document.getElementById("raw-panel"),
     saveNotice: document.getElementById("save-notice"),
+    saveIndicator: document.getElementById("save-indicator"),
     copyButton: document.getElementById("notion-copy-button"),
     copyToast: document.getElementById("notion-copy-toast"),
     shortcutBar: document.getElementById("shortcut-bar"),
@@ -140,7 +141,13 @@ function main() {
   // 데이터(IndexedDB)는 그대로이고, 포인터는 열려 있는 메모를 적는 용도로만
   // 남는다(openMemoInEditor·자동저장이 다시 쓴다).
   writeCurrentMemoId(null);
-  const store = mountStorage(editor, elements.saveNotice, adapter);
+  const store = mountStorage(
+    editor,
+    elements.saveNotice,
+    adapter,
+    {},
+    elements.saveIndicator,
+  );
   mountNotionCopy(editor, store, {
     button: elements.copyButton,
     toast: elements.copyToast,
