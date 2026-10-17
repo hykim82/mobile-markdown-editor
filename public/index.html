@@ -205,6 +205,24 @@
         padding: 0 8px 0 0;
         cursor: pointer;
       }
+      /* PRD §4 CUJ ④ "자동저장('저장됨')" · §6 "거슬림 없음"(coder-task.md
+         HYK-304-saved-indicator-1 §2): 크롬 최소 -- 뒤로가기 버튼 옆에 조용한
+         텍스트 한 줄. 색·크기는 기존에 같은 "조용한 텍스트" 용도로 이미 쓰는
+         토큰 그대로(#first-run-notice·.memo-card-meta 와 같은
+         color.text.muted/13px, 새 값 아님). 보임/숨김은 opacity 로 토글하고
+         (hidden 속성처럼 display:none 을 쓰면 전환이 생기지 않는다),
+         전환 시간은 design-tokens.json 의 motion.duration.base(200ms)
+         그대로다(값 변형 금지). */
+      #save-indicator {
+        margin-left: auto;
+        color: var(--color-text-muted);
+        font-size: 13px;
+        opacity: 0;
+        transition: opacity 200ms;
+      }
+      #save-indicator.is-visible {
+        opacity: 1;
+      }
       #editor-root {
         min-height: 40vh;
         background: var(--color-bg-elevated);
@@ -400,6 +418,7 @@
     <div id="editor-screen" hidden>
       <div class="topbar">
         <button id="back-to-list-button" type="button">‹ 목록</button>
+        <span id="save-indicator">저장됨</span>
       </div>
       <div id="editor-root" contenteditable="true"></div>
       <div id="shortcut-bar" role="toolbar" aria-label="서식 단축키"></div>
