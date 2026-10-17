@@ -14,3 +14,20 @@ export function visibleMemosSortedByUpdatedAt(records) {
     .filter((memo) => memo.deletedAt === null && memo.body.length > 0)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
+
+// HYK-304-lifecycle-orphans-1 ⓐ: memo-lifecycle.mjs 의 hard-delete 예약이
+// 메모리 setTimeout 뿐이라, 유예(graceMs) 안에 앱이 닫히면 그 레코드는
+// deletedAt 이 찍힌 채 저장소에 영구히 남는다(목록에서는 위
+// visibleMemosSortedByUpdatedAt 필터로 이미 숨어 있어 화면상으로는 드러나지
+// 않는 저장공간 누수). 다음 시작에 "무엇이 지워져야 하는가"(이 순수 필터)
+// 와 "어떻게 지우는가"(memo-lifecycle.mjs 의 cleanupExpiredDeletes, adapter
+// 호출)를 나눈다 -- 위 visible 필터와 같은 자리에 두는 이유도 같다: 둘 다
+// records 배열 위의 순수 조회다. 유예가 아직 안 지난(now < deletedAt +
+// graceMs) 레코드는 여기 포함하지 않는다 -- 지우면 안 되는 레코드다.
+export function expiredDeletedMemoIds(records, { now, graceMs }) {
+  return records
+    .filter(
+      (memo) => memo.deletedAt !== null && memo.deletedAt + graceMs <= now,
+    )
+    .map((memo) => memo.id);
+}
