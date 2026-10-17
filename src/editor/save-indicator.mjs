@@ -9,15 +9,22 @@
 // 상태라, 그때마다 표시를 내렸다 올리면 오히려 더 거슬린다. 그래서 표시는
 // "마지막으로 확정된 저장 결과"를 들고 있다가 다음 ok/failed/quota-
 // exceeded/idle 이 올 때만 갈아 치운다.
+//
+// aria-hidden 토글(HYK-304-saved-indicator-1-r2 §2-4, 책임자 판정
+// 2026-10-17 22:4x 판단 2): opacity 로만 숨기면 화면 낭독기에는 계속
+// 읽힌다 -- PRD §8 "미표시로 알림"이 낭독기 사용자에게도 성립하려면
+// 보임/숨김 class 토글과 같은 자리에서 aria-hidden 도 같이 바꿔야 한다.
 export function updateSaveIndicator(el, status) {
   if (!el) return;
   if (status === "ok") {
     el.classList.add("is-visible");
+    el.removeAttribute("aria-hidden");
   } else if (
     status === "failed" ||
     status === "quota-exceeded" ||
     status === "idle"
   ) {
     el.classList.remove("is-visible");
+    el.setAttribute("aria-hidden", "true");
   }
 }
