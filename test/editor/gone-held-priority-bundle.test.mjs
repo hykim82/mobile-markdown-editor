@@ -151,3 +151,87 @@ test("번들 결선(P3-2 정정): held 우선(다른 id 유지) + 같은 id 의 
     { timeout: 3000 },
   );
 });
+
+// HYK-304-e10-p3-cleanup-1 P3-1(검토 변이 a · r2inv): 위 칸의 "held 우선"
+// 단언은 "표시가 떠 있다 · 문구가 같다"뿐이다 -- gone(B)의 표시로 실제로
+// 덮어써져도 문구·가시성은 held(A)와 똑같으므로(둘 다 SAVE_ERROR_MESSAGE_
+// LITERAL), 그 변이에서도(held 우선 분기를 통째로 지운 변이 a · id 비교를
+// 뒤집은 변이 r2inv) 이 칸은 초록으로 남는다. 이 칸은 "표시가 실제로
+// 가리키는 메모"가 A 인지를 되돌리기 대상으로 가른다: 재시도(재시도 put
+// 패치는 이미 풀려 있다)를 누르면 held(A) 라면 A 자신의 레코드가 복원돼
+// 카드가 돌아오고 표시가 닫혀야 하고, gone(B) 로 덮어써졌다면 B 는 이미
+// 없는 레코드라 재시도가 다시 null 을 돌려줘 표시가 그대로 B 를 가리킨
+// 채 떠 있어야 한다(A 카드는 돌아오지 않는다).
+test("번들 결선(held 판별력): B 의 끼어듦 뒤 재시도가 A 를 복원한다(held 우선이 실제로 A 를 추적함을 되돌리기 대상으로 가른다)", async () => {
+  const idHeld = "gone-held-bundle-held-id-check";
+  const idGone = "gone-held-bundle-gone-id-check";
+
+  const dom = await bootApp({
+    seed: async () => {
+      await seedMemo(idHeld, "진짜 저장 실패(번들 held 판별력)");
+      await seedMemo(idGone, "끼어드는 이미 없는 메모(번들 held 판별력)");
+    },
+  });
+  const { document } = dom.window;
+  await waitFor(() => document.querySelectorAll(".memo-card").length === 2);
+
+  // A(idHeld) 스와이프 -> 되돌리기를 실제로 거부시켜(IDBObjectStore.
+  // prototype.put 1회 throw) 진짜 저장 실패(held, goneRestore:false)를
+  // 만든다.
+  const cardHeld = document.querySelector(`[data-memo-id="${idHeld}"]`);
+  swipeCard(dom, cardHeld);
+  await waitFor(
+    () => document.getElementById("list-delete-toast").hidden === false,
+  );
+
+  const originalPut = IDBObjectStore.prototype.put;
+  let failuresLeft = 1;
+  IDBObjectStore.prototype.put = function patchedPut(...args) {
+    if (failuresLeft > 0) {
+      failuresLeft -= 1;
+      throw new Error(
+        "gone-held-priority-bundle(판별력): A 되돌리기 강제 실패(held)",
+      );
+    }
+    return originalPut.apply(this, args);
+  };
+  try {
+    document.getElementById("list-delete-undo-button").click();
+    await waitFor(
+      () => document.getElementById("list-save-error-button").hidden === false,
+    );
+  } finally {
+    IDBObjectStore.prototype.put = originalPut;
+  }
+
+  // B(idGone) 를 스와이프해 레코드를 직접 제거(이미 없는 메모)하고
+  // 되돌리기를 눌러 A 의 held 표시를 밀어내려 한다(다른 id 의 끼어듦).
+  const cardGone = document.querySelector(`[data-memo-id="${idGone}"]`);
+  swipeCard(dom, cardGone);
+  await waitFor(
+    () => document.getElementById("list-delete-undo-button").hidden === false,
+  );
+  const sideAdapter = createIndexedDbAdapter();
+  await sideAdapter.remove(idGone);
+  document.getElementById("list-delete-undo-button").click();
+  await settleMs(80);
+
+  assert.equal(
+    document.getElementById("list-save-error-button").hidden,
+    false,
+    "전제: B 의 끼어듦 뒤에도 표시는 그대로 떠 있어야 한다",
+  );
+
+  // 판별 지점: 재시도를 누른다(A 의 put 패치는 이미 풀려 있으므로, 표시가
+  // 정말 A 를 가리킨다면 이번엔 성공해 A 카드가 돌아오고 표시가 닫힌다).
+  document.getElementById("list-save-error-button").click();
+  await waitFor(
+    () => document.querySelector(`[data-memo-id="${idHeld}"]`) !== null,
+    { timeout: 3000 },
+  );
+  assert.equal(
+    document.getElementById("list-save-error-button").hidden,
+    true,
+    "재시도가 A(held) 의 복원을 실제로 불러야 표시가 닫힌다 -- held 우선이 깨져 표시가 B(gone) 를 가리키면 재시도가 다시 null 을 돌려줘 표시가 닫히지 않는다(변이 a · r2inv 가 이 칸을 RED 로 만든다)",
+  );
+});
