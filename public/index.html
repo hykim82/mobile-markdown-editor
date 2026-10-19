@@ -37,13 +37,26 @@
         --color-toast-bg: #2a2d33; /* = color.border 의 dark 값(고정) */
         --color-toast-text: #fafaf8; /* = color.bg 의 light 값(고정) */
         --color-toast-error-bg: #d14343; /* = color.state.error 의 light 값(고정, 기존 렌더 값 보존) */
-        --color-toast-error-text: #e06c6c; /* = color.state.error 의 dark 값(고정) -- 항상 어두운 토스트 표면(--color-toast-bg) 위 글자라 밝은 쪽 토큰 값을 쓴다 */
+        /* HYK-304-system-theme-1-r2 §2 요구 2: color.state.error 의 dark 값
+           (#e06c6c)은 고정 토스트 표면(--color-toast-bg #2a2d33) 위에서
+           4.29(AA 4.5 미달, 1R 상신 후보 -- 검토 1R §6 P2-1)였다. 토큰
+           안에 이 표면 위에서 4.5 이상인 "빨강"이 없어(새 색 값은 금지)
+           color.text.primary 의 dark 값(#e6e6e3, 결과 파일 §2 대비표 ·
+           11.04)으로 바꾼다. 색만으로는 더 이상 "오류"를 뜻하지 않으므로
+           오류 의미는 아래 #list-save-error-button 의 밑줄(색이 아닌
+           표시)이 대신 맡는다(문구는 memo-list-view.mjs 의 기존
+           SAVE_ERROR_MESSAGE 그대로 -- "실패"라는 말 자체도 이미 문구로
+           오류를 알린다, 바꾸지 않아 PRD §8 정책 문구와 충돌 없음). */
+        --color-toast-error-text: #e6e6e3;
         /* accent/accent-hover 위에 얹는 흰 글자(FAB "+" · 노션 복사 버튼
-           글자). 두 테마 모두 accent 가 채도 있는 파란이라 흰 글자가
-           계속 읽힌다(결과 파일 §2-4 대비 계산 칸). color.bg.elevated 의
-           light 값과 값이 같을 뿐 그 토큰의 "표면" 의미는 아니므로(다크에서
-           표면은 어두워지지만 accent 위 글자는 계속 밝아야 한다) 별도
-           이름으로 고정한다. */
+           글자). 라이트는 accent 가 채도 있는 파란이라 흰 글자가 읽힌다
+           (4.63, 결과 파일 §2-4 대비 계산 칸). ⚠️다크는 고정하지 않고
+           바로 아래 @media (prefers-color-scheme: dark) 블록에서 같은
+           이름을 color.bg 의 dark 값(#16181c)으로 재선언한다 -- 흰 글자
+           그대로였다면 다크 accent(#5b8def)/accent-hover(#7aa2f2) 위에서
+           3.23/2.54 로 AA 미달이었다(검토 1R §6 P2-2). color.bg.dark 로
+           바꾸면 5.50/7.01 로 통과한다(HYK-304-system-theme-1-r2 §2 요구
+           1, 값은 기존 토큰 그대로 -- 새 색 값 0). */
         --color-on-accent: #ffffff;
         --font-family: system-ui, -apple-system, "Pretendard", sans-serif;
         --font-size-body: 17px;
@@ -62,6 +75,10 @@
           --color-accent-hover: #7aa2f2;
           --color-disabled: #3a3d44;
           --color-focus-ring: #7aa2f2;
+          /* 위 :root 의 --color-on-accent 주석 참고 -- color.bg 의 dark
+             값(토큰 값 그대로, 새 색 0)으로 재선언해 다크 accent 위 글자
+             대비를 5.50/7.01 로 만든다(HYK-304-system-theme-1-r2 §2 요구 1). */
+          --color-on-accent: #16181c;
         }
       }
       * {
@@ -215,6 +232,14 @@
         background: none;
         border: none;
         color: var(--color-toast-error-text);
+        /* HYK-304-system-theme-1-r2 §2 요구 2: 글자 색이 더 이상 "빨강"이
+           아니므로(위 --color-toast-error-text 주석) 오류/동작-가능 의미를
+           색이 아닌 표시로 옮긴다 -- 밑줄(링크처럼 "누를 수 있다"는 뜻을
+           더한다). 문구는 바꾸지 않는다(memo-list-view.mjs 의
+           SAVE_ERROR_MESSAGE = "저장에 실패했어요. 다시 시도해 주세요" 가
+           이미 "실패"라는 말로 오류를 알린다 -- PRD §8 정책 문구와
+           충돌하지 않음, 원문 그대로 읽어 확인). */
+        text-decoration: underline;
         font: inherit;
         text-align: left;
         min-height: 44px;

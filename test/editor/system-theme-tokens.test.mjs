@@ -75,13 +75,189 @@ function parseThemeRules(html) {
 // 중첩 깊이와 무관하게 여전히 ":root" 라 자동으로 빠진다)에서 색 리터럴을
 // 찾는다. 토큰이 아닌 값(변수 밖 하드코딩)이 남아 있으면 비어있지 않은
 // 배열을 돌려준다.
-function findNonRootHexLiterals(sheet) {
+//
+// HYK-304-system-theme-1-r2 §2 요구 4(⑶ 시험 구멍 ⓑ): 1R 의 이 함수는
+// hex(`#...`) 만 보았다 -- 검토 1R §5 변이 ⑶b(`#save-notice` 배경을
+// `rgb(255, 243, 224)` 로 재도입)가 이 칸을 통과(GREEN)시켜 구멍임을 값으로
+// 보였다(P3-2). 이제 ⑴ hex ⑵ rgb()/rgba()/hsl()/hsla()/hwb()/lab()/lch()/
+// color() 함수 표기 ⑶ CSS 확장 색 이름 키워드(white·black 등)도 잡는다.
+// `rule.style` 을 선언(property/value) 단위로 읽어(cssText 문자열 전체를
+// 정규식으로 훑지 않는다) 값 쪽만 검사하므로 속성 이름(border 등)에 우연히
+// 섞인 글자는 걸리지 않는다.
+const HEX_RE = /#[0-9a-fA-F]{3,8}/;
+const COLOR_FUNC_RE = /\b(?:rgb|rgba|hsl|hsla|hwb|lab|lch|color)\(/i;
+// CSS Color Module Level 4 확장 색 이름(147개, X11 계열) -- transparent ·
+// currentcolor 는 "고정 색 값"이 아니라 키워드라 뺀다(토큰 이탈 하드코딩이
+// 아님).
+const NAMED_COLORS = [
+  "aliceblue",
+  "antiquewhite",
+  "aqua",
+  "aquamarine",
+  "azure",
+  "beige",
+  "bisque",
+  "black",
+  "blanchedalmond",
+  "blue",
+  "blueviolet",
+  "brown",
+  "burlywood",
+  "cadetblue",
+  "chartreuse",
+  "chocolate",
+  "coral",
+  "cornflowerblue",
+  "cornsilk",
+  "crimson",
+  "cyan",
+  "darkblue",
+  "darkcyan",
+  "darkgoldenrod",
+  "darkgray",
+  "darkgreen",
+  "darkgrey",
+  "darkkhaki",
+  "darkmagenta",
+  "darkolivegreen",
+  "darkorange",
+  "darkorchid",
+  "darkred",
+  "darksalmon",
+  "darkseagreen",
+  "darkslateblue",
+  "darkslategray",
+  "darkslategrey",
+  "darkturquoise",
+  "darkviolet",
+  "deeppink",
+  "deepskyblue",
+  "dimgray",
+  "dimgrey",
+  "dodgerblue",
+  "firebrick",
+  "floralwhite",
+  "forestgreen",
+  "fuchsia",
+  "gainsboro",
+  "ghostwhite",
+  "gold",
+  "goldenrod",
+  "gray",
+  "green",
+  "greenyellow",
+  "grey",
+  "honeydew",
+  "hotpink",
+  "indianred",
+  "indigo",
+  "ivory",
+  "khaki",
+  "lavender",
+  "lavenderblush",
+  "lawngreen",
+  "lemonchiffon",
+  "lightblue",
+  "lightcoral",
+  "lightcyan",
+  "lightgoldenrodyellow",
+  "lightgray",
+  "lightgreen",
+  "lightgrey",
+  "lightpink",
+  "lightsalmon",
+  "lightseagreen",
+  "lightskyblue",
+  "lightslategray",
+  "lightslategrey",
+  "lightsteelblue",
+  "lightyellow",
+  "lime",
+  "limegreen",
+  "linen",
+  "magenta",
+  "maroon",
+  "mediumaquamarine",
+  "mediumblue",
+  "mediumorchid",
+  "mediumpurple",
+  "mediumseagreen",
+  "mediumslateblue",
+  "mediumspringgreen",
+  "mediumturquoise",
+  "mediumvioletred",
+  "midnightblue",
+  "mintcream",
+  "mistyrose",
+  "moccasin",
+  "navajowhite",
+  "navy",
+  "oldlace",
+  "olive",
+  "olivedrab",
+  "orange",
+  "orangered",
+  "orchid",
+  "palegoldenrod",
+  "palegreen",
+  "paleturquoise",
+  "palevioletred",
+  "papayawhip",
+  "peachpuff",
+  "peru",
+  "pink",
+  "plum",
+  "powderblue",
+  "purple",
+  "rebeccapurple",
+  "red",
+  "rosybrown",
+  "royalblue",
+  "saddlebrown",
+  "salmon",
+  "sandybrown",
+  "seagreen",
+  "seashell",
+  "sienna",
+  "silver",
+  "skyblue",
+  "slateblue",
+  "slategray",
+  "slategrey",
+  "snow",
+  "springgreen",
+  "steelblue",
+  "tan",
+  "teal",
+  "thistle",
+  "tomato",
+  "turquoise",
+  "violet",
+  "wheat",
+  "white",
+  "whitesmoke",
+  "yellow",
+  "yellowgreen",
+];
+const NAMED_COLOR_RE = new RegExp(`\\b(?:${NAMED_COLORS.join("|")})\\b`, "i");
+
+function findNonRootColorLiterals(sheet) {
   const found = [];
-  const HEX_RE = /#[0-9a-fA-F]{3,8}/g;
   function visit(rule) {
     if (rule.selectorText && rule.selectorText !== ":root") {
-      const matches = rule.style.cssText.match(HEX_RE);
-      if (matches) found.push({ selector: rule.selectorText, matches });
+      const matches = [];
+      for (let i = 0; i < rule.style.length; i++) {
+        const prop = rule.style[i];
+        const value = rule.style.getPropertyValue(prop);
+        if (
+          HEX_RE.test(value) ||
+          COLOR_FUNC_RE.test(value) ||
+          NAMED_COLOR_RE.test(value)
+        ) {
+          matches.push(`${prop}: ${value}`);
+        }
+      }
+      if (matches.length) found.push({ selector: rule.selectorText, matches });
     }
     if (rule.cssRules) {
       for (const inner of rule.cssRules) visit(inner);
@@ -147,10 +323,10 @@ test("color-scheme: :root 에 'light dark' 가 선언돼 있다", async () => {
   assert.equal(colorSchemeValue, "light dark");
 });
 
-test("리터럴 0: :root/다크 :root 가 아닌 모든 선택자에 색 리터럴(hex)이 없다", async () => {
+test("리터럴 0: :root/다크 :root 가 아닌 모든 선택자에 색 리터럴(hex·rgb/rgba/hsl/hsla·색 이름)이 없다", async () => {
   const html = await loadIndexHtml();
   const { sheet } = parseThemeRules(html);
-  const offenders = findNonRootHexLiterals(sheet);
+  const offenders = findNonRootColorLiterals(sheet);
   assert.deepEqual(
     offenders,
     [],
@@ -178,60 +354,193 @@ function contrastRatio(hexA, hexB) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-test("대비 계산(토큰 값, 실측 아님) -- 콘솔에 표로 남긴다(4.5 미달은 표시만, 토큰은 안 바꾼다)", async (t) => {
-  const tokens = await loadTokens();
-  const pairs = [
-    [
-      "본문 글자(light)",
-      tokens["color.text.primary"].light,
-      tokens["color.bg"].light,
-    ],
-    [
-      "본문 글자(dark)",
-      tokens["color.text.primary"].dark,
-      tokens["color.bg"].dark,
-    ],
-    [
-      "흐린 글자(light)",
-      tokens["color.text.muted"].light,
-      tokens["color.bg"].light,
-    ],
-    [
-      "흐린 글자(dark)",
-      tokens["color.text.muted"].dark,
-      tokens["color.bg"].dark,
-    ],
-    [
-      "토큰 이탈 대체 1: 저장 실패 버튼 글자(고정, color.state.error.dark) on 고정 토스트(color.border.dark)",
-      tokens["color.state.error"].dark,
-      tokens["color.border"].dark,
-    ],
-    [
-      "토큰 이탈 대체 2·3: #save-notice 글자(color.text.primary) on 배경(color.bg.elevated) -- light",
-      tokens["color.text.primary"].light,
-      tokens["color.bg.elevated"].light,
-    ],
-    [
-      "토큰 이탈 대체 2·3: #save-notice 글자(color.text.primary) on 배경(color.bg.elevated) -- dark",
-      tokens["color.text.primary"].dark,
-      tokens["color.bg.elevated"].dark,
-    ],
-  ];
-  const rows = pairs.map(([label, fg, bg]) => {
-    const ratio = contrastRatio(fg, bg);
-    return {
-      label,
-      fg,
-      bg,
-      ratio: Number(ratio.toFixed(2)),
-      passesAA: ratio >= 4.5,
-    };
-  });
-  // 전건 npm test(node --test, 동시 워커)에서 console.log 로 큰 들여쓴
-  // JSON 을 찍으면 테스트 러너 IPC 가 간헐적으로 "Unable to deserialize
-  // cloned data" 로 깨진다(이 파일에서 직접 재현 -- 단독 실행 3회는
-  // 6/6 그린, 전건 동시 실행에서만 재현). t.diagnostic + 한 줄 압축
-  // JSON 이 TAP 주석 경로로 안전하게 나간다(node:test 설계 용도).
-  t.diagnostic(`대비 계산 표(§2 요구 4): ${JSON.stringify(rows)}`);
-  assert.ok(rows.every((r) => Number.isFinite(r.ratio) && r.ratio >= 1));
+// HYK-304-system-theme-1-r2 §2 요구 3(⑷ 대비 칸 = 실패형). 1R 의 "대비
+// 계산" 시험은 단언이 `ratio >= 1`뿐이라 대비비는 정의상 항상 ≥1 이므로
+// 절대 실패하지 않는 칸이었다(검토 1R §7 P3-4). 이제 화면에 실제로 쓰이는
+// 글자/배경 쌍을(이 파일이 이미 읽은 실제 public/index.html 의 :root/다크
+// :root 값에서 직접 뽑아 -- 값을 손으로 다시 베끼지 않는다) 라이트·다크·
+// 눌림(pressed)/hover 상태까지 모아 4.5(WCAG AA, 작은 글자) 미달이면 실패
+//하게 한다. 큰 글자(FAB "+" 28px 등) 예외는 필요하면 minRatio 를 3 으로
+// 두고 그 쌍에 note 를 남기는 자리를 마련했다 -- 실측 결과 이 조각이 다루는
+// 큰 글자 쌍(FAB)도 4.5 를 이미 넘어 예외를 쓸 필요가 없었다(아래 PAIR_DEFS
+// 의 note 에 그대로 적는다). 사전 존재(이 라운드가 손대지 않은) 결함 2곳은
+// `exception` 사유와 함께 느슨한 바닥(minRatio)만 걸어 "더 나빠지면 잡되,
+// 지금 당장 npm test 를 깨지 않는다" -- 한용 상신 대상으로 결과 파일에도
+// 따로 적는다(토큰 파일 변경 없이는 고칠 수 없다, product_scope 범위 밖).
+function resolveVarValue(rootRule, darkRootRule, theme, name) {
+  if (theme === "light") {
+    return rootRule.style.getPropertyValue(name).trim().toLowerCase();
+  }
+  const darkVal = darkRootRule
+    ? darkRootRule.style.getPropertyValue(name).trim()
+    : "";
+  return (
+    darkVal || rootRule.style.getPropertyValue(name).trim()
+  ).toLowerCase();
+}
+
+const PAIR_DEFS = [
+  {
+    label: "본문 글자(body)",
+    fg: "--color-text-primary",
+    bg: "--color-bg",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+  },
+  {
+    label:
+      "흐린 글자(일반 배경 -- h1·memo-list-empty·save-indicator·back-to-list-button)",
+    fg: "--color-text-muted",
+    bg: "--color-bg",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+  },
+  {
+    label:
+      "흐린 글자(표면 배경 -- first-run-notice·placeholder·unchecked 글리프·raw-panel)",
+    fg: "--color-text-muted",
+    bg: "--color-bg-elevated",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+  },
+  {
+    label: "표면 글자(memo-card-title·shortcut-chip·save-notice 등)",
+    fg: "--color-text-primary",
+    bg: "--color-bg-elevated",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+  },
+  {
+    label: "체크됨 글리프(li[aria-checked=true]::before)",
+    fg: "--color-accent",
+    bg: "--color-bg-elevated",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+  },
+  {
+    label: "단축키 칩 눌림(shortcut-chip:active) 글자",
+    fg: "--color-text-primary",
+    bg: "--color-border",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+  },
+  {
+    label: "저장 실패 버튼 글자(고정, #list-save-error-button)",
+    fg: "--color-toast-error-text",
+    bg: "--color-toast-bg",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+    note: "HYK-304-system-theme-1-r2 §2 요구 2 -- 1R 값 4.29 미달을 이 라운드가 고쳤다(색 변경 + 밑줄로 오류 의미 보강).",
+  },
+  {
+    label: "토스트 기본 글자(고정, #list-delete-toast/#notion-copy-toast)",
+    fg: "--color-toast-text",
+    bg: "--color-toast-bg",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+  },
+  {
+    label:
+      "accent 버튼 위 글자(#new-memo-button FAB 28px·#notion-copy-button 15px/600)",
+    fg: "--color-on-accent",
+    bg: "--color-accent",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+    note: "HYK-304-system-theme-1-r2 §2 요구 1 -- FAB(28px)는 큰 글자라 3:1 로도 충분하지만 notion-copy-button(15px/600, 큰 글자 기준 미달)이 작은 글자 4.5 를 요구하므로 그 기준으로 잰다. 1R 값(다크 3.23)을 이 라운드가 고쳤다(다크 on-accent 를 color.bg.dark 로).",
+  },
+  {
+    label: "accent 버튼 hover(#notion-copy-button:hover) 글자",
+    fg: "--color-on-accent",
+    bg: "--color-accent-hover",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+    note: "1R 값(다크 2.54)을 이 라운드가 고쳤다.",
+  },
+  {
+    label: "notion-copy-button:disabled 글자(비활성)",
+    fg: "--color-on-accent",
+    bg: "--color-disabled",
+    themes: ["light", "dark"],
+    minRatio: 1,
+    exception:
+      "비활성 컨트롤 -- WCAG 2.1 1.4.3 은 inactive user interface component 에 대비 요구를 두지 않는다(표시만, 게이트 아님).",
+  },
+  {
+    label: "목록 불러오기 실패 글자(.memo-list-error, light)",
+    fg: "--color-state-error",
+    bg: "--color-bg",
+    themes: ["light"],
+    minRatio: 4.0,
+    exception:
+      "사전 존재 결함 -- 이 라운드 §2 의 ⑴·⑵ 대상이 아니고 다크 모드와도 무관(다크는 5.53 로 통과). color.state.error.light 가 거의 흰 배경 위에서 4.5 미달(실측 4.37) -- 토큰 파일 변경 금지(product_scope)라 이 라운드에서 고칠 수 없다. 한용 상신 대상. 바닥(4.0)은 더 나빠지는 것만 잡는다.",
+  },
+  {
+    label: "노션 복사 오류 토스트 글자(고정, [data-variant=error])",
+    fg: "--color-toast-text",
+    bg: "--color-toast-error-bg",
+    themes: ["light", "dark"],
+    minRatio: 4.0,
+    exception:
+      "위와 같은 뿌리(color.state.error.light, 고정값) -- 검토 1R §6 이 이미 같은 값(4.37)을 '무변'으로 적었을 뿐 P 코드로 escalate 하지 않았다. 사전 존재 · 범위 밖 · 상신 대상.",
+  },
+  {
+    label:
+      "되돌리기 버튼 글자(#list-delete-undo-button, accent on 고정 다크 칩, light)",
+    fg: "--color-accent",
+    bg: "--color-toast-bg",
+    themes: ["light"],
+    minRatio: 2.5,
+    exception:
+      "사전 존재 결함(신규 발견) -- 이 토스트 칩은 항상 어두운 고정 배경(--color-toast-bg)인데 글자색은 테마를 타는 --color-accent 라 라이트에서 3b6fe0 on 2a2d33 = 2.98 로 크게 미달한다. §2 의 ⑴·⑵ 목록에 없고 토큰 변경 없이는 못 고친다 -- 한용 상신 대상(1R·REVIEW-1R 모두 이 쌍을 재지 않았다).",
+  },
+  {
+    label:
+      "되돌리기 버튼 글자(#list-delete-undo-button, accent on 고정 다크 칩, dark)",
+    fg: "--color-accent",
+    bg: "--color-toast-bg",
+    themes: ["dark"],
+    minRatio: 4.0,
+    exception:
+      "위와 같은 뿌리 -- 다크 accent(5b8def on 2a2d33) 도 4.27 로 작은 글자 AA 미달. 사전 존재 · 범위 밖 · 상신 대상.",
+  },
+];
+
+test("대비 가드(실패형): 화면에 실제로 쓰이는 글자/배경 쌍이 4.5(AA, 작은 글자) 미달이면 실패한다", async (t) => {
+  const html = await loadIndexHtml();
+  const { rootRule, darkRootRule } = parseThemeRules(html);
+  assert.ok(rootRule, "전제: 최상위 :root 규칙이 있어야 한다");
+  assert.ok(
+    darkRootRule,
+    "전제: @media (prefers-color-scheme: dark) 안에 :root 규칙이 있어야 한다",
+  );
+
+  const rows = [];
+  for (const def of PAIR_DEFS) {
+    for (const theme of def.themes) {
+      const fg = resolveVarValue(rootRule, darkRootRule, theme, def.fg);
+      const bg = resolveVarValue(rootRule, darkRootRule, theme, def.bg);
+      const ratio = contrastRatio(fg, bg);
+      rows.push({
+        label: def.label,
+        theme,
+        fg,
+        bg,
+        ratio: Number(ratio.toFixed(2)),
+        minRatio: def.minRatio,
+        exception: def.exception ?? null,
+        note: def.note ?? null,
+      });
+    }
+  }
+  // 전건 npm test(node --test, 동시 워커)에서 console.log 로 큰 들여쓴 JSON 을
+  // 찍으면 테스트 러너 IPC 가 간헐적으로 "Unable to deserialize cloned data" 로
+  // 깨진다(1R 이 이 파일에서 직접 재현). t.diagnostic + 한 줄 압축 JSON 이
+  // TAP 주석 경로로 안전하게 나간다.
+  t.diagnostic(`대비 가드 표(§2 요구 3): ${JSON.stringify(rows)}`);
+  for (const row of rows) {
+    assert.ok(
+      Number.isFinite(row.ratio) && row.ratio >= row.minRatio,
+      `${row.label}(${row.theme}) ${row.fg} on ${row.bg} = ${row.ratio} (요구 ≥ ${row.minRatio}${row.exception ? " · " + row.exception : ""})`,
+    );
+  }
 });
