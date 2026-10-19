@@ -9,6 +9,7 @@ import {
   TEST_DIRS,
   collectTestFiles,
   formatBanner,
+  resolveNodeVersionWarning,
   runIsolatedSuite,
 } from "./isolated-suite-runner.mjs";
 
@@ -90,6 +91,114 @@ test("formatBanner: a dirty source checkout gets an explicit extra NOTE line, no
   const dirty = formatBanner({ sha: "def456", dirty: true });
   assert.match(dirty, /tested commit def456/);
   assert.match(dirty, /NOTE: the source checkout has uncommitted changes/);
+});
+
+// HYK-464 §2 ⓐ-2: resolveNodeVersionWarning is a pure function (no spawn,
+// no fs) -- unit-tested directly against synthetic version/engines-range
+// strings, the same way node-target-version.test.mjs unit-tests
+// resolveEnginesMajor against synthetic package.json text.
+test("resolveNodeVersionWarning: matching majors -> null (no warning)", () => {
+  assert.equal(
+    resolveNodeVersionWarning({ nodeVersion: "v20.11.0", enginesNode: "20.x" }),
+    null,
+  );
+});
+
+test("resolveNodeVersionWarning: differing majors -> MISMATCH naming both versions, never a block (report-only, no exit-code language)", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v26.2.0",
+    enginesNode: "20.x",
+  });
+  assert.match(warning, /^MISMATCH:/);
+  assert.match(warning, /v26\.2\.0/);
+  assert.match(warning, /20\.x/);
+});
+
+test("resolveNodeVersionWarning: a major-only coincidental substring (Node 12 vs engines '120.x') is NOT treated as a match -- majors are parsed as whole leading numbers, not substrings", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v12.0.0",
+    enginesNode: "120.x",
+  });
+  assert.match(warning, /^MISMATCH:/);
+});
+
+test("resolveNodeVersionWarning: engines.node undeclared (null) -> UNKNOWN/판정 불가, never silently null/0", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v20.11.0",
+    enginesNode: null,
+  });
+  assert.match(warning, /^UNKNOWN:/);
+  assert.match(warning, /판정 불가/);
+});
+
+test("resolveNodeVersionWarning: engines.node present but unparseable (no digits) -> UNKNOWN/판정 불가", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v20.11.0",
+    enginesNode: "latest",
+  });
+  assert.match(warning, /^UNKNOWN:/);
+});
+
+test("resolveNodeVersionWarning: nodeVersion itself unparseable -> UNKNOWN/판정 불가 (not thrown, not a false match)", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "garbage",
+    enginesNode: "20.x",
+  });
+  assert.match(warning, /^UNKNOWN:/);
+});
+
+// HYK-464 2R P2-4 (책임자 판정 2026-10-16 16:4x §1): a range expression's
+// leading number is NOT a reliable "the major" -- this intentionally
+// REPLACES the 1R test that asserted a leading-number match for
+// ">=20 <21" (that old assertion is exactly the behavior P2-4 narrows:
+// a range must resolve to UNKNOWN regardless of what its leading number
+// happens to be, not "match if the leading number happens to agree").
+test("resolveNodeVersionWarning: HYK-464 2R P2-4 -- a range expression ('>=20 <21') is UNKNOWN/판정 불가 even when its leading number would have 'matched' under the old leading-number heuristic", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v20.0.0",
+    enginesNode: ">=20 <21",
+  });
+  assert.match(warning, /^UNKNOWN:/);
+  assert.match(warning, /range expression/);
+});
+
+// coder-task.md §2 ⓔ 칸 2, 사례 1: `>=20`에 실제로는 불일치일 v22를 넣어도
+// (범위식이라) 판정 불가 -- MISMATCH 경고가 아니라 UNKNOWN이어야 한다.
+test("resolveNodeVersionWarning: HYK-464 2R P2-4 cell -- '>=20' (open-ended range) with v22.1.0 is UNKNOWN, never MISMATCH", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v22.1.0",
+    enginesNode: ">=20",
+  });
+  assert.match(warning, /^UNKNOWN:/);
+});
+
+test("resolveNodeVersionWarning: HYK-464 2R P2-4 -- a multi-alternative range ('^20 || ^22') is UNKNOWN, never MISMATCH, even though it names this run's own major", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v22.1.0",
+    enginesNode: "^20 || ^22",
+  });
+  assert.match(warning, /^UNKNOWN:/);
+});
+
+// coder-task.md §2 ⓔ 칸 2, 사례 2: 단일 버전(`20.x`)은 범위식이 아니므로
+// 이 2R 수리 전과 똑같이 MISMATCH로 남아야 한다 -- 무회귀 확인.
+test("resolveNodeVersionWarning: HYK-464 2R P2-4 regression guard -- a single pinned major ('20.x') with v26 is STILL MISMATCH, not UNKNOWN (ranges only)", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v26.2.0",
+    enginesNode: "20.x",
+  });
+  assert.match(warning, /^MISMATCH:/);
+});
+
+// P2-4 변이 1: SINGLE_VERSION_ENGINES_RE가 지워지면(= 범위식도 전부
+// "단일 버전"으로 되돌아가면) 위 '>=20' 칸이 UNKNOWN 대신 MISMATCH로
+// 거짓 매치돼 이 시험이 RED가 된다.
+test("resolveNodeVersionWarning: P2-4 mutation guard -- a dash-range ('20 - 22') is also UNKNOWN, not resolved off either bound", () => {
+  const warning = resolveNodeVersionWarning({
+    nodeVersion: "v21.0.0",
+    enginesNode: "20 - 22",
+  });
+  assert.match(warning, /^UNKNOWN:/);
 });
 
 // HYK-411: every test below that doesn't specifically exercise receipt
@@ -291,6 +400,237 @@ test("runIsolatedSuite: an unreadable tap file degrades to null counts (not a cr
   assert.ok(logs.some((l) => l.includes("WARNING")));
 });
 
+// ---------------------------------------------------------------------------
+// HYK-209 §2 ⓐ (책임자 판정 2026-10-17 14:5x, P2-D 등재 후보 -- REVIEW-r2.md
+// §3 P2-D/§2 R7c): full-pipeline wiring test. Proves classifySpawnOutcome's
+// ambiguous branch (status != 0, no signal, no error -- the real Windows
+// forced-kill shape isolated-suite-runner.mjs's own header cites) no longer
+// misreads a leaked-fake-block tap file as a genuine completion, end to end
+// through runIsolatedSuite -> emitRunnerReceipt. The tap text below is the
+// REAL bytes a real synthetic-repo SIGKILL repro produced (coder.md §2
+// ⓐ-2 실물, scratchpad probe-p2d.mjs) -- not fabricated. The elapsed-time
+// gap (real repro: ~3000ms wall clock vs the block's own claimed 1.0ms) is
+// reproduced here via an injected `nowMs` counter instead of an actual
+// 3-second sleep, so this test stays fast; see hasGenuineTapCompletion's
+// own duration-plausibility tests (runner-receipt-writer.test.mjs) for the
+// lower-level unit coverage of that same cross-check.
+// ---------------------------------------------------------------------------
+const REAL_SIGKILL_LEAKED_TAP_TEXT =
+  "TAP version 13\n# tests 9\n# suites 0\n# pass 9\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1.0\n";
+
+test("runIsolatedSuite: HYK-209 R7c real-repro bytes + an ambiguous Windows forced-kill status (no signal/error) -- before this round's fix this misclassified as TESTS_FAILED with fake 9/9/0/0 counts; now it is MEASUREMENT_UNAVAILABLE_OOM with null counts", () => {
+  const receipts = [];
+  let tick = 0;
+  // Simulates the real repro's ~3000ms wall-clock gap without an actual
+  // sleep: the first nowMs() call (spawnSuiteInClone's startedAtMs) returns
+  // 0, the second (right after spawn returns, used for elapsedMs) returns
+  // 5000 -- same order of magnitude as the real repro's measured ~3000ms.
+  const nowMs = () => (tick++ === 0 ? 0 : 5000);
+  const exitCode = runIsolatedSuite({
+    startSampler: () => null,
+    stopSampler: () => null,
+    execFile: execFileForReceiptTests(),
+    // The real ambiguous Windows forced-kill shape: no signal, no error,
+    // a non-zero status that is not a real node --test exit code
+    // (isolated-suite-runner.mjs's own classifySpawnOutcome header cites
+    // 0xFFFFFFFF from a real prior incident, runner-receipt-run5.json).
+    spawn: () => ({ status: 0xffffffff }),
+    log: () => {},
+    collectFiles: () => [],
+    readFile: () => REAL_SIGKILL_LEAKED_TAP_TEXT,
+    writeReceipt: (payload) => {
+      receipts.push(payload);
+      return { path: "(stubbed)", receipt: {} };
+    },
+    nowMs,
+  });
+  assert.equal(
+    exitCode,
+    1,
+    "classifySpawnOutcome's MEASUREMENT_UNAVAILABLE_OOM branch always forces exitCode 1",
+  );
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].runnerStatus, "MEASUREMENT_UNAVAILABLE_OOM");
+  assert.notEqual(
+    receipts[0].runnerStatus,
+    "TESTS_FAILED",
+    "this is the exact pre-fix bug: a forced kill must never be recorded as a real test failure",
+  );
+  assert.deepEqual(receipts[0].counts, {
+    tests: null,
+    pass: null,
+    fail: null,
+    skip: null,
+  });
+});
+
+// HYK-209 2R P1-2 (책임자 판정 2026-10-17 18:4x 판단 1 · REVIEW-r1.md ⓑ K2/K5
+// 표 TAP 원문 그대로): full-pipeline wiring for the two shapes this round's
+// fix closes -- K2 (duration_ms present but implausibly large, no plan line)
+// and K5 (a forged '1..9' plan line that comes out escaped as '# 1..9', no
+// duration_ms at all). Before this round's fix both landed as TESTS_FAILED
+// with the leaked block's fake 9/9/0/0 counts (REVIEW-r1.md ⓑ HEAD column);
+// after the fix both are MEASUREMENT_UNAVAILABLE_OOM with null counts, same
+// as R7c/K1 above.
+const K2_REAL_REPRO_TAP_TEXT =
+  "TAP version 13\n# tests 9\n# suites 0\n# pass 9\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 999999\n";
+const K5_REAL_REPRO_TAP_TEXT =
+  "TAP version 13\n# 1..9\n# tests 9\n# suites 0\n# pass 9\n# fail 0\n# cancelled 0\n# skipped 0\n";
+
+test("runIsolatedSuite: HYK-209 2R P1-2 K2 (REVIEW-r1.md ⓑ real TAP bytes, duration_ms=999999) -- before this round's fix this misclassified as TESTS_FAILED with fake 9/9/0/0 counts; now it is MEASUREMENT_UNAVAILABLE_OOM with null counts", () => {
+  const receipts = [];
+  let tick = 0;
+  const nowMs = () => (tick++ === 0 ? 0 : 5000);
+  const exitCode = runIsolatedSuite({
+    startSampler: () => null,
+    stopSampler: () => null,
+    execFile: execFileForReceiptTests(),
+    spawn: () => ({ status: 1 }),
+    log: () => {},
+    collectFiles: () => [],
+    readFile: () => K2_REAL_REPRO_TAP_TEXT,
+    writeReceipt: (payload) => {
+      receipts.push(payload);
+      return { path: "(stubbed)", receipt: {} };
+    },
+    nowMs,
+  });
+  assert.equal(exitCode, 1);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].runnerStatus, "MEASUREMENT_UNAVAILABLE_OOM");
+  assert.notEqual(receipts[0].runnerStatus, "TESTS_FAILED");
+  assert.deepEqual(receipts[0].counts, {
+    tests: null,
+    pass: null,
+    fail: null,
+    skip: null,
+  });
+});
+
+test("runIsolatedSuite: HYK-209 2R P1-2 K5 (REVIEW-r1.md ⓑ real TAP bytes, forged plan line escaped as '# 1..9', no duration_ms) -- before this round's fix this misclassified as TESTS_FAILED with fake 9/9/0/0 counts; now it is MEASUREMENT_UNAVAILABLE_OOM with null counts", () => {
+  const receipts = [];
+  let tick = 0;
+  const nowMs = () => (tick++ === 0 ? 0 : 5000);
+  const exitCode = runIsolatedSuite({
+    startSampler: () => null,
+    stopSampler: () => null,
+    execFile: execFileForReceiptTests(),
+    spawn: () => ({ status: 1 }),
+    log: () => {},
+    collectFiles: () => [],
+    readFile: () => K5_REAL_REPRO_TAP_TEXT,
+    writeReceipt: (payload) => {
+      receipts.push(payload);
+      return { path: "(stubbed)", receipt: {} };
+    },
+    nowMs,
+  });
+  assert.equal(exitCode, 1);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].runnerStatus, "MEASUREMENT_UNAVAILABLE_OOM");
+  assert.notEqual(receipts[0].runnerStatus, "TESTS_FAILED");
+  assert.deepEqual(receipts[0].counts, {
+    tests: null,
+    pass: null,
+    fail: null,
+    skip: null,
+  });
+});
+
+// HYK-464 §2 ⓐ-1/ⓐ-2: wiring tests for the node-version receipt field and
+// its first-line warning. These inject `readPackageJsonFn`/`nodeVersion`
+// directly (both default parameters) rather than touching the real fs --
+// every OTHER test in this file (and in hyk473-runner-cap.test.mjs, out of
+// this round's product_scope) relies on the default readPackageJsonFn
+// failing against their fake "/src" root and degrading to the UNKNOWN/
+// 판정 불가 case, which is deliberately never logged (see
+// runIsolatedSuite's own comment) -- that is what keeps "the resolved
+// concurrency cap is the run's literal first log line"
+// (hyk473-runner-cap.test.mjs) from regressing.
+// HYK-464 2R P2-6 (책임자 판정 2026-10-16 16:4x §1, 원문 "A"): 1R은 경고를
+// 배너보다 "앞" 줄로 따로 log()했다 -- 그래서 배너가 둘째 줄로 밀렸다
+// (HYK-473 §2-1 "상한 값이 첫 줄" 계약과 충돌, 검토 1R P2-6 지적). 2R은
+// 하나의 첫 줄에 배너 먼저 + 같은 줄 끝에 경고를 붙인다. 경고 토큰도
+// 판정 원문 모양("WARNING: NODE_VERSION_MISMATCH")으로 맞춘다(1R의
+// "WARNING: MISMATCH:" 대체) -- 영수증 필드 자체는 하위 호환을 위해
+// "MISMATCH: ..." 그대로 남긴다(아래 별도 단언).
+test("runIsolatedSuite: HYK-464 2R P2-6 -- a real Node-major MISMATCH lands on the SAME first line as the concurrency banner (banner first, warning appended, token 'WARNING: NODE_VERSION_MISMATCH'), never a separate second line, and still rides the receipt payload (unchanged 'MISMATCH:' token for backward compat)", () => {
+  const receipts = [];
+  const logs = [];
+  runIsolatedSuite({
+    startSampler: () => null,
+    stopSampler: () => null,
+    execFile: execFileForReceiptTests(),
+    spawn: () => ({ status: 0 }),
+    log: (m) => logs.push(m),
+    collectFiles: () => [],
+    readFile: completedTapReadFile,
+    writeReceipt: (payload) => {
+      receipts.push(payload);
+      return { path: "(stubbed)", receipt: {} };
+    },
+    nodeVersion: "v26.2.0",
+    readPackageJsonFn: () => ({ engines: { node: "20.x" } }),
+  });
+  assert.match(
+    logs[0],
+    /^\[isolated-suite-runner\] test-concurrency=.* -- WARNING: NODE_VERSION_MISMATCH:/,
+  );
+  assert.ok(
+    !logs.slice(1).some((l) => l.includes("NODE_VERSION_MISMATCH")),
+    `expected the warning to appear ONLY on logs[0], never on a later line; logs: ${JSON.stringify(logs)}`,
+  );
+  assert.equal(receipts[0].nodeVersion, "v26.2.0");
+  assert.match(receipts[0].nodeVersionWarning, /^MISMATCH:/);
+});
+
+test("runIsolatedSuite: matching Node majors -> no warning logged, receipt's nodeVersionWarning is null, nodeVersion is still recorded", () => {
+  const receipts = [];
+  const logs = [];
+  runIsolatedSuite({
+    startSampler: () => null,
+    stopSampler: () => null,
+    execFile: execFileForReceiptTests(),
+    spawn: () => ({ status: 0 }),
+    log: (m) => logs.push(m),
+    collectFiles: () => [],
+    readFile: completedTapReadFile,
+    writeReceipt: (payload) => {
+      receipts.push(payload);
+      return { path: "(stubbed)", receipt: {} };
+    },
+    nodeVersion: "v20.11.0",
+    readPackageJsonFn: () => ({ engines: { node: "20.x" } }),
+  });
+  assert.ok(
+    !logs.some((l) => l.includes("MISMATCH") || l.includes("UNKNOWN")),
+    `expected no node-version warning logged on a match; logs: ${JSON.stringify(logs)}`,
+  );
+  assert.equal(receipts[0].nodeVersion, "v20.11.0");
+  assert.equal(receipts[0].nodeVersionWarning, null);
+});
+
+test("runIsolatedSuite: engines.node unreadable (default readPackageJsonFn against a fake root, every other test's shape) -> UNKNOWN/판정 불가 rides the receipt but is NOT logged, and the concurrency banner stays the literal first line (§2-1's prior contract, hyk473-runner-cap.test.mjs, must not regress)", () => {
+  const receipts = [];
+  const logs = [];
+  runIsolatedSuite({
+    startSampler: () => null,
+    stopSampler: () => null,
+    execFile: execFileForReceiptTests(),
+    spawn: () => ({ status: 0 }),
+    log: (m) => logs.push(m),
+    collectFiles: () => [],
+    readFile: completedTapReadFile,
+    writeReceipt: (payload) => {
+      receipts.push(payload);
+      return { path: "(stubbed)", receipt: {} };
+    },
+    nodeVersion: "v26.2.0",
+  });
+  assert.match(logs[0], /^\[isolated-suite-runner\] test-concurrency=/);
+  assert.match(receipts[0].nodeVersionWarning, /^UNKNOWN:/);
+});
+
 test("runIsolatedSuite: a receipt-write failure is swallowed (logged, not thrown) and the real exit code still propagates -- writing a receipt must never mask the suite's own result", () => {
   const logs = [];
   const exitCode = runIsolatedSuite({
@@ -307,6 +647,88 @@ test("runIsolatedSuite: a receipt-write failure is swallowed (logged, not thrown
   });
   assert.equal(exitCode, 3);
   assert.ok(logs.some((l) => l.includes("WARNING") && l.includes("disk full")));
+});
+
+// M1 (검토 1R ⓔ 표 P2-2): a real MISMATCH must never change the returned
+// exit code -- "report only, exit code/judgement unaffected" is a literal
+// contract (resolveNodeVersionWarning's own string), but 1R had no test
+// asserting it at the runIsolatedSuite level, so a mutation that forced
+// exitCode to 1 on MISMATCH would have survived. Uses exit code 5
+// (deliberately not 1) so a mutation hardcoding "1" on MISMATCH cannot
+// coincidentally pass.
+test("runIsolatedSuite: M1 mutation guard -- a real Node-major MISMATCH alongside a REAL failed spawn (exit 5) still returns the spawn's own exit code verbatim, never forced to 1 by the mismatch", () => {
+  const exitCode = runIsolatedSuite({
+    startSampler: () => null,
+    stopSampler: () => null,
+    execFile: execFileForReceiptTests(),
+    spawn: () => ({ status: 5 }),
+    log: () => {},
+    collectFiles: () => [],
+    readFile: completedTapReadFile,
+    writeReceipt: noopWriteReceipt,
+    nodeVersion: "v26.2.0",
+    readPackageJsonFn: () => ({ engines: { node: "20.x" } }),
+  });
+  assert.equal(exitCode, 5);
+});
+
+// M2 (검토 1R ⓔ 표 P2-2): the in-clone `node --test` child must be spawned
+// via `process.execPath` (this runner's OWN binary -- node_version's whole
+// meaning depends on "the child IS the same binary as the parent", see
+// resolveNodeVersionWarning's own header comment), never a bare "node"
+// string (which could resolve to a DIFFERENT installed Node on PATH).
+test("runIsolatedSuite: M2 mutation guard -- the in-clone node --test child is spawned via process.execPath, not a bare 'node' string", () => {
+  let capturedCmd;
+  runIsolatedSuite({
+    startSampler: () => null,
+    stopSampler: () => null,
+    execFile: execFileForReceiptTests(),
+    spawn: (cmd) => {
+      capturedCmd = cmd;
+      return { status: 0 };
+    },
+    log: () => {},
+    collectFiles: () => [],
+    readFile: completedTapReadFile,
+    writeReceipt: noopWriteReceipt,
+  });
+  assert.equal(capturedCmd, process.execPath);
+  assert.notEqual(capturedCmd, "node");
+});
+
+// HYK-464 2R P2-6 ("repoRootOf가 배너보다 먼저 불리는 순서... 를 «배너가
+// 먼저」로"): a non-git cwd makes root resolution throw BEFORE the
+// concurrency banner can be merged with a node-version warning (there is
+// no `root` yet to read engines.node from) -- but the banner itself never
+// depended on root, so it must still be logged before the throw
+// propagates, not silently dropped (1R's actual prior behavior: zero log
+// lines on this path).
+test("runIsolatedSuite: HYK-464 2R P2-6 -- when root resolution itself throws (non-git cwd), the concurrency banner is still logged before the error propagates (not silently dropped)", () => {
+  const logs = [];
+  const execFile = () => {
+    throw new Error(
+      "fatal: not a git repository (or any of the parent directories): .git",
+    );
+  };
+  assert.throws(
+    () =>
+      runIsolatedSuite({
+        startSampler: () => null,
+        stopSampler: () => null,
+        execFile,
+        spawn: () => {
+          throw new Error("must not be reached");
+        },
+        log: (m) => logs.push(m),
+        collectFiles: () => {
+          throw new Error("must not be reached");
+        },
+        concurrency: 3,
+      }),
+    /not a git repository/,
+  );
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^\[isolated-suite-runner\] test-concurrency=3 /);
 });
 
 test("runIsolatedSuite: a fail-closed collectFiles throw propagates out (never swallowed into a green run), and cleanup still runs", () => {
