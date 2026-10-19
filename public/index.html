@@ -441,6 +441,16 @@
       }
       #notion-copy-button:disabled {
         background: var(--color-disabled);
+        /* HYK-304-system-theme-1-r3 §2 요구 1: 2R 은 이 규칙에 color 를
+           선언하지 않아 #notion-copy-button 의 흰 글자(--color-on-accent)가
+           그대로 상속됐다 -- 라이트는 1.75(1R 부터 미달 유지)였지만 다크는
+           --color-on-accent 가 2R 부터 어두운 값(#16181c)으로 바뀌면서
+           10.88 → 1.63 으로 떨어져(결과 파일 §2 표) 비활성 배경(#3a3d44) 위
+           거의 안 보였다(2R 이 만든 후퇴, 새 메모마다 보임). 기존 토큰
+           --color-text-muted(새 값 0)로 바꿔 "비활성 = 흐리게" 관례를 따르고
+           라이트 3.05 · 다크 3.85 로 복원한다(여전히 WCAG AA 4.5 미달이지만
+           비활성 컨트롤은 1.4.3 예외 -- 아래 시험 PAIR_DEFS 참고). */
+        color: var(--color-text-muted);
         cursor: not-allowed;
       }
       #notion-copy-toast {

@@ -1,8 +1,12 @@
 // HYK-304-system-theme-1 §2 요구 5(번들 부팅 칸). 실제 app.mjs 번들(test/
 // support/app-harness.mjs 의 bootApp, E7 선례와 같은 경로)과 실물
 // public/index.html 을 jsdom 으로 부팅해 ⑴ 부팅 오류 0 ⑵ 이 라운드가
-// index.html 이 쓰는 색 변수 16개(테마를 타는 11 + 고정 5, --color-bg 등)를
-// 더 이상 documentElement 인라인 스타일로 덮어쓰지 않는다는 것(수리 전
+// index.html 이 쓰는 색 변수 16개(테마를 타는 12 + 고정 4, --color-bg 등 --
+// HYK-304-system-theme-1-r3 §2 요구 3: `--color-on-accent` 는 2R
+// (HYK-304-system-theme-1-r2) 부터 @media (prefers-color-scheme: dark)
+// 안에서 재선언돼 테마를 타므로 "고정"이 아니다, 아래 COLOR_VARS_NO_LONGER_
+// INLINE 목록의 분류 참고)를 더 이상 documentElement 인라인 스타일로
+// 덮어쓰지 않는다는 것(수리 전
 // 버그의 재발 감지 -- app.mjs 머리 주석 참고. HYK-304-system-theme-1-r2 §2
 // 요구 4 ⑶ⓐ: 1R 은 이 목록이 6개뿐이라 나머지 5개가 인라인으로 재도입돼도
 // 못 잡았다 -- 검토 1R §5 변이 ⑵b·P3-1) ⑶ 폰트 3개는 여전히 인라인으로
@@ -29,9 +33,10 @@ import { bootApp } from "../support/app-harness.mjs";
 // app.mjs 가 실제로 인라인했던 6개 이름뿐이었다 -- 검토 1R §5 변이 ⑵b
 // (--color-state-error 를 인라인으로 재도입)가 이 시험을 통과(GREEN)시켜
 // 구멍임을 값으로 보였다(P3-1). 이제 index.html 이 쓰는 색 변수 16개
-// 전부(테마를 타는 11 + 고정 5)를 본다 -- 그중 하나라도 documentElement
-// 인라인 스타일에 다시 나타나면(원래 버그의 재발이든, 이 라운드가 새로
-// 고정한 5개 중 하나든) 잡는다.
+// 전부(테마를 타는 11 + --color-on-accent + 고정 4, HYK-304-system-theme-
+// 1-r3 §2 요구 3 -- 위 머리 주석 참고)를 본다 -- 그중 하나라도
+// documentElement 인라인 스타일에 다시 나타나면(원래 버그의 재발이든, 이
+// 라운드가 새로 지킨 5개(토스트 4 + accent 위 글자) 중 하나든) 잡는다.
 const COLOR_VARS_NO_LONGER_INLINE = [
   // 테마를 타는 11개(spec/design-tokens.json 의 색 11개와 1:1 -- system-theme-tokens.test.mjs 가 그 대조를 담당).
   "--color-bg",
@@ -45,11 +50,13 @@ const COLOR_VARS_NO_LONGER_INLINE = [
   "--color-accent-hover",
   "--color-disabled",
   "--color-focus-ring",
-  // 고정 5개("일부러 반대 테마" 토스트 · accent 위 글자).
+  // 고정 4개("일부러 반대 테마" 토스트 -- 테마와 무관하게 늘 같은 값).
   "--color-toast-bg",
   "--color-toast-text",
   "--color-toast-error-bg",
   "--color-toast-error-text",
+  // 테마를 타는 12번째(spec/design-tokens.json 에는 없지만 2R 부터 다크
+  // 블록에서 재선언돼 "고정"이 아니다 -- HYK-304-system-theme-1-r3 §2 요구 3).
   "--color-on-accent",
 ];
 const FONT_VARS_STILL_INLINE = [

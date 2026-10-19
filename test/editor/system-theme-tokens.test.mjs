@@ -363,10 +363,16 @@ function contrastRatio(hexA, hexB) {
 //하게 한다. 큰 글자(FAB "+" 28px 등) 예외는 필요하면 minRatio 를 3 으로
 // 두고 그 쌍에 note 를 남기는 자리를 마련했다 -- 실측 결과 이 조각이 다루는
 // 큰 글자 쌍(FAB)도 4.5 를 이미 넘어 예외를 쓸 필요가 없었다(아래 PAIR_DEFS
-// 의 note 에 그대로 적는다). 사전 존재(이 라운드가 손대지 않은) 결함 2곳은
-// `exception` 사유와 함께 느슨한 바닥(minRatio)만 걸어 "더 나빠지면 잡되,
-// 지금 당장 npm test 를 깨지 않는다" -- 한용 상신 대상으로 결과 파일에도
-// 따로 적는다(토큰 파일 변경 없이는 고칠 수 없다, product_scope 범위 밖).
+// 의 note 에 그대로 적는다). 사전 존재(이 라운드가 손대지 않은) 결함 3곳
+// (`.memo-list-error` · 노션 오류 토스트 · `#list-delete-undo-button` --
+// 뒤 둘은 아래 PAIR_DEFS 에서 라이트/다크로 나뉘거나 테마를 함께 묶어 정의
+// 4개가 된다, product_scope 참고)은 `exception` 사유와 함께 느슨한
+// 바닥(minRatio)만 걸어 "더 나빠지면 잡되, 지금 당장 npm test 를 깨지
+// 않는다" -- 한용 상신 대상으로 결과 파일에도 따로 적는다(토큰 파일 변경
+// 없이는 고칠 수 없다, product_scope 범위 밖). notion-copy-button:disabled
+// 쌍의 exception 은 이와 다르다 -- "사전 존재 결함"이 아니라 WCAG 1.4.3
+// 비활성 컨트롤 예외이며, 이 라운드(3R)가 직접 고친 쌍이라 바닥을 1 에서
+// 실측값(3.05/3.85)으로 올렸다(HYK-304-system-theme-1-r3 §2 요구 1).
 function resolveVarValue(rootRule, darkRootRule, theme, name) {
   if (theme === "light") {
     return rootRule.style.getPropertyValue(name).trim().toLowerCase();
@@ -457,13 +463,22 @@ const PAIR_DEFS = [
     note: "1R 값(다크 2.54)을 이 라운드가 고쳤다.",
   },
   {
-    label: "notion-copy-button:disabled 글자(비활성)",
-    fg: "--color-on-accent",
+    label: "notion-copy-button:disabled 글자(비활성, light)",
+    fg: "--color-text-muted",
     bg: "--color-disabled",
-    themes: ["light", "dark"],
-    minRatio: 1,
+    themes: ["light"],
+    minRatio: 3.05,
     exception:
-      "비활성 컨트롤 -- WCAG 2.1 1.4.3 은 inactive user interface component 에 대비 요구를 두지 않는다(표시만, 게이트 아님).",
+      "비활성 컨트롤 -- WCAG 2.1 1.4.3 은 inactive user interface component 에 대비 요구를 두지 않는다(표시만, 게이트 아님). HYK-304-system-theme-1-r3 §2 요구 1 -- 1R 1.75 → 2R 1.75(글자가 --color-on-accent 상속이라 라이트는 2R 에서도 안 바뀜) → 3R(이 라운드, --color-text-muted 로) 3.05. 바닥(minRatio)을 1(항상 통과)에서 이 라운드가 실제로 낸 값으로 올려 더 나빠지면 잡는다(4.5 는 여전히 미달 -- 예외 유지).",
+  },
+  {
+    label: "notion-copy-button:disabled 글자(비활성, dark)",
+    fg: "--color-text-muted",
+    bg: "--color-disabled",
+    themes: ["dark"],
+    minRatio: 3.85,
+    exception:
+      "비활성 컨트롤 -- WCAG 2.1 1.4.3 은 inactive user interface component 에 대비 요구를 두지 않는다(표시만, 게이트 아님). HYK-304-system-theme-1-r3 §2 요구 1 -- 1R 10.88(다크 --color-on-accent 미재선언으로 라이트 흰 글자가 그대로 쓰였던 우연한 값) → 2R 1.63(2R 이 다크 --color-on-accent 를 #16181c 로 재선언하면서 이 규칙은 그대로라 생긴 후퇴, 새 메모마다 보임) → 3R(이 라운드, --color-text-muted 로) 3.85. 바닥을 1 에서 이 라운드 값으로 올려 더 나빠지면 잡는다(4.5 는 여전히 미달 -- 예외 유지).",
   },
   {
     label: "목록 불러오기 실패 글자(.memo-list-error, light)",
