@@ -1562,3 +1562,64 @@ test("P3-1: 다른 메모의 '되돌리기 성공'만으로도 이미 없는 메
     "B 는 되돌리기 성공으로 실제 복원돼야 한다",
   );
 });
+
+// HYK-304-gone-held-priority-1(§2 요구 1 짝 -- «그 밖의 덮어쓰기는 동작
+// 불변» 확인): held 우선 분기는 "gone 이 held 를 덮는" 한 방향만 막는다
+// -- 반대 방향(진짜 저장 실패가 먼저 뜬 gone 표시를 덮는 것)은 기존
+// "덮어쓰기 = 해소" 그대로 동작해야 한다(held 쪽이 더 급한 신호이므로).
+test("gone→held: 이미 없는 메모 표시 뒤에 진짜 저장 실패(held)가 오면 정상적으로 덮어쓴다(held 우선 분기는 한 방향만 막는다)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idGone = await createMemoAt(
+    adapter,
+    "이미 사라진 메모(gone→held 칸)",
+    100,
+  );
+  const idHeld = await createMemoAt(
+    adapter,
+    "진짜 저장 실패(gone→held 칸)",
+    200,
+  );
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  // A(idGone) 를 이미 없는 메모로 만들고 되돌려 gone 표시를 띄운다.
+  swipe(container.querySelector(`[data-memo-id="${idGone}"]`));
+  await settle();
+  await adapter.remove(idGone);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "전제: A 의 gone 표시가 떠야 한다",
+  );
+
+  // B(idHeld) 를 스와이프해 되돌리기를 시도하고 put 을 거부시켜 진짜
+  // 저장 실패(held)를 만든다 -- gone 표시를 덮어써야 한다.
+  swipe(container.querySelector(`[data-memo-id="${idHeld}"]`));
+  await settle();
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "B 의 held 표시가 A 의 gone 표시를 덮고 떠야 한다",
+  );
+
+  // 표시가 실제로 B 를 가리키는지(바뀌어치기됐는지)를 값으로 확인한다:
+  // 재시도하면 B 가 복원돼야 한다 -- A 는 영구히 사라졌으므로 재시도가
+  // 여전히 A 를 가리킨다면 이 복원은 절대 일어나지 않는다.
+  toast.errorButton.click();
+  await settle();
+  await settle();
+  assert.deepEqual(
+    cardIds(container).includes(idHeld),
+    true,
+    "표시가 B 로 정상 덮어써졌어야(held 우선 분기는 한 방향만 막는다) 재시도로 B 가 복원된다",
+  );
+});
