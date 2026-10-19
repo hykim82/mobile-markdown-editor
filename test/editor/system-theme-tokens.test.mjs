@@ -241,6 +241,37 @@ const NAMED_COLORS = [
 ];
 const NAMED_COLOR_RE = new RegExp(`\\b(?:${NAMED_COLORS.join("|")})\\b`, "i");
 
+// HYK-304-contrast-e11-1 §2 요구 2(책임자 판정): 세 선택자 중 둘(⑴ 되돌리기
+// 버튼 · ⑵ 노션 오류 토스트)은 "고정값이 두 테마 모두 같아야 한다"는 이유로
+// var() 가 아니라 리터럴을 쓴다(⛔새 CSS 변수 0 -- 기존 토큰 값을 그대로
+// 재사용, spec/design-tokens.json 무접촉). 이 allowlist 는 "그 선택자의
+// 그 속성이 정확히 그 값일 때만" 리터럴-0 검사를 면제한다 -- selector·
+// property·value 셋이 모두 맞아야 하므로 다른 선택자의 새 리터럴이나 같은
+// 선택자의 다른 값(예: 변이로 바뀐 값)은 여전히 잡힌다. 세 번째(⑶
+// .memo-list-error)는 var(--color-bg-elevated) 라 애초에 리터럴이 아니다.
+const LITERAL_ALLOWLIST = [
+  {
+    selector: "#list-delete-undo-button",
+    property: "color",
+    value: "#7aa2f2",
+  },
+  {
+    selector: '#notion-copy-toast[data-variant="error"]',
+    property: "color",
+    value: "#ffffff",
+  },
+];
+
+function isAllowlistedLiteral(selector, prop, value) {
+  const normalized = value.trim().toLowerCase();
+  return LITERAL_ALLOWLIST.some(
+    (entry) =>
+      entry.selector === selector &&
+      entry.property === prop &&
+      entry.value === normalized,
+  );
+}
+
 function findNonRootColorLiterals(sheet) {
   const found = [];
   function visit(rule) {
@@ -250,9 +281,10 @@ function findNonRootColorLiterals(sheet) {
         const prop = rule.style[i];
         const value = rule.style.getPropertyValue(prop);
         if (
-          HEX_RE.test(value) ||
-          COLOR_FUNC_RE.test(value) ||
-          NAMED_COLOR_RE.test(value)
+          (HEX_RE.test(value) ||
+            COLOR_FUNC_RE.test(value) ||
+            NAMED_COLOR_RE.test(value)) &&
+          !isAllowlistedLiteral(rule.selectorText, prop, value)
         ) {
           matches.push(`${prop}: ${value}`);
         }
@@ -385,6 +417,52 @@ function resolveVarValue(rootRule, darkRootRule, theme, name) {
   ).toLowerCase();
 }
 
+// HYK-304-contrast-e11-1 §2 요구 2(책임자 판정) 이후: PAIR_DEFS 의 fg/bg 가
+// 더 이상 전부 CSS 변수 이름이 아니다 -- ⑴ 되돌리기 버튼 · ⑵ 노션 오류
+// 토스트 글자는 production 선택자에 리터럴 고정값을 직접 선언했다(위
+// LITERAL_ALLOWLIST 와 같은 값). resolveVarValue 는 :root 변수만 읽을 수
+// 있어 리터럴을 못 읽으므로, "#" 로 시작하면 그 값 그대로(테마 무관,
+// production 쪽도 테마로 안 갈린다) 돌려주고 아니면 기존 resolveVarValue
+// 로 위임한다.
+function resolveColorValue(rootRule, darkRootRule, theme, nameOrLiteral) {
+  if (nameOrLiteral.startsWith("#")) {
+    return nameOrLiteral.toLowerCase();
+  }
+  return resolveVarValue(rootRule, darkRootRule, theme, nameOrLiteral);
+}
+
+// HYK-304-contrast-e11-1 §2 요구 8(변이 M4 가 "대비 칸"을 직접 RED 로
+// 만들어야 한다는 요구). def.fg/def.bg 에 문자열(변수 이름·리터럴) 대신
+// { selector, property } 를 적으면 "그 선택자의 그 속성이 지금 실제로
+// 선언한 값"을 매 시험 실행마다 다시 읽는다(findRulesBySelector 는 아래
+// BINDING_DEFS 가 쓰는 것과 같은 함수 -- 함수 선언은 호이스팅되어 여기서도
+// 호출 가능하다). 선언이 var(--x) 형태면 변수 이름만 뽑아 resolveColorValue
+// 로 넘기고(테마별로 달리 풀린다), 리터럴이면 그대로, 선언이 없으면(변이로
+// 지워진 경우) 빈 문자열을 돌려줘 contrastRatio 가 NaN 이 되게 한다(위
+// "대비 가드" 루프의 Number.isFinite 체크가 그 자리에서 실패로 잡는다) --
+// 이렇게 해야 M1~M4(선언 삭제·값 교체)가 "결선" 칸뿐 아니라 "대비" 칸도
+// 직접 RED 로 만든다(이전에는 fg/bg 가 고정 문자열이라 production 변이에
+// 반응하지 않는 사각이 있었다 -- 이 사각은 §2 요구 4 결선 칸과 같은 종류다).
+// 같은 선택자 규칙이 여러 개면(M6 류) 마지막 것을 쓴다 -- 동일 특이성에서
+// 소스 순서가 늦은 규칙이 이기는 CSS 캐스케이드와 같다.
+function liveColorToken(sheet, selector, property) {
+  const matches = findRulesBySelector(sheet, selector);
+  if (!matches.length) return "";
+  const raw = matches[matches.length - 1].style
+    .getPropertyValue(property)
+    .trim();
+  const varMatch = /^var\((--[a-zA-Z0-9-]+)\)$/.exec(raw);
+  return varMatch ? varMatch[1] : raw;
+}
+
+function resolveDefColor(sheet, rootRule, darkRootRule, theme, spec) {
+  if (typeof spec === "object" && spec !== null) {
+    const token = liveColorToken(sheet, spec.selector, spec.property);
+    return resolveColorValue(rootRule, darkRootRule, theme, token || "");
+  }
+  return resolveColorValue(rootRule, darkRootRule, theme, spec);
+}
+
 const PAIR_DEFS = [
   {
     label: "본문 글자(body)",
@@ -481,48 +559,53 @@ const PAIR_DEFS = [
       "비활성 컨트롤 -- WCAG 2.1 1.4.3 은 inactive user interface component 에 대비 요구를 두지 않는다(표시만, 게이트 아님). HYK-304-system-theme-1-r3 §2 요구 1 -- 1R 10.88(다크 --color-on-accent 미재선언으로 라이트 흰 글자가 그대로 쓰였던 우연한 값) → 2R 1.63(2R 이 다크 --color-on-accent 를 #16181c 로 재선언하면서 이 규칙은 그대로라 생긴 후퇴, 새 메모마다 보임) → 3R(이 라운드, --color-text-muted 로) 3.85. 바닥을 1 에서 이 라운드 값으로 올려 더 나빠지면 잡는다(4.5 는 여전히 미달 -- 예외 유지).",
   },
   {
-    label: "목록 불러오기 실패 글자(.memo-list-error, light)",
+    // HYK-304-contrast-e11-1 §2 요구 3(책임자 판정): 배경이 --color-bg
+    // 에서 --color-bg-elevated 로 바뀌었다(production 쪽 변경과 1:1).
+    // 라이트 4.37 → 4.57 · 다크(이번에 행이 추가됐다 · 요구 7) 5.53 →
+    // 5.02 -- 둘 다 4.5 이상이라 exception 을 없애고 minRatio 를 4.5 로
+    // 올린다.
+    label: "목록 불러오기 실패 글자(.memo-list-error, light+dark -- E11 수리)",
     fg: "--color-state-error",
-    bg: "--color-bg",
-    themes: ["light"],
-    minRatio: 4.0,
-    exception:
-      "사전 존재 결함 -- 이 라운드 §2 의 ⑴·⑵ 대상이 아니고 다크 모드와도 무관(다크는 5.53 로 통과). color.state.error.light 가 거의 흰 배경 위에서 4.5 미달(실측 4.37) -- 토큰 안 수정 가능(검토 2R §6: 배경을 var(--color-bg-elevated) 로 바꾸면 라이트 4.57 · 다크 5.02) -- 이 조각 범위 밖이라 보류(E11). 바닥(4.0)은 더 나빠지는 것만 잡는다.",
+    bg: { selector: "#list-root .memo-list-error", property: "background" },
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+    note: "HYK-304-contrast-e11-1 §2 요구 2 ⑶ -- 사전 존재 결함(라이트 4.37 미달)을 배경 토큰 교체로 고쳤다(라이트 4.57 · 다크는 5.53→5.02, 둘 다 4.5 이상).",
   },
   {
-    label: "노션 복사 오류 토스트 글자(고정, [data-variant=error])",
-    fg: "--color-toast-text",
+    // HYK-304-contrast-e11-1 §2 요구 2 ⑵: color 가 더 이상 상속된
+    // --color-toast-text 가 아니라 production 선택자에 직접 선언한
+    // 리터럴 고정 #ffffff 다(LITERAL_ALLOWLIST 와 같은 값 -- resolveColorValue
+    // 가 "#" 리터럴을 그대로 읽는다).
+    label:
+      "노션 복사 오류 토스트 글자(고정 #ffffff, [data-variant=error] -- E11 수리)",
+    fg: {
+      selector: '#notion-copy-toast[data-variant="error"]',
+      property: "color",
+    },
     bg: "--color-toast-error-bg",
     themes: ["light", "dark"],
-    minRatio: 4.0,
-    exception:
-      "위와 같은 뿌리(color.state.error.light, 고정값) -- 검토 1R §6 이 이미 같은 값(4.37)을 '무변'으로 적었을 뿐 P 코드로 escalate 하지 않았다. 사전 존재 -- 토큰 안 수정 가능(검토 2R §6: 글자를 var(--color-bg-elevated)(#ffffff) 로 바꾸면 4.57) -- 이 조각 범위 밖이라 보류(E11).",
+    minRatio: 4.5,
+    note: "HYK-304-contrast-e11-1 §2 요구 2 ⑵ -- 사전 존재 결함(두 테마 4.37 미달)을 리터럴 고정 #ffffff(기존 --color-bg-elevated 라이트 값과 같음)로 고쳤다(두 테마 4.57).",
   },
   {
+    // HYK-304-contrast-e11-1 §2 요구 2 ⑴: color 가 더 이상 테마를 타는
+    // --color-accent 가 아니라 production 선택자에 직접 선언한 리터럴
+    // 고정 #7aa2f2 다 -- 배경(--color-toast-bg)도 고정이라 테마 구분이
+    // 더는 필요 없어 light/dark 를 한 항목으로 합친다(위 "저장 실패 버튼
+    // 글자"·"토스트 기본 글자" 항목과 같은 모양).
     label:
-      "되돌리기 버튼 글자(#list-delete-undo-button, accent on 고정 다크 칩, light)",
-    fg: "--color-accent",
+      "되돌리기 버튼 글자(#list-delete-undo-button, 고정 #7aa2f2 on 고정 다크 칩 -- E11 수리)",
+    fg: { selector: "#list-delete-undo-button", property: "color" },
     bg: "--color-toast-bg",
-    themes: ["light"],
-    minRatio: 2.5,
-    exception:
-      "사전 존재 결함(신규 발견) -- 이 토스트 칩은 항상 어두운 고정 배경(--color-toast-bg)인데 글자색은 테마를 타는 --color-accent 라 라이트에서 3b6fe0 on 2a2d33 = 2.98 로 크게 미달한다. §2 의 ⑴·⑵ 목록에 없다 -- 토큰 안 수정 가능(검토 2R §6: 글자를 고정 #7aa2f2(color.accent.hover.dark) 로 바꾸면 5.44, 두 테마 같음) -- 이 조각 범위 밖이라 보류(E11, 1R·REVIEW-1R 모두 이 쌍을 재지 않았다).",
-  },
-  {
-    label:
-      "되돌리기 버튼 글자(#list-delete-undo-button, accent on 고정 다크 칩, dark)",
-    fg: "--color-accent",
-    bg: "--color-toast-bg",
-    themes: ["dark"],
-    minRatio: 4.0,
-    exception:
-      "위와 같은 뿌리 -- 다크 accent(5b8def on 2a2d33) 도 4.27 로 작은 글자 AA 미달. 사전 존재 -- 토큰 안 수정 가능(검토 2R §6: 글자를 고정 #7aa2f2 로 바꾸면 5.44, 두 테마 같음) -- 이 조각 범위 밖이라 보류(E11).",
+    themes: ["light", "dark"],
+    minRatio: 4.5,
+    note: "HYK-304-contrast-e11-1 §2 요구 2 ⑴ -- 사전 존재 결함(라이트 2.98 · 다크 4.27 미달)을 리터럴 고정 #7aa2f2(기존 color.accent.hover.dark 값)로 고쳤다(두 테마 5.44).",
   },
 ];
 
 test("대비 가드(실패형): 화면에 실제로 쓰이는 글자/배경 쌍이 4.5(AA, 작은 글자) 미달이면 실패한다", async (t) => {
   const html = await loadIndexHtml();
-  const { rootRule, darkRootRule } = parseThemeRules(html);
+  const { rootRule, darkRootRule, sheet } = parseThemeRules(html);
   assert.ok(rootRule, "전제: 최상위 :root 규칙이 있어야 한다");
   assert.ok(
     darkRootRule,
@@ -532,8 +615,8 @@ test("대비 가드(실패형): 화면에 실제로 쓰이는 글자/배경 쌍�
   const rows = [];
   for (const def of PAIR_DEFS) {
     for (const theme of def.themes) {
-      const fg = resolveVarValue(rootRule, darkRootRule, theme, def.fg);
-      const bg = resolveVarValue(rootRule, darkRootRule, theme, def.bg);
+      const fg = resolveDefColor(sheet, rootRule, darkRootRule, theme, def.fg);
+      const bg = resolveDefColor(sheet, rootRule, darkRootRule, theme, def.bg);
       const ratio = contrastRatio(fg, bg);
       rows.push({
         label: def.label,
@@ -596,4 +679,143 @@ test("결선(selector-binding): #notion-copy-button:disabled 의 color 가 var(-
     "var(--color-text-muted)",
     `#notion-copy-button:disabled 의 color 가 var(--color-text-muted) 여야 하는데 ${colorValue || "(없음, 상속으로 되돌아간다)"}다`,
   );
+});
+
+// HYK-304-contrast-e11-1 §2 요구 4(결선 칸, 세 선택자 한정 -- P3-1). 위
+// #notion-copy-button:disabled 결선 시험과 같은 방법(jsdom CSSOM, 선택자
+// 단위 선언 읽기)을 이 라운드가 고친 세 선택자에 적용한다. 같은 한계가
+// 그대로 적용된다(선택자 "목록"(`a, b {}`) · 두 번째 스타일시트 · 인라인
+// style 은 이 방법으로 못 본다 -- 이 파일은 <style> 하나만 다루고 index.html
+// 에 인라인 style 속성이 없다는 전제, 교차검증은 하지 않았다).
+function findRulesBySelector(sheet, selector) {
+  const matches = [];
+  function visit(rule) {
+    if (rule.selectorText === selector) {
+      matches.push(rule);
+    }
+    if (rule.cssRules) {
+      for (const inner of rule.cssRules) visit(inner);
+    }
+  }
+  for (const rule of sheet.cssRules) visit(rule);
+  return matches;
+}
+
+const BINDING_DEFS = [
+  {
+    selector: "#list-delete-undo-button",
+    property: "color",
+    expected: "#7aa2f2",
+  },
+  {
+    selector: '#notion-copy-toast[data-variant="error"]',
+    property: "color",
+    expected: "#ffffff",
+  },
+  {
+    selector: "#list-root .memo-list-error",
+    property: "background",
+    expected: "var(--color-bg-elevated)",
+  },
+];
+
+for (const def of BINDING_DEFS) {
+  test(`결선(selector-binding, E11): ${def.selector} 의 ${def.property} 가 ${def.expected} 이고 그 선택자 규칙은 정확히 1개다`, async () => {
+    const html = await loadIndexHtml();
+    const { sheet } = parseThemeRules(html);
+    const matches = findRulesBySelector(sheet, def.selector);
+    assert.equal(
+      matches.length,
+      1,
+      `${def.selector} 규칙이 정확히 1개여야 하는데 ${matches.length}개다(뒤에 덮어쓰는 같은 선택자 규칙이 있으면 결선이 조용히 바뀐다)`,
+    );
+    const actual = matches[0].style.getPropertyValue(def.property).trim();
+    assert.equal(
+      actual.toLowerCase(),
+      def.expected.toLowerCase(),
+      `${def.selector} 의 ${def.property} 가 ${def.expected} 여야 하는데 ${actual || "(없음)"}다`,
+    );
+  });
+}
+
+// HYK-304-contrast-e11-1 §2 요구 5(밑줄 비색 칸 -- P3-2). #list-save-error-button
+// 의 "오류 = 밑줄"(색이 아닌 표시) 관례가 그대로 남아 있는지를 재는 칸은
+// 이 라운드 전까지 이 파일에 없었다(public/index.html 의 주석에만 그
+// 의도가 적혀 있었다). 색이 아니라 "표시" 를 재므로 PAIR_DEFS 의 대비
+// 계산과는 다른 축이다.
+test("밑줄(비색 표시, E11): #list-save-error-button 의 text-decoration 이 underline 이다", async () => {
+  const html = await loadIndexHtml();
+  const { sheet } = parseThemeRules(html);
+  const matches = findRulesBySelector(sheet, "#list-save-error-button");
+  assert.equal(
+    matches.length,
+    1,
+    `#list-save-error-button 규칙이 정확히 1개여야 하는데 ${matches.length}개다`,
+  );
+  const decoration = matches[0].style
+    .getPropertyValue("text-decoration")
+    .trim()
+    .toLowerCase();
+  assert.ok(
+    decoration === "underline" || decoration.startsWith("underline "),
+    `#list-save-error-button 의 text-decoration 이 underline 이어야 하는데 ${decoration || "(없음)"}다(색이 사라져도 이 표시가 있으면 오류 의미가 남는다는 전제가 깨진다)`,
+  );
+});
+
+// HYK-304-contrast-e11-1 §2 요구 6(대비 반올림 경계). 위 "대비 가드" 시험은
+// `ratio: Number(ratio.toFixed(2))` 로 소수 2자리까지 반올림한 값을
+// minRatio 와 비교한다(line 583 부근, 비교는 "반올림 후" 값으로 한다 --
+// 반올림 전 원시 값과 비교하지 않는다). JS 의 toFixed 는 부동소수 표현
+// 때문에 4.495 류의 경계값이 "반올림 전 실제로는 4.5 미달"인데도
+// "4.50"으로 올라갈 수 있다(아래에서 직접 값으로 보인다) -- 즉 이 게이트는
+// 경계에 아주 가까운 쌍(차이가 0.005 이내)에서는 반올림 때문에 거짓
+// GREEN 을 낼 수 있는 알려진 한계가 있다. 이 라운드가 고친 세 쌍의
+// 실측 마진(4.57 · 4.57 · 5.44 · 5.02, 모두 minRatio 4.5 와 0.02 이상
+// 차이)은 이 경계 폭(0.005)보다 훨씬 커서 이 한계의 영향을 받지 않는다 --
+// 그 사실을 아래에서 직접 계산해 단언한다(두 자리 반올림 후 값과
+// 4.5 사이 거리가 0.005 초과인지를 잰다, 손으로 베낀 숫자가 아니라
+// 이 파일의 contrastRatio 로 다시 계산한 값).
+test("대비 반올림 경계(E11): toFixed(2) 반올림 방식 확인 + 이 라운드가 고친 세 쌍의 마진이 경계 폭보다 크다", () => {
+  // 1) 반올림 방식 자체: JS toFixed 는 IEEE754 표현 오차로 4.495 를
+  // 4.50 으로 올린다(사사오입이 아니라 부동소수 표현 아티팩트) -- 이
+  // 게이트가 쓰는 비교가 "반올림 후" 값이라는 전제를 직접 값으로 보인다.
+  assert.equal(
+    (4.495).toFixed(2),
+    "4.50",
+    "이 JS 런타임의 toFixed(2) 경계 거동이 바뀌면 이 시험의 전제(반올림 후 비교)도 다시 재야 한다",
+  );
+  assert.equal((4.4949).toFixed(2), "4.49");
+
+  // 2) 이 라운드가 고친 세 쌍의 반올림-후 값(§2 요구 3 표에서 그대로)이
+  // 4.5 와 경계 폭(0.005)보다 더 떨어져 있는지 -- hexToRgb/relLuminance/
+  // contrastRatio 는 이 파일 위쪽에서 이미 정의된 그 함수를 그대로 쓴다
+  // (숫자를 손으로 베끼지 않는다).
+  const ROUNDING_MARGIN = 0.005; // toFixed(2) 가 뒤집을 수 있는 최대 거리
+  const fixedPairs = [
+    { label: "되돌리기(고정 #7aa2f2 on #2a2d33)", a: "#7aa2f2", b: "#2a2d33" },
+    {
+      label: "노션 오류 토스트(고정 #ffffff on #d14343)",
+      a: "#ffffff",
+      b: "#d14343",
+    },
+    {
+      label: ".memo-list-error 라이트(#d14343 on #ffffff)",
+      a: "#d14343",
+      b: "#ffffff",
+    },
+    {
+      label: ".memo-list-error 다크(#e06c6c on #1e2127)",
+      a: "#e06c6c",
+      b: "#1e2127",
+    },
+  ];
+  for (const { label, a, b } of fixedPairs) {
+    const raw = contrastRatio(a, b);
+    const rounded = Number(raw.toFixed(2));
+    const distanceFrom45 = Math.abs(rounded - 4.5);
+    assert.ok(
+      distanceFrom45 > ROUNDING_MARGIN,
+      `${label} = ${rounded}(반올림 전 ${raw}) 가 4.5 와 ${ROUNDING_MARGIN} 이내로 가까워 반올림 경계 위험이 있다`,
+    );
+  }
 });
