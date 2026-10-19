@@ -9,15 +9,77 @@
     <title>모바일 마크다운 에디터 (HYK-304)</title>
     <style>
       :root {
+        /* PRD §3 "테마: 둘 다 + 시스템 자동(OS 변경 시 즉시 반영)". UA
+           기본 요소(스크롤바·폼 컨트롤)도 다크를 알게 해 둔다(선택 근거:
+           이것 없이는 브라우저가 라이트로 가정해 일부 UA 기본 위젯만
+           불일치가 남을 수 있다). */
+        color-scheme: light dark;
+        /* 아래 11개는 spec/design-tokens.json 의 색 11개를 그대로 CSS
+           변수로 옮긴 것(라이트 값, 값 반올림·대소문자 외 변형 0). 다크
+           값은 바로 아래 @media (prefers-color-scheme: dark) 블록에서
+           같은 11개 이름을 재선언한다 -- 매체질의는 브라우저가 스스로
+           다시 그리므로 JS 는 쓰지 않는다(결과 파일 §2 근거). */
         --color-bg: #fafaf8;
         --color-bg-elevated: #ffffff;
         --color-text-primary: #1a1a1a;
         --color-text-muted: #6b6b6b;
         --color-accent: #3b6fe0;
         --color-border: #ececea;
+        --color-state-error: #d14343;
+        --color-state-success: #2e7d52;
+        --color-accent-hover: #2f5bc0;
+        --color-disabled: #c4c4c2;
+        --color-focus-ring: #3b6fe0;
+        /* 토스트(#list-delete-toast · #notion-copy-toast)는 "일부러 반대
+           테마 값"을 쓰는 기존 선례(바로 아래 각 선택자 자리의 주석 참고)다
+           -- 다크 미디어 블록에서 재선언하지 않아 OS 테마와 무관하게 항상
+           같은 값으로 고정한다. 값은 토큰에서 그대로 가져왔다(새 값 0). */
+        --color-toast-bg: #2a2d33; /* = color.border 의 dark 값(고정) */
+        --color-toast-text: #fafaf8; /* = color.bg 의 light 값(고정) */
+        --color-toast-error-bg: #d14343; /* = color.state.error 의 light 값(고정, 기존 렌더 값 보존) */
+        /* HYK-304-system-theme-1-r2 §2 요구 2: color.state.error 의 dark 값
+           (#e06c6c)은 고정 토스트 표면(--color-toast-bg #2a2d33) 위에서
+           4.29(AA 4.5 미달, 1R 상신 후보 -- 검토 1R §6 P2-1)였다. 토큰
+           안에 이 표면 위에서 4.5 이상인 "빨강"이 없어(새 색 값은 금지)
+           color.text.primary 의 dark 값(#e6e6e3, 결과 파일 §2 대비표 ·
+           11.04)으로 바꾼다. 색만으로는 더 이상 "오류"를 뜻하지 않으므로
+           오류 의미는 아래 #list-save-error-button 의 밑줄(색이 아닌
+           표시)이 대신 맡는다(문구는 memo-list-view.mjs 의 기존
+           SAVE_ERROR_MESSAGE 그대로 -- "실패"라는 말 자체도 이미 문구로
+           오류를 알린다, 바꾸지 않아 PRD §8 정책 문구와 충돌 없음). */
+        --color-toast-error-text: #e6e6e3;
+        /* accent/accent-hover 위에 얹는 흰 글자(FAB "+" · 노션 복사 버튼
+           글자). 라이트는 accent 가 채도 있는 파란이라 흰 글자가 읽힌다
+           (4.63, 결과 파일 §2-4 대비 계산 칸). ⚠️다크는 고정하지 않고
+           바로 아래 @media (prefers-color-scheme: dark) 블록에서 같은
+           이름을 color.bg 의 dark 값(#16181c)으로 재선언한다 -- 흰 글자
+           그대로였다면 다크 accent(#5b8def)/accent-hover(#7aa2f2) 위에서
+           3.23/2.54 로 AA 미달이었다(검토 1R §6 P2-2). color.bg.dark 로
+           바꾸면 5.50/7.01 로 통과한다(HYK-304-system-theme-1-r2 §2 요구
+           1, 값은 기존 토큰 그대로 -- 새 색 값 0). */
+        --color-on-accent: #ffffff;
         --font-family: system-ui, -apple-system, "Pretendard", sans-serif;
         --font-size-body: 17px;
         --line-height-body: 1.6;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --color-bg: #16181c;
+          --color-bg-elevated: #1e2127;
+          --color-text-primary: #e6e6e3;
+          --color-text-muted: #9a9a97;
+          --color-accent: #5b8def;
+          --color-border: #2a2d33;
+          --color-state-error: #e06c6c;
+          --color-state-success: #5fb389;
+          --color-accent-hover: #7aa2f2;
+          --color-disabled: #3a3d44;
+          --color-focus-ring: #7aa2f2;
+          /* 위 :root 의 --color-on-accent 주석 참고 -- color.bg 의 dark
+             값(토큰 값 그대로, 새 색 0)으로 재선언해 다크 accent 위 글자
+             대비를 5.50/7.01 로 만든다(HYK-304-system-theme-1-r2 §2 요구 1). */
+          --color-on-accent: #16181c;
+        }
       }
       * {
         box-sizing: border-box;
@@ -121,7 +183,7 @@
         width: 100%;
         background: none;
         border: none;
-        color: #d14343;
+        color: var(--color-state-error);
         padding: 32px 8px;
         text-align: center;
         font: inherit;
@@ -142,8 +204,8 @@
         gap: 12px;
         padding: 10px 16px;
         border-radius: 8px;
-        background: #2a2d33;
-        color: #fafaf8;
+        background: var(--color-toast-bg);
+        color: var(--color-toast-text);
         font-size: 14px;
       }
       #list-delete-undo-button {
@@ -169,7 +231,15 @@
         min-width: 0;
         background: none;
         border: none;
-        color: #ff9b9b;
+        color: var(--color-toast-error-text);
+        /* HYK-304-system-theme-1-r2 §2 요구 2: 글자 색이 더 이상 "빨강"이
+           아니므로(위 --color-toast-error-text 주석) 오류/동작-가능 의미를
+           색이 아닌 표시로 옮긴다 -- 밑줄(링크처럼 "누를 수 있다"는 뜻을
+           더한다). 문구는 바꾸지 않는다(memo-list-view.mjs 의
+           SAVE_ERROR_MESSAGE = "저장에 실패했어요. 다시 시도해 주세요" 가
+           이미 "실패"라는 말로 오류를 알린다 -- PRD §8 정책 문구와
+           충돌하지 않음, 원문 그대로 읽어 확인). */
+        text-decoration: underline;
         font: inherit;
         text-align: left;
         min-height: 44px;
@@ -185,7 +255,7 @@
         min-height: 44px;
         border-radius: 28px;
         background: var(--color-accent);
-        color: #ffffff;
+        color: var(--color-on-accent);
         border: none;
         font-size: 28px;
         line-height: 1;
@@ -333,12 +403,21 @@
         outline: 2px solid var(--color-accent);
         outline-offset: 2px;
       }
+      /* HYK-304-system-theme-1 §2 요구 3(판정 판단 2 A): 토큰 이탈
+         #fff3e0/#7a4a00 를 기존 토큰으로 맞춘다 -- 배경 color.bg.elevated
+         + 글자 color.text.primary(이 알림도 다른 평범한 표면 요소와 같은
+         "거슬림 없는" 카드로 보이게, PRD §1 톤). 경고 성격을 보여줄 전용
+         토큰이 없어(디자인 토큰에 "warning" 계열 0) 왼쪽 선만 color.
+         state.error 로 얇게 둬 눈에 띄는 정도를 유지한다(후보표 §2 판단
+         2 A 제안을 그대로 적용). 셋 다 테마를 그대로 탄다(라이트/다크 값이
+         있는 평범한 토큰이라 고정하지 않음). */
       #save-notice {
         margin-top: 8px;
-        padding: 8px 12px;
+        padding: 8px 12px 8px 9px;
         border-radius: 8px;
-        background: #fff3e0;
-        color: #7a4a00;
+        border-left: 3px solid var(--color-state-error);
+        background: var(--color-bg-elevated);
+        color: var(--color-text-primary);
         font-size: 13px;
       }
       #notion-copy-button {
@@ -348,32 +427,42 @@
         border: none;
         border-radius: 8px;
         background: var(--color-accent);
-        color: #ffffff;
+        color: var(--color-on-accent);
         font-size: 15px;
         font-weight: 600;
         cursor: pointer;
       }
       #notion-copy-button:hover:not(:disabled) {
-        background: #2f5bc0;
+        background: var(--color-accent-hover);
       }
       #notion-copy-button:focus-visible {
         outline: 2px solid var(--color-accent);
         outline-offset: 2px;
       }
       #notion-copy-button:disabled {
-        background: #c4c4c2;
+        background: var(--color-disabled);
+        /* HYK-304-system-theme-1-r3 §2 요구 1: 2R 은 이 규칙에 color 를
+           선언하지 않아 #notion-copy-button 의 흰 글자(--color-on-accent)가
+           그대로 상속됐다 -- 라이트는 1.75(1R 부터 미달 유지)였지만 다크는
+           --color-on-accent 가 2R 부터 어두운 값(#16181c)으로 바뀌면서
+           10.88 → 1.63 으로 떨어져(결과 파일 §2 표) 비활성 배경(#3a3d44) 위
+           거의 안 보였다(2R 이 만든 후퇴, 새 메모마다 보임). 기존 토큰
+           --color-text-muted(새 값 0)로 바꿔 "비활성 = 흐리게" 관례를 따르고
+           라이트 3.05 · 다크 3.85 로 복원한다(여전히 WCAG AA 4.5 미달이지만
+           비활성 컨트롤은 1.4.3 예외 -- 아래 시험 PAIR_DEFS 참고). */
+        color: var(--color-text-muted);
         cursor: not-allowed;
       }
       #notion-copy-toast {
         margin-top: 8px;
         padding: 8px 12px;
         border-radius: 8px;
-        background: #2a2d33;
-        color: #fafaf8;
+        background: var(--color-toast-bg);
+        color: var(--color-toast-text);
         font-size: 13px;
       }
       #notion-copy-toast[data-variant="error"] {
-        background: #d14343;
+        background: var(--color-toast-error-bg);
       }
       .raw-section {
         margin-top: 16px;
