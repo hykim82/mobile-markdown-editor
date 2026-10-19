@@ -368,8 +368,8 @@ function contrastRatio(hexA, hexB) {
 // 뒤 둘은 아래 PAIR_DEFS 에서 라이트/다크로 나뉘거나 테마를 함께 묶어 정의
 // 4개가 된다, product_scope 참고)은 `exception` 사유와 함께 느슨한
 // 바닥(minRatio)만 걸어 "더 나빠지면 잡되, 지금 당장 npm test 를 깨지
-// 않는다" -- 한용 상신 대상으로 결과 파일에도 따로 적는다(토큰 파일 변경
-// 없이는 고칠 수 없다, product_scope 범위 밖). notion-copy-button:disabled
+// 않는다" -- 기존 토큰 안에서 수정 가능하지만(검토 2R §6 계산) 이 조각
+// 범위 밖이라 보류한다(E11, 결과 파일에도 따로 적는다). notion-copy-button:disabled
 // 쌍의 exception 은 이와 다르다 -- "사전 존재 결함"이 아니라 WCAG 1.4.3
 // 비활성 컨트롤 예외이며, 이 라운드(3R)가 직접 고친 쌍이라 바닥을 1 에서
 // 실측값(3.05/3.85)으로 올렸다(HYK-304-system-theme-1-r3 §2 요구 1).
@@ -487,7 +487,7 @@ const PAIR_DEFS = [
     themes: ["light"],
     minRatio: 4.0,
     exception:
-      "사전 존재 결함 -- 이 라운드 §2 의 ⑴·⑵ 대상이 아니고 다크 모드와도 무관(다크는 5.53 로 통과). color.state.error.light 가 거의 흰 배경 위에서 4.5 미달(실측 4.37) -- 토큰 파일 변경 금지(product_scope)라 이 라운드에서 고칠 수 없다. 한용 상신 대상. 바닥(4.0)은 더 나빠지는 것만 잡는다.",
+      "사전 존재 결함 -- 이 라운드 §2 의 ⑴·⑵ 대상이 아니고 다크 모드와도 무관(다크는 5.53 로 통과). color.state.error.light 가 거의 흰 배경 위에서 4.5 미달(실측 4.37) -- 토큰 안 수정 가능(검토 2R §6: 배경을 var(--color-bg-elevated) 로 바꾸면 라이트 4.57 · 다크 5.02) -- 이 조각 범위 밖이라 보류(E11). 바닥(4.0)은 더 나빠지는 것만 잡는다.",
   },
   {
     label: "노션 복사 오류 토스트 글자(고정, [data-variant=error])",
@@ -496,7 +496,7 @@ const PAIR_DEFS = [
     themes: ["light", "dark"],
     minRatio: 4.0,
     exception:
-      "위와 같은 뿌리(color.state.error.light, 고정값) -- 검토 1R §6 이 이미 같은 값(4.37)을 '무변'으로 적었을 뿐 P 코드로 escalate 하지 않았다. 사전 존재 · 범위 밖 · 상신 대상.",
+      "위와 같은 뿌리(color.state.error.light, 고정값) -- 검토 1R §6 이 이미 같은 값(4.37)을 '무변'으로 적었을 뿐 P 코드로 escalate 하지 않았다. 사전 존재 -- 토큰 안 수정 가능(검토 2R §6: 글자를 var(--color-bg-elevated)(#ffffff) 로 바꾸면 4.57) -- 이 조각 범위 밖이라 보류(E11).",
   },
   {
     label:
@@ -506,7 +506,7 @@ const PAIR_DEFS = [
     themes: ["light"],
     minRatio: 2.5,
     exception:
-      "사전 존재 결함(신규 발견) -- 이 토스트 칩은 항상 어두운 고정 배경(--color-toast-bg)인데 글자색은 테마를 타는 --color-accent 라 라이트에서 3b6fe0 on 2a2d33 = 2.98 로 크게 미달한다. §2 의 ⑴·⑵ 목록에 없고 토큰 변경 없이는 못 고친다 -- 한용 상신 대상(1R·REVIEW-1R 모두 이 쌍을 재지 않았다).",
+      "사전 존재 결함(신규 발견) -- 이 토스트 칩은 항상 어두운 고정 배경(--color-toast-bg)인데 글자색은 테마를 타는 --color-accent 라 라이트에서 3b6fe0 on 2a2d33 = 2.98 로 크게 미달한다. §2 의 ⑴·⑵ 목록에 없다 -- 토큰 안 수정 가능(검토 2R §6: 글자를 고정 #7aa2f2(color.accent.hover.dark) 로 바꾸면 5.44, 두 테마 같음) -- 이 조각 범위 밖이라 보류(E11, 1R·REVIEW-1R 모두 이 쌍을 재지 않았다).",
   },
   {
     label:
@@ -516,7 +516,7 @@ const PAIR_DEFS = [
     themes: ["dark"],
     minRatio: 4.0,
     exception:
-      "위와 같은 뿌리 -- 다크 accent(5b8def on 2a2d33) 도 4.27 로 작은 글자 AA 미달. 사전 존재 · 범위 밖 · 상신 대상.",
+      "위와 같은 뿌리 -- 다크 accent(5b8def on 2a2d33) 도 4.27 로 작은 글자 AA 미달. 사전 존재 -- 토큰 안 수정 가능(검토 2R §6: 글자를 고정 #7aa2f2 로 바꾸면 5.44, 두 테마 같음) -- 이 조각 범위 밖이라 보류(E11).",
   },
 ];
 
@@ -558,4 +558,42 @@ test("대비 가드(실패형): 화면에 실제로 쓰이는 글자/배경 쌍�
       `${row.label}(${row.theme}) ${row.fg} on ${row.bg} = ${row.ratio} (요구 ≥ ${row.minRatio}${row.exception ? " · " + row.exception : ""})`,
     );
   }
+});
+
+// HYK-304-system-theme-1-r4 §2 요구 2(결선 칸 1). 위 대비 가드는 PAIR_DEFS
+// 에 손으로 적은 변수 이름(--color-text-muted)이 실제로 그 쌍의 토큰값과
+// 같은지만 재고, "#notion-copy-button:disabled 의 color 선언이 그 변수를
+// 쓰는가"는 재지 않는다(2R P3-1 · 3R 검토 M1/M2 GREEN 과 같은 구멍).
+// 방법 = jsdom CSSOM(parseThemeRules 가 쓰는 신뢰 근거와 같다) -- 소스
+// 문자열 정규식이 아니라 실제 파싱된 규칙의 선언 값을 읽는다.
+test("결선(selector-binding): #notion-copy-button:disabled 의 color 가 var(--color-text-muted) 이고 그 선택자 규칙은 정확히 1개다", async () => {
+  const html = await loadIndexHtml();
+  const { sheet } = parseThemeRules(html);
+  const matches = [];
+  function visit(rule) {
+    if (rule.selectorText === "#notion-copy-button:disabled") {
+      matches.push(rule);
+    }
+    if (rule.cssRules) {
+      for (const inner of rule.cssRules) visit(inner);
+    }
+  }
+  for (const rule of sheet.cssRules) visit(rule);
+  // 한계: jsdom CSSOM 은 소스를 이미 규칙 단위로 파싱해 돌려준다 --
+  // "같은 선택자를 공백·대소문자만 다르게 중복 선언했는가" 같은 소스
+  // 문자열 수준의 표기 차이는 CSSOM 파싱 단계에서 이미 한 selectorText
+  // 로 정규화될 수 있어 이 칸만으로는 못 가른다(소스 정규식 교차검증은
+  // 하지 않았다, product_scope 범위 밖). 재는 것은 "파싱된 규칙이 몇
+  // 개이고 그 color 선언이 무엇인가"다.
+  assert.equal(
+    matches.length,
+    1,
+    `#notion-copy-button:disabled 규칙이 정확히 1개여야 하는데 ${matches.length}개다(뒤에 덮어쓰는 같은 선택자 규칙이 있으면 결선이 조용히 바뀐다)`,
+  );
+  const colorValue = matches[0].style.getPropertyValue("color").trim();
+  assert.equal(
+    colorValue,
+    "var(--color-text-muted)",
+    `#notion-copy-button:disabled 의 color 가 var(--color-text-muted) 여야 하는데 ${colorValue || "(없음, 상속으로 되돌아간다)"}다`,
+  );
 });
