@@ -36,10 +36,16 @@ export const UNDO_TOAST_MS = 7000;
 // 뽑아낸 것뿐이다(그 함수 하나가 80줄 제한을 넘기지 않도록, ESLint
 // max-lines-per-function). active = 지금 토스트가 책임지는 되돌리기
 // { id, handler } · errorState = 지금 떠 있는 저장 실패 재시도
-// { id, onClick }. errorState 가 id 를 들고 있어야 "A 의 되돌리기가
-// 성공했다고 B 의 아직 안 풀린 실패 표시까지 같이 지워지는" 교차
-// 오염을 막는다(두 상태가 같은 영역을 나눠 쓸 때의 설계 선택 · 결과
-// 파일 §한계에 교차 사례 1건 기록).
+// { id, onClick, goneRestore }(goneRestore 는 "이미 없는 메모"의 표시
+// 인지를 가르는 표식, 아래 showSaveError 참고). errorState 가 id 를
+// 들고 있어야 "A 의 되돌리기가 성공했다고 B 의 아직 안 풀린 실패
+// 표시까지 같이 지워지는" 교차 오염을 막는다(두 상태가 같은 영역을
+// 나눠 쓸 때의 설계 선택 · 결과 파일 §한계에 교차 사례 1건 기록).
+// HYK-304-gone-held-priority-1(§2 요구 1, held 우선): 진짜 저장 실패
+// (held, goneRestore:false) 표시가 떠 있는 동안에는 "이미 없는 메모"
+// (goneRestore:true) 표시 요청이 그것을 덮지 않는다 -- 그 메모는 이미
+// 없으므로 보여주지 않아도 잃을 것이 없지만, held 쪽은 사용자의 유일한
+// 재시도 수단이기 때문이다(아래 showSaveError 의 held 우선 분기).
 // r3 P3-1(검토 2R "죽은 releasePending" · 책임자 판정 "실제 해소 경로
 // (덮어쓰기 · 표시 닫힘)로"): 실패 표시가 "성공 없이" 사라지는 유일한
 // 자리가 바로 이 영역이다 -- 다른 메모의 새 실패가 지금 떠 있는
@@ -105,6 +111,31 @@ function createToastController(toast, { onErrorOverwritten } = {}) {
   function showSaveError(id, retry, { goneRestore = false } = {}) {
     if (!toast || !toast.errorButton) return;
     if (errorState) {
+      // HYK-304-gone-held-priority-1(§2 요구 1, 관찰 1 닫힘): 지금 떠
+      // 있는 표시가 "진짜" 저장 실패(held, goneRestore:false)인데 이
+      // 호출이 "이미 없는 메모"(goneRestore:true) 표시 요청이면 덮지
+      // 않고 그대로 돌아간다 -- held 쪽 표시·재시도 버튼을 그대로 두고
+      // (onErrorOverwritten 도 부르지 않아 유예를 재개하지 않는다),
+      // 이미 없는 메모 쪽은 보여주지 않는다(그 메모는 이미 없으므로
+      // 사용자가 잃을 것이 없다, memo-lifecycle.mjs 의 restore 는 그런
+      // 메모엔 항상 null 을 돌려줄 뿐이라 재시도로도 벗어날 길이
+      // 원래 없었다 -- 위 restore(id) null 분기 주석 참고). 그 밖의
+      // 조합(held→held · gone→held · gone→gone)은 전부 기존대로 아래
+      // 덮어쓰기 경로를 그대로 탄다.
+      // r2(HYK-304-gone-held-priority-1-r2, §2 요구 2, 검토 1R §2 ⓒ):
+      // 이 held 우선은 "다른(이미 없는) 메모"의 끼어듦만 막아야 한다 --
+      // "같은" id 가 자기 자신의 재시도에서 레코드가 그 사이 사라진
+      // 것을 발견한 경우(held→gone, 자기 발견)는 막을 대상이 아니다.
+      // 그 메모는 더 이상 "저장 실패"가 아니라 정말로 없는 메모이므로
+      // (재시도 수단 자체가 의미를 잃는다), base(b54bf31) 처럼 아래
+      // 덮어쓰기 경로로 통과시켜 goneRestore 표시로 전환돼야 다른
+      // 메모의 성공 조작으로 닫힐 수 있다(clearGoneRestoreOnSuccess).
+      // id 가 같을 때 이 분기를 막지 않으면(1R 상태), 그 표시는
+      // goneRestore:false 로 영원히 고정돼 §한계의 "닫히지 않는" 회귀가
+      // 된다.
+      if (!errorState.goneRestore && goneRestore && errorState.id !== id) {
+        return;
+      }
       toast.errorButton.removeEventListener("click", errorState.onClick);
       // r3 P3-1/P2-1 ⓐ: errorState 가 "다른" id 를 가리키고 있었다면
       // 이 호출이 그 표시를 성공 없이 덮어쓴 것이다 -- 그 메모의 유예를

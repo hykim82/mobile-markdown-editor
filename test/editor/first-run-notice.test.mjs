@@ -263,10 +263,18 @@ test("⑦저장소 읽기(getItem)가 실패하면 부팅할 때마다 고지가
 // (`#first-run-notice::before { position: fixed; … }`)을 놓쳤다(M4e
 // 생존 -- 요소 자신이 아니라 가상 요소가 전체 덮개가 되는 모양). 선택자와
 // `{` 사이에 그 둘을 허용해 같은 방식으로 잡는다.
-test("⑧비오버레이(넓힘): #first-run-notice 를 가리키는 모든 CSS 규칙(::before/::after 가상 요소 포함)에 전체 덮개 선언이 없다", async () => {
+// ⚠️E5 검토 P3-2(pr42-review.md §2ⓔ · §3 N6): 위 정규식은 "두 콜론"
+// (`::before`/`::after`)만 받아, CSS2 호환 표기인 "한 콜론"
+// (`#first-run-notice:before { position: fixed; … }`)은 그대로
+// 놓쳤다(N6 생존). `::?` 로 콜론 1개·2개를 모두 허용해 그 틈을 닫는다.
+// ⛔한계(열린 집합, 닫지 않는다): 이 정규식은 "#first-run-notice 선택자
+// 자신(+그 가상 요소)"만 보므로 후손 가상 요소(`#first-run-notice span
+// ::after`, N8)나 별도 선택자의 형제 덮개 요소는 여전히 못 잡는다 --
+// 정규식 사냥이라 원리적으로 닫을 수 없는 열린 집합이다(검토 P3-2).
+test("⑧비오버레이(넓힘): #first-run-notice 를 가리키는 모든 CSS 규칙(단일/이중 콜론 ::before/::after 가상 요소 포함)에 전체 덮개 선언이 없다", async () => {
   const html = await readFile(indexHtmlPath, "utf8");
   const withoutComments = html.replace(/\/\*[\s\S]*?\*\//g, "");
-  const ruleRegex = /#first-run-notice(?:::(?:before|after))?\s*\{([^}]*)\}/gs;
+  const ruleRegex = /#first-run-notice(?:::?(?:before|after))?\s*\{([^}]*)\}/gs;
   const blocks = [...withoutComments.matchAll(ruleRegex)].map((m) => m[1]);
   assert.ok(
     blocks.length >= 1,
@@ -362,6 +370,11 @@ test("⑨저장소 쓰기(setItem)가 실패해도 고지가 정상적으로 보
 // 선례). jsdom 은 레이아웃을 계산하지 않아 실제 히트테스트 크기를
 // getBoundingClientRect 로 재지 못한다(한계 -- §8) -- 출하 CSS 규칙
 // 자체를 읽는 "규칙 단언"으로 좁혀 고정한다.
+// ⛔한계(E5 검토 P3-3, pr42-review.md §2ⓔ · §3 N9): 이 칸은 "닫기 버튼
+// 규칙 자체에 min-height/min-width: 44px 선언이 있다"만 고정한다 --
+// 명시도가 더 높은 다른 규칙이 그 값을 덮어쓰는 것(N9)은 못 잡는다
+// (규칙 단언의 구조적 한계, jsdom 이 캐스케이드·실제 렌더 크기를 계산
+// 하지 않으므로).
 test("⑩닫기 버튼(✕)은 44px 이상으로 CSS 에 고정돼 있다(min-height/min-width, 규칙 단언)", async () => {
   const html = await readFile(indexHtmlPath, "utf8");
   const withoutComments = html.replace(/\/\*[\s\S]*?\*\//g, "");
