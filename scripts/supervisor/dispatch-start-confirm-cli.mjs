@@ -18,19 +18,30 @@
 // (`.claude-team` 등)이든 codex 좌석(`ORCA_CODEX_HOME` 아래)이든 호출자가
 // 무엇을 넘기든 코드는 그 이름을 몰라도 된다(§2 항4 -- 엔진 이름 분기 0).
 //
-// 종료코드(★3R부터 3상태 -- coder-task.md §2 항4 "값을 뭉개지 마라"):
+// 종료코드(★HYK-280-exit5-reaches-human-1 -- coder-task.md §1-4 "산문만
+// 뒤처졌다" 수리: 4·5가 여기서 빠져 있었다. 정본은 아래
+// `DISPATCH_START_CONFIRM_EXIT_CODE` -- 이 표는 그 정본을 그대로 옮긴
+// 것이므로, 둘이 다시 어긋나면 이 주석이 아니라 그 정본을 믿어라):
 // - 0 = 착수 확인(STARTED).
 // - 1 = **아예 시작 못 함**(NOT_STARTED, 타임아웃까지 세션 기록 파일 총
 //   바이트 수가 한 번도 늘지 않음) -- 사람 조치: **재배달**.
+// - 2 = 판정 불가(COLLECTION_FAILED, 관측 수집 자체가 실패 -- 조용히
+//   "착수함"으로 접지 않는다, §2-3 계열 원칙).
 // - 3 = **시작 후 멈춤**(STALLED_AFTER_START, 한 번은 늘었지만 그 마지막
 //   증가로부터 `stallThresholdMs`가 지나도록 더 안 늚 -- 오늘 21시 승인창
 //   정지 사고와 동형) -- 사람 조치: **좌석 상태 확인**(재배달이 아니다,
 //   이미 뭔가는 하고 있었으므로).
-// - 2 = 판정 불가(관측 수집 자체가 실패 -- 조용히 "착수함"으로 접지
-//   않는다, §2-3 계열 원칙).
-// 1·3 둘 다 사람이 읽는 한 줄이 stderr에 찍히고 notifyDir에 통지 파일
-// 1장이 남는다(§3 "새 알림 채널 0" -- 기존 notifyDir 재사용). 통지 문구는
-// 두 상태마다 다르다(조치가 다르므로).
+// - 4 = **잘못된 인자**(INVALID_ARGS, HYK-378 4R -- 호출부가 넘긴 수치
+//   인자 자체가 계약을 어김, 폴링을 단 한 번도 시작하지 않음) -- 사람
+//   조치: **호출부(예: 관제실 dispatch-worker.ps1)의 인자를 고쳐라**(좌석
+//   확인도 재배달도 아니다).
+// - 5 = **관측 불가**(OBSERVATION_UNAVAILABLE, HYK-280 -- 세션 기록 폴더
+//   자체를 끝까지 못 찾음) -- 사람 조치: **관측 경로(--claude-home 등)를
+//   직접 확인**해라(재배달이 아니다 -- 배달은 이미 이뤄졌다).
+// 1·3·5 는 사람이 읽는 한 줄이 stderr에 찍히고 notifyDir에 통지 파일
+// 1장이 남는다(§3 "새 알림 채널 0" -- 기존 notifyDir 재사용). 4도 통지
+// 파일을 남기지만 다른 파일명 접두사를 쓴다(buildInvalidArgsNoticeFileName
+// 참고). 통지 문구는 상태마다 다르다(조치가 다르므로).
 //
 // ★신호 선택 근거(coder-task.md §4-1 항1 요구, §3 실측 인용):
 // - 화면(`orca terminal read`)은 이 조각 자신의 실측(coder.md 관측 지연
@@ -90,6 +101,16 @@ export const DISPATCH_START_CONFIRM_STATUS = Object.freeze({
   // 번도 시작하지 않는다(사람 조치도 다르다: 좌석·재배달이 아니라
   // 호출부(ps1 등)의 인자 자체를 고쳐야 한다).
   INVALID_ARGS: "DISPATCH_START_CONFIRM_INVALID_ARGS",
+  // ★HYK-280(coder-task.md §3) -- "세션 기록 폴더 자체를 못 찾았다"(마지막
+  // 관측 시점에 collectFn이 observationUnavailable:true를 실어 보낸 경우)
+  // 는 더 이상 NOT_STARTED("아예 시작 못 함 -- 재배달 필요")로 접지
+  // 않는다. NOT_STARTED는 "폴더는 찾았는데 안에서 아무것도 안 늘었다"는
+  // 뜻으로 좁히고, "폴더 자체를 못 찾았다"는 이 새 상태로 분리한다 --
+  // 폴더 이름 파생 규칙이 실물과 어긋나는 경우(HYK-280 §1 실측)가 그
+  // 예시지만, 이 상태 자체는 "왜 못 찾았는지"를 모른다는 사실만 담는다
+  // (방어선은 유지 -- §3 "관측이 안 된다는 사실은 여전히 신호로 남아야
+  // 한다").
+  OBSERVATION_UNAVAILABLE: "DISPATCH_START_CONFIRM_OBSERVATION_UNAVAILABLE",
 });
 
 // 종료코드(문서 헤더와 동일 값 -- CLI 블록과 시험 양쪽이 이 표를 재사용).
@@ -102,6 +123,10 @@ export const DISPATCH_START_CONFIRM_EXIT_CODE = Object.freeze({
   // 값을 공유하지 않는다 -- 하나는 실행 중 I/O가 실패한 것이고, 이건
   // 애초에 시작할 자격이 없는 호출이었다는 뜻이라 사람이 볼 조치가 다르다.
   [DISPATCH_START_CONFIRM_STATUS.INVALID_ARGS]: 4,
+  // ★HYK-280(coder-task.md §3) -- 기존 0~4와 안 겹치는 새 코드. 사람
+  // 조치도 다르다: "재배달"도 "좌석 상태 확인"도 아니고, 관측 경로(폴더
+  // 이름 파생 규칙 등) 자체를 사람이 확인해야 한다.
+  [DISPATCH_START_CONFIRM_STATUS.OBSERVATION_UNAVAILABLE]: 5,
 });
 
 function defaultClaudeHomeDir() {
@@ -133,6 +158,37 @@ function buildNotStartedNoticeText({
     "이 좌석이 배달을 아예 못 받았을 수 있습니다(메뉴 잔류 등). 자동 재시도는 하지 않습니다 -- 사람이 **재배달** 여부를 결정해 주십시오.",
   );
   return lines.join("\n") + "\n";
+}
+
+// ★HYK-280(coder-task.md §3) -- NOT_STARTED와 파일명 접두사·문구 둘 다
+// 다르게 남긴다(§3 요구: "재배달 필요" 문구를 이 갈래에서 제거하되
+// 방어선 자체는 유지). "착수 안 했다"가 아니라 "관측 자체가 안 됐다"는
+// 사실만 사람에게 전달한다 -- 자동 재배달로 이어지는 문구를 넣지 않는다
+// (§3 "그 문구가 «자동 재배달」이 붙는 순간 «중복 배달」로 이어진다").
+function buildObservationUnavailableNoticeText({
+  taskId,
+  dispatchedAtMs,
+  nowMs,
+  observationCount,
+}) {
+  const lines = [];
+  lines.push(`# 배달 후 착수 확인 불가 -- 관측 불가 -- ${formatKstIsh(nowMs)}`);
+  lines.push("");
+  lines.push(`- 태스크: ${taskId || "(미상)"}`);
+  lines.push(`- 배달 시각: ${formatKstIsh(dispatchedAtMs)}`);
+  lines.push(
+    `- 세션 기록 폴더 자체를 끝까지 찾지 못했습니다(관측 ${observationCount}회, 화면 미사용 -- 세션 로그 크기 기반).`,
+  );
+  lines.push("");
+  lines.push(
+    "이것은 «착수 안 했다»는 뜻이 «아닙니다» -- 폴더 이름 파생 규칙이 실제 폴더와 어긋났거나 그 밖의 사유로 관측 경로 자체가 그 폴더를 못 찾았을 수 있습니다. 자동 재시도는 하지 않습니다 -- 사람이 관측 경로(예: --claude-home)를 직접 확인해 주십시오(이 상태만으로 자동으로 다시 배달하지 않습니다).",
+  );
+  return lines.join("\n") + "\n";
+}
+
+function buildObservationUnavailableNoticeFileName(nowMs) {
+  const iso = new Date(nowMs).toISOString().replace(/[:.]/g, "-");
+  return `dispatch-start-confirm-observation-unavailable-${iso}.md`;
 }
 
 function buildStalledAfterStartNoticeText({
@@ -372,12 +428,24 @@ function pollOnce({ collect, observations, dispatchedAtMs, nowMs, validated }) {
     sustainedGrowthBytes: validated.sustainedGrowthBytes,
     stallGraceMultiplier: validated.stallGraceMultiplier,
   });
-  const status = statusFromJudged(
+  let status = statusFromJudged(
     judged,
     nowMs,
     dispatchedAtMs,
     validated.timeoutMs,
   );
+  // ★HYK-280(coder-task.md §3) -- NOT_STARTED로 «확정되는 바로 그 순간»의
+  // 관측(snap)이 "폴더 자체를 못 찾았다"는 신호를 실어 보냈다면, 그
+  // 확정을 OBSERVATION_UNAVAILABLE로 바꿔치기한다(judgeDispatchStartBySize
+  // 자신은 totalBytes만 보고, 폴더 존재 여부는 모른다 -- 그 코어를
+  // 건드리지 않고 여기서 한 겹 덧씌운다). 판정 계약(2회 연속 등)은
+  // 한 글자도 안 바뀐다 -- STARTED/STALLED_AFTER_START 갈래는 무관.
+  if (
+    status === DISPATCH_START_CONFIRM_STATUS.NOT_STARTED &&
+    snap.observationUnavailable === true
+  ) {
+    status = DISPATCH_START_CONFIRM_STATUS.OBSERVATION_UNAVAILABLE;
+  }
   if (status === null) return { terminal: null, excludedSymlinkCount };
   return {
     terminal: {
@@ -613,6 +681,31 @@ if (invokedDirectly) {
         `dispatch-start-confirm: 통지 파일을 남기지 못했습니다(${notice.detail}) -- notifyDir을 확인하십시오. 이 실행 자체의 결론(잘못된 인자, exit 4)은 바뀌지 않습니다.`,
       );
     }
+    process.exit(DISPATCH_START_CONFIRM_EXIT_CODE[result.status]);
+  }
+  if (result.status === DISPATCH_START_CONFIRM_STATUS.OBSERVATION_UNAVAILABLE) {
+    // ★HYK-280(coder-task.md §3) -- NOT_STARTED/STALLED_AFTER_START와
+    // «다른» 파일명 접두사(buildObservationUnavailableNoticeFileName)로
+    // 남긴다 -- 파일명만 보고도 "좌석이 멈췄다"가 아니라 "관측 경로
+    // 자체를 확인하라"는 뜻임을 구별할 수 있어야 한다는 원칙
+    // (buildInvalidArgsNoticeFileName 헤더 주석과 동일 원칙)을 그대로
+    // 따른다.
+    if (!existsSync(notifyDir)) mkdirSync(notifyDir, { recursive: true });
+    const nowMs = Date.now();
+    const text = buildObservationUnavailableNoticeText({
+      taskId,
+      dispatchedAtMs,
+      nowMs,
+      observationCount: result.observations.length,
+    });
+    const noticePath = path.join(
+      notifyDir,
+      buildObservationUnavailableNoticeFileName(nowMs),
+    );
+    writeFileSync(noticePath, text, "utf8");
+    console.error(
+      `dispatch-start-confirm: OBSERVATION_UNAVAILABLE(관측 불가 -- 자동 재시도 없음, 관측 경로 확인 필요) -- ${taskId || "(task)"}. notice=${noticePath}`,
+    );
     process.exit(DISPATCH_START_CONFIRM_EXIT_CODE[result.status]);
   }
   if (
