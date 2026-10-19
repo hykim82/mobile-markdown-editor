@@ -14,23 +14,21 @@ import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
 import { writeCurrentMemoId } from "../storage/current-memo-pointer.mjs";
 import { cleanupExpiredDeletes } from "../storage/memo-lifecycle.mjs";
 
+// HYK-304-system-theme-1: 색 토큰 6개(--color-bg·--color-bg-elevated·
+// --color-text-primary·--color-text-muted·--color-accent·--color-border)는
+// 더 이상 여기서 인라인으로 박지 않는다. element.style.setProperty 는
+// documentElement 의 "인라인 스타일"이고, 인라인 스타일은 캐스케이드에서
+// 저자 스타일시트의 어떤 선택자보다도 위다(@media 블록 안에 있어도 그
+// 미디어가 매치되는 것과 무관하게 인라인이 이긴다) -- 그래서 이 6개를
+// 라이트 값으로 인라인에 박아 두면 public/index.html 의
+// @media (prefers-color-scheme: dark) 블록이 선언한 다크 값이 영원히
+// 가려진다(기준선 실측: 이 함수를 그대로 두고 다크 블록만 추가해 보면
+// documentElement 의 getComputedStyle 이 라이트 값에서 안 움직인다).
+// 라이트·다크 값은 이제 index.html 의 :root/@media 블록이 전담하고,
+// 매체질의는 브라우저가 스스로 다시 그리므로 이 색 6개에는 JS 가 필요
+// 없다(결과 파일 §2 근거). 폰트 3개는 테마와 무관해 그대로 둔다.
 function applyDesignTokens() {
   const root = document.documentElement;
-  root.style.setProperty("--color-bg", tokens["color.bg"].light);
-  root.style.setProperty(
-    "--color-bg-elevated",
-    tokens["color.bg.elevated"].light,
-  );
-  root.style.setProperty(
-    "--color-text-primary",
-    tokens["color.text.primary"].light,
-  );
-  root.style.setProperty(
-    "--color-text-muted",
-    tokens["color.text.muted"].light,
-  );
-  root.style.setProperty("--color-accent", tokens["color.accent"].light);
-  root.style.setProperty("--color-border", tokens["color.border"].light);
   root.style.setProperty("--font-family", tokens["font.family"]);
   root.style.setProperty("--font-size-body", tokens["font.size.body"]);
   root.style.setProperty(

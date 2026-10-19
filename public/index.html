@@ -9,15 +9,60 @@
     <title>모바일 마크다운 에디터 (HYK-304)</title>
     <style>
       :root {
+        /* PRD §3 "테마: 둘 다 + 시스템 자동(OS 변경 시 즉시 반영)". UA
+           기본 요소(스크롤바·폼 컨트롤)도 다크를 알게 해 둔다(선택 근거:
+           이것 없이는 브라우저가 라이트로 가정해 일부 UA 기본 위젯만
+           불일치가 남을 수 있다). */
+        color-scheme: light dark;
+        /* 아래 11개는 spec/design-tokens.json 의 색 11개를 그대로 CSS
+           변수로 옮긴 것(라이트 값, 값 반올림·대소문자 외 변형 0). 다크
+           값은 바로 아래 @media (prefers-color-scheme: dark) 블록에서
+           같은 11개 이름을 재선언한다 -- 매체질의는 브라우저가 스스로
+           다시 그리므로 JS 는 쓰지 않는다(결과 파일 §2 근거). */
         --color-bg: #fafaf8;
         --color-bg-elevated: #ffffff;
         --color-text-primary: #1a1a1a;
         --color-text-muted: #6b6b6b;
         --color-accent: #3b6fe0;
         --color-border: #ececea;
+        --color-state-error: #d14343;
+        --color-state-success: #2e7d52;
+        --color-accent-hover: #2f5bc0;
+        --color-disabled: #c4c4c2;
+        --color-focus-ring: #3b6fe0;
+        /* 토스트(#list-delete-toast · #notion-copy-toast)는 "일부러 반대
+           테마 값"을 쓰는 기존 선례(바로 아래 각 선택자 자리의 주석 참고)다
+           -- 다크 미디어 블록에서 재선언하지 않아 OS 테마와 무관하게 항상
+           같은 값으로 고정한다. 값은 토큰에서 그대로 가져왔다(새 값 0). */
+        --color-toast-bg: #2a2d33; /* = color.border 의 dark 값(고정) */
+        --color-toast-text: #fafaf8; /* = color.bg 의 light 값(고정) */
+        --color-toast-error-bg: #d14343; /* = color.state.error 의 light 값(고정, 기존 렌더 값 보존) */
+        --color-toast-error-text: #e06c6c; /* = color.state.error 의 dark 값(고정) -- 항상 어두운 토스트 표면(--color-toast-bg) 위 글자라 밝은 쪽 토큰 값을 쓴다 */
+        /* accent/accent-hover 위에 얹는 흰 글자(FAB "+" · 노션 복사 버튼
+           글자). 두 테마 모두 accent 가 채도 있는 파란이라 흰 글자가
+           계속 읽힌다(결과 파일 §2-4 대비 계산 칸). color.bg.elevated 의
+           light 값과 값이 같을 뿐 그 토큰의 "표면" 의미는 아니므로(다크에서
+           표면은 어두워지지만 accent 위 글자는 계속 밝아야 한다) 별도
+           이름으로 고정한다. */
+        --color-on-accent: #ffffff;
         --font-family: system-ui, -apple-system, "Pretendard", sans-serif;
         --font-size-body: 17px;
         --line-height-body: 1.6;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --color-bg: #16181c;
+          --color-bg-elevated: #1e2127;
+          --color-text-primary: #e6e6e3;
+          --color-text-muted: #9a9a97;
+          --color-accent: #5b8def;
+          --color-border: #2a2d33;
+          --color-state-error: #e06c6c;
+          --color-state-success: #5fb389;
+          --color-accent-hover: #7aa2f2;
+          --color-disabled: #3a3d44;
+          --color-focus-ring: #7aa2f2;
+        }
       }
       * {
         box-sizing: border-box;
@@ -121,7 +166,7 @@
         width: 100%;
         background: none;
         border: none;
-        color: #d14343;
+        color: var(--color-state-error);
         padding: 32px 8px;
         text-align: center;
         font: inherit;
@@ -142,8 +187,8 @@
         gap: 12px;
         padding: 10px 16px;
         border-radius: 8px;
-        background: #2a2d33;
-        color: #fafaf8;
+        background: var(--color-toast-bg);
+        color: var(--color-toast-text);
         font-size: 14px;
       }
       #list-delete-undo-button {
@@ -169,7 +214,7 @@
         min-width: 0;
         background: none;
         border: none;
-        color: #ff9b9b;
+        color: var(--color-toast-error-text);
         font: inherit;
         text-align: left;
         min-height: 44px;
@@ -185,7 +230,7 @@
         min-height: 44px;
         border-radius: 28px;
         background: var(--color-accent);
-        color: #ffffff;
+        color: var(--color-on-accent);
         border: none;
         font-size: 28px;
         line-height: 1;
@@ -333,12 +378,21 @@
         outline: 2px solid var(--color-accent);
         outline-offset: 2px;
       }
+      /* HYK-304-system-theme-1 §2 요구 3(판정 판단 2 A): 토큰 이탈
+         #fff3e0/#7a4a00 를 기존 토큰으로 맞춘다 -- 배경 color.bg.elevated
+         + 글자 color.text.primary(이 알림도 다른 평범한 표면 요소와 같은
+         "거슬림 없는" 카드로 보이게, PRD §1 톤). 경고 성격을 보여줄 전용
+         토큰이 없어(디자인 토큰에 "warning" 계열 0) 왼쪽 선만 color.
+         state.error 로 얇게 둬 눈에 띄는 정도를 유지한다(후보표 §2 판단
+         2 A 제안을 그대로 적용). 셋 다 테마를 그대로 탄다(라이트/다크 값이
+         있는 평범한 토큰이라 고정하지 않음). */
       #save-notice {
         margin-top: 8px;
-        padding: 8px 12px;
+        padding: 8px 12px 8px 9px;
         border-radius: 8px;
-        background: #fff3e0;
-        color: #7a4a00;
+        border-left: 3px solid var(--color-state-error);
+        background: var(--color-bg-elevated);
+        color: var(--color-text-primary);
         font-size: 13px;
       }
       #notion-copy-button {
@@ -348,32 +402,32 @@
         border: none;
         border-radius: 8px;
         background: var(--color-accent);
-        color: #ffffff;
+        color: var(--color-on-accent);
         font-size: 15px;
         font-weight: 600;
         cursor: pointer;
       }
       #notion-copy-button:hover:not(:disabled) {
-        background: #2f5bc0;
+        background: var(--color-accent-hover);
       }
       #notion-copy-button:focus-visible {
         outline: 2px solid var(--color-accent);
         outline-offset: 2px;
       }
       #notion-copy-button:disabled {
-        background: #c4c4c2;
+        background: var(--color-disabled);
         cursor: not-allowed;
       }
       #notion-copy-toast {
         margin-top: 8px;
         padding: 8px 12px;
         border-radius: 8px;
-        background: #2a2d33;
-        color: #fafaf8;
+        background: var(--color-toast-bg);
+        color: var(--color-toast-text);
         font-size: 13px;
       }
       #notion-copy-toast[data-variant="error"] {
-        background: #d14343;
+        background: var(--color-toast-error-bg);
       }
       .raw-section {
         margin-top: 16px;
