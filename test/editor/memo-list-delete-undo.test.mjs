@@ -1355,3 +1355,210 @@ test("저장 실패 문구는 책임자 결정④ 글자 그대로 고정된다(
     "책임자 결정④ 문구 리터럴과 글자 그대로 같아야 한다",
   );
 });
+
+// HYK-304-gone-held-priority-1(§2 요구 1, 관찰 1 닫힘 -- 검토 아카이브
+// D:\문서관리\하네스-관제실\아카이브\2026-10-17-B76-에디터-알림다듬기E5\
+// pr42-review\review.md §3 "관찰 · 상신 대상" PR-3 모양): 진짜 저장
+// 실패(held, B)가 떠 있는 동안 느린 저장소 끼어들기로 "이미 없는 메모"
+// (A)의 되돌리기 요청이 끼어들면, 예전에는 A 의 표시가 B 를 덮어
+// onErrorOverwritten(B) 로 B 의 유예가 재개됐고(§2-1 ⓐ 와 같은 경로),
+// 그 뒤 다른 메모(C) 성공이 A 표시를 닫으며 B 는 재시도 수단 없이
+// 원래 마감에 사라질 수 있었다(검토 §3 실측 `heldShown:true,
+// afterC:true,bAliveAfter30s:false`). 이 칸은 그 반대 -- B 가 끝까지
+// 덮이지 않는지를 값으로 잰다. 변이: showSaveError 의 held 우선 분기
+// (위, memo-list-mount.mjs)를 제거하면 이 칸은 RED 다.
+test("held 우선: 진짜 저장 실패(held) 표시는 이미 없는 메모의 끼어듦에도 덮이지 않고, 다른 메모 성공 뒤에도·가짜 시계 +30000ms 뒤에도 재시도 수단과 레코드가 살아있다(관찰 1 닫힘)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idHeld = await createMemoAt(
+    adapter,
+    "진짜 저장 실패(held, 우선 칸)",
+    100,
+  );
+  const idGone = await createMemoAt(
+    adapter,
+    "이미 사라진 메모(held 우선 칸)",
+    200,
+  );
+  const idOther = await createMemoAt(
+    adapter,
+    "다른 메모(성공, held 우선 칸)",
+    300,
+  );
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  // B(idHeld) 되돌리기 put 거부 -> 진짜 저장 실패(held) 표시.
+  swipe(container.querySelector(`[data-memo-id="${idHeld}"]`));
+  await settle();
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "전제: B 의 held 표시가 떠야 한다",
+  );
+
+  // A(idGone) 를 스와이프해 "이미 없는 메모"로 만들고(레코드 직접 제거)
+  // 되돌리기를 시도해 B 의 held 표시를 밀어내려 한다(요구 1 · 관찰 1).
+  swipe(container.querySelector(`[data-memo-id="${idGone}"]`));
+  await settle();
+  await adapter.remove(idGone);
+  toast.undoButton.click(); // 지금 active undo 는 A(idGone) 를 가리킨다
+  await settle();
+  await settle();
+
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 의 끼어듦 뒤에도 표시는 그대로 떠 있어야 한다(held 우선 -- 덮이지 않는다)",
+  );
+
+  // C(idOther) 성공 조작 뒤에도 B 의 held 표시는 유지돼야 한다(E3 P2-1
+  // 경계가 지키는 불변이 held 우선 칸이 추가돼도 깨지지 않아야 한다).
+  swipe(container.querySelector(`[data-memo-id="${idOther}"]`));
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "C 의 성공 조작 뒤에도 B 의 held 표시는 유지돼야 한다",
+  );
+
+  // B 의 유예가 "재개되지 않았다"를 가짜 시계로 값으로 잰다: A 의
+  // 끼어듦이 onErrorOverwritten(B) 를 그릇되게 불렀다면 B 는 "원래
+  // 마감" 기준으로 재예약돼 아래 advance 사이에 하드 삭제된다. held
+  // 우선이 지켜지면 B 는 hold 상태 그대로라 삭제되지 않는다.
+  clock.advance(30000);
+  await settle();
+  assert.ok(
+    await adapter.get(idHeld),
+    "B 의 유예가 재개되지 않았다면(held 우선) 가짜 시계 +30000ms 뒤에도 레코드가 살아있어야 한다",
+  );
+
+  // 마지막으로 B 자신의 재시도 수단이 끝까지 B 를 가리키고 있는지(엉뚱한
+  // id 로 바뀌어치기되지 않았는지)를 값으로 확인한다 -- A 의 레코드는
+  // 영구히 사라졌으므로, 만약 errorState 가 A 로 바뀌어치기됐다면 이
+  // 재시도는 영원히 다시 null 만 돌려줄 뿐 복원되지 않는다.
+  toast.errorButton.click();
+  await settle();
+  await settle();
+  assert.deepEqual(
+    cardIds(container).includes(idHeld),
+    true,
+    "B 의 재시도 버튼이 끝까지 B 를 가리키고 있어야(held 우선) 재시도로 B 가 복원된다",
+  );
+});
+
+// HYK-304-gone-held-priority-1(§2 요구 2, P3-1 닫힘 -- 검토 ⓑ PR-1 모양
+// 재현): 검토가 지적한 "다른 메모의 되돌리기 성공" 해제 경로(위
+// clearOnSuccess 호출부, handler 의 restore 성공 분기)는 mount 단독으로
+// 재현 "가능"하다(작성자 1R 자인 〔못쟀다〕를 이 칸으로 정정한다, 결과
+// 파일 §기록 정정). get 을 id 별로 잠시 막는 래퍼로 두 되돌리기(restore)
+// 의 완료 순서를 뒤바꿔, "스와이프 성공"이 아니라 "되돌리기 성공"만으로
+// 이미 없는 메모 표시가 닫히는 경로를 단독으로 태운다.
+test("P3-1: 다른 메모의 '되돌리기 성공'만으로도 이미 없는 메모의 표시가 닫힌다(mount 단독, 느린 저장소 끼어들기)", async () => {
+  const container = document.createElement("div");
+  const baseAdapter = createFakeAdapter();
+  const idGone = await createMemoAt(baseAdapter, "이미 사라진 메모(P3-1)", 100);
+  const idOther = await createMemoAt(
+    baseAdapter,
+    "다른 메모(되돌리기 성공, P3-1)",
+    200,
+  );
+  const clock = makeFakeClock();
+
+  // get 을 id 별로 잠시 막는 래퍼 -- 검토 원문 PR-1 모양(실제 저장소가
+  // 느릴 때 restore 가 await 하는 중에 다른 메모의 restore 가 먼저
+  // 끝나는 상황을 결정적으로 재현한다). put/list/remove 는 그대로
+  // baseAdapter 를 쓴다.
+  const gates = new Map();
+  function holdGet(id) {
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    gates.set(id, { gate, release });
+  }
+  function releaseGet(id) {
+    gates.get(id)?.release();
+  }
+  const adapter = {
+    ...baseAdapter,
+    async get(id) {
+      const pending = gates.get(id);
+      if (pending) await pending.gate;
+      return baseAdapter.get(id);
+    },
+  };
+
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  // A(idGone) 스와이프 -> 레코드 직접 제거(이미 없는 메모). 지금 active
+  // undo 는 A 를 가리킨다.
+  swipe(container.querySelector(`[data-memo-id="${idGone}"]`));
+  await settle();
+  await baseAdapter.remove(idGone);
+
+  // A 의 되돌리기를 누른다 -- get(A) 를 먼저 막아 둬서 이 restore 가
+  // "아직 안 끝난" 채로 매달려 있게 한다(느린 저장소 끼어들기 흉내).
+  holdGet(idGone);
+  toast.undoButton.click();
+  await settle();
+
+  // B(idOther) 를 스와이프한다 -- A 의 restore 가 아직 안 끝난 사이,
+  // B 는 (get 을 막지 않았으므로) 정상적으로 성공해 되돌리기 토스트로
+  // 바뀐다. 이 시점엔 A 쪽도 아직 "표시"가 뜨지 않은 채다(get 대기 중).
+  swipe(container.querySelector(`[data-memo-id="${idOther}"]`));
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    true,
+    "전제: A 의 되돌리기가 아직 안 끝났으므로 표시가 없어야 한다(errHiddenBeforeBUndo)",
+  );
+  assert.equal(
+    toast.undoButton.hidden,
+    false,
+    "B 삭제 뒤 되돌리기 버튼이 보여야 한다",
+  );
+
+  // B 의 되돌리기도 누른다 -- get(B) 도 막아 둬서 A·B 두 restore 가
+  // 동시에 매달려 있게 한다.
+  holdGet(idOther);
+  toast.undoButton.click();
+  await settle();
+
+  // A 의 get 을 먼저 풀어준다 -- A 는 이미 없는 메모이므로 restore 가
+  // null 을 돌려주고, "이미 없는 메모" 표시(goneRestore:true)가 뜬다.
+  releaseGet(idGone);
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 의 get 이 풀리면 이미 없는 메모 표시가 떠야 한다(goneShown)",
+  );
+  assert.equal(toast.errorButton.textContent, SAVE_ERROR_MESSAGE);
+
+  // 이제 B 의 get 을 풀어준다 -- B 는 실제로 존재하는 메모라 restore 가
+  // 성공하고, 그 "되돌리기 성공" 분기가(스와이프 성공이 아니라) A 의
+  // 표시를 닫여야 한다(P3-1 핵심 단언).
+  releaseGet(idOther);
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    true,
+    "B 의 '되돌리기 성공'(스와이프 성공이 아니다)만으로 A 의 이미 없는 메모 표시가 닫혀야 한다(P3-1, mount 단독 재현)",
+  );
+  const recordOther = await baseAdapter.get(idOther);
+  assert.equal(
+    recordOther.deletedAt,
+    null,
+    "B 는 되돌리기 성공으로 실제 복원돼야 한다",
+  );
+});
