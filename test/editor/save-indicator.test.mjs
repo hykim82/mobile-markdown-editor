@@ -4,14 +4,15 @@
 // 훅 -> storage-mount.mjs 의 mountStorage -> save-indicator.mjs, 셋 다
 // 복제 없이 그대로)으로 잰다.
 //
-// 〔직접〕 app.mjs 를 esbuild 로 다시 부팅(test/support/app-harness.mjs)해
-// 실제 키 입력으로 1초 디바운스 자동저장을 재는 기존 시험은 이 저장소에
-// 없다 -- app-wiring.test.mjs/first-paint*.test.mjs 는 전부 seedMemo(미리
-// 데이터만 심기)나 makeProductEditor()+editor.update()(편집기 상태를
-// 직접 바꾸기)로만 "입력"을 만든다. jsdom 의 contenteditable 은 실제
-// 키보드 입력을 흉내 내지 않으므로(브라우저 네이티브 입력 처리가 없다),
-// 이 저장소 어떤 시험도 bootApp() 위에서 "진짜 타이핑"을 하지 않는다.
-// 같은 선례를 따라 이 시험도 editor 자체는 쓰지 않고(저장소 상태 전이가
+// 〔직접 · HYK-304-e10-p3-cleanup-1 P3-3 정정〕 작성 당시(app-wiring.test.mjs/
+// first-paint*.test.mjs 는 전부 seedMemo(미리 데이터만 심기)나
+// makeProductEditor()+editor.update()(편집기 상태를 직접 바꾸기)로만
+// "입력"을 만들던 시절)에는 이 저장소 어떤 시험도 bootApp() 위에서 "진짜
+// 타이핑"을 하지 않았다. 지금은 이 파일 자신의 P2-1 칸(아래, 검토 1R
+// P2-1)이 bootApp() + test/support/bundle-typing.mjs 의 typeBeforeInput 으로
+// 실제 번들 Lexical 위에 진짜 beforeinput 을 쏴 그 경로를 잰다 -- 이 문단
+// 아래 ⓐ~ⓔ·"저장공간 부족" 칸만 그 선례(= bootApp 미사용)를 그대로
+// 따른다. 그 칸들은 editor 자체는 쓰지 않고(저장소 상태 전이가
 // 전부 memo-store.mjs 안에 있으므로, mountStorage 가 돌려주는 store의
 // onContentChange 를 memo-store.test.mjs 와 같은 방식으로 직접 부른다),
 // save-indicator 엘리먼트는 public/index.html 실물 마크업에서 그대로
@@ -237,6 +238,15 @@ test("ⓓ 빈 메모(첫 글자 전 · 전부 지워 빈 문자열) → '저장�
     false,
     "빈 메모로 돌아가면 '저장됨'이 다시 내려가야 한다",
   );
+  // HYK-304-e10-p3-cleanup-1 P3-2(검토 N9): idle 전이에서 classList 만 보고
+  // aria-hidden 은 안 보면, hide 분기의 setAttribute 를 `if (status !==
+  // "idle")` 로 감싸 idle 만 aria-hidden 세팅을 빼먹어도(화면 낭독기에는
+  // "저장됨"이 계속 읽힌다, PRD §8) 이 칸이 그대로 초록으로 살아남는다.
+  assert.equal(
+    indicator.getAttribute("aria-hidden"),
+    "true",
+    "idle(빈 메모)로 돌아가도 aria-hidden=true 로 화면 낭독기에서 숨어야 한다",
+  );
 });
 
 test("저장공간 부족(quota-exceeded)도 실패와 같이 '저장됨'이 안 보인다", async (t) => {
@@ -302,7 +312,19 @@ test("P2-1 번들 경로: 실제 app.mjs 결선 위에서 타이핑 → 저장 �
 
   // 첫 글자(=생성) 는 디바운스 없이 즉시 저장된다(memo-store.mjs
   // createNewMemo 주석) -- 1초 대기 없이 바로 결과를 볼 수 있다.
-  typeBeforeInput(dom, root, "insertText", "a");
+  // HYK-304-e10-p3-cleanup-1 P3-1(검토 N5·N6·N8): installBeforeInputShims 가
+  // 끄여도(InputEvent.getTargetRanges · Range.getBoundingClientRect 둘 다
+  // 없음) typeBeforeInput 이 "native" 로 떨어져 텍스트 노드를 직접 고치고
+  // input 이벤트만으로도 memo-store 까지 닿아 이 칸이 그대로 초록으로
+  // 살아남는다(shim 하중이 실제로 쓰이는지 이 칸은 안 잰다). 반환값이
+  // "controlled" 인지 단언해 Lexical 이 beforeinput 자체를 defaultPrevented
+  // 로 처리(CONTROLLED_TEXT_INSERTION_COMMAND)했는지, 즉 shim 두 개가 실제로
+  // 그 경로를 열었는지를 값으로 가른다.
+  assert.equal(
+    typeBeforeInput(dom, root, "insertText", "a"),
+    "controlled",
+    "shim(getTargetRanges · getBoundingClientRect) 이 걸려 있어야 Lexical 이 beforeinput 을 controlled 경로로 처리한다",
+  );
   await waitFor(() => isVisible(indicator) === true);
   assert.equal(
     isVisible(indicator),

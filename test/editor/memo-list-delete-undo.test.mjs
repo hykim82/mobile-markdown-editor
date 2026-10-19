@@ -1836,6 +1836,15 @@ test("gone→gone: 이미 없는 메모 표시 중 다른 이미 없는 메모�
   // 확인한다 -- 재시도를 누르면 restore 가 "마지막으로" 어느 id 로
   // 불렸는지 본다. M5(무조건 버림)라면 표시는 여전히 A 를 가리켜
   // 재시도가 A 로 불린다.
+  // HYK-304-e10-p3-cleanup-1 P3-3(검토 M11 = M5+M10): restoreCalls 의
+  // 마지막 원소는 재시도 클릭 "전에" 이미 idC 다(C 의 되돌리기 클릭이
+  // restore(C) 를 불렀기 때문) -- 그래서 재시도의 onClick 자체를
+  // 무동작으로 만들어도(goneRestore 표시의 재시도가 실제로는 아무
+  // restore 도 안 부름) 아래 "마지막 원소 == idC" 단언은 그대로 통과한다.
+  // 클릭 "전후" 호출 수가 1 늘었는지 함께 단언해 재시도가 실제로 restore
+  // 를 호출했는지(그래서 표시가 정말 C 로 살아있는 덮어쓰기 경로를
+  // 탔는지) 가른다.
+  const restoreCallsBeforeRetry = restoreCalls.length;
   toast.errorButton.click();
   await settle();
   await settle();
@@ -1844,5 +1853,10 @@ test("gone→gone: 이미 없는 메모 표시 중 다른 이미 없는 메모�
     restoreCalls[restoreCalls.length - 1],
     idC,
     "재시도가 C 의 restore 를 불러야 한다(표시가 C 로 정상 덮어써졌다는 뜻 -- gone→gone 덮어쓰기 경로 유지 · M5 생존 대상)",
+  );
+  assert.equal(
+    restoreCalls.length,
+    restoreCallsBeforeRetry + 1,
+    "재시도 클릭이 실제로 restore 를 1회 더 불러야 한다(M11: onClick 이 무동작이면 호출 수가 그대로다)",
   );
 });
