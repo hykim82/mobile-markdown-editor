@@ -1567,6 +1567,14 @@ test("P3-1: 다른 메모의 '되돌리기 성공'만으로도 이미 없는 메
 // 불변» 확인): held 우선 분기는 "gone 이 held 를 덮는" 한 방향만 막는다
 // -- 반대 방향(진짜 저장 실패가 먼저 뜬 gone 표시를 덮는 것)은 기존
 // "덮어쓰기 = 해소" 그대로 동작해야 한다(held 쪽이 더 급한 신호이므로).
+// ⚠️B 의 저장 실패를 "스와이프 성공 뒤 되돌리기 실패"로 만들면
+// handleSwipeDelete 의 성공 분기(clearOnSuccess)가 그 스와이프 성공
+// 자체만으로 A 의 gone 표시를 먼저 닫아버려(E3 P2-1 경로), showSaveError
+// 의 덮어쓰기 분기를 전혀 태우지 않고도 이 칸이 통과해 버린다(약한 칸).
+// 그래서 여기서는 B 의 "스와이프 자체"가 처음부터 실패하게 만든다 --
+// handleSwipeDelete 의 catch 분기(성공 경로를 전혀 거치지 않는다)가
+// 곧장 showSaveError 를 불러, A 의 gone 표시가 아직 떠 있는 채로 그
+// 덮어쓰기 분기를 직접 태운다.
 test("gone→held: 이미 없는 메모 표시 뒤에 진짜 저장 실패(held)가 오면 정상적으로 덮어쓴다(held 우선 분기는 한 방향만 막는다)", async () => {
   const container = document.createElement("div");
   const adapter = createFakeAdapter();
@@ -1597,14 +1605,18 @@ test("gone→held: 이미 없는 메모 표시 뒤에 진짜 저장 실패(held)
     "전제: A 의 gone 표시가 떠야 한다",
   );
 
-  // B(idHeld) 를 스와이프해 되돌리기를 시도하고 put 을 거부시켜 진짜
-  // 저장 실패(held)를 만든다 -- gone 표시를 덮어써야 한다.
+  // B(idHeld) 의 스와이프 자체가 put 거부로 실패한다(성공 분기를 전혀
+  // 거치지 않는다) -- catch 가 곧장 showSaveError 를 불러 A 의 gone
+  // 표시를 덮어써야 한다(held 우선 분기의 반대 방향).
+  adapter.forceNextPutFailures(1);
   swipe(container.querySelector(`[data-memo-id="${idHeld}"]`));
   await settle();
-  adapter.forceNextPutFailures(1);
-  toast.undoButton.click();
   await settle();
-  await settle();
+  assert.deepEqual(
+    cardIds(container),
+    [idHeld],
+    "스와이프 자체가 실패했으니 B 카드는 그대로 목록에 남아있어야 한다",
+  );
   assert.equal(
     toast.errorButton.hidden,
     false,
@@ -1612,14 +1624,16 @@ test("gone→held: 이미 없는 메모 표시 뒤에 진짜 저장 실패(held)
   );
 
   // 표시가 실제로 B 를 가리키는지(바뀌어치기됐는지)를 값으로 확인한다:
-  // 재시도하면 B 가 복원돼야 한다 -- A 는 영구히 사라졌으므로 재시도가
-  // 여전히 A 를 가리킨다면 이 복원은 절대 일어나지 않는다.
+  // 재시도(=스와이프 삭제 재시도)가 이번엔 성공해 B 카드가 목록에서
+  // 사라져야 한다 -- 표시가 여전히 A(gone, 영구히 사라진 메모)를
+  // 가리키고 있었다면 이 재시도는 A 쪽 되돌리기를 다시 시도할 뿐이라
+  // B 카드는 그대로 남는다.
   toast.errorButton.click();
   await settle();
   await settle();
   assert.deepEqual(
     cardIds(container).includes(idHeld),
-    true,
-    "표시가 B 로 정상 덮어써졌어야(held 우선 분기는 한 방향만 막는다) 재시도로 B 가 복원된다",
+    false,
+    "표시가 B 로 정상 덮어써졌어야(held 우선 분기는 한 방향만 막는다) 재시도로 B 스와이프 삭제가 성공한다",
   );
 });
