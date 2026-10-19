@@ -220,7 +220,19 @@ export function collectTotalSessionBytes(
   );
   if (!rootCheck.ok) return rootCheck;
   if (rootCheck.missing) {
-    return { ok: true, totalBytes: 0, fileCount: 0, excludedSymlinkCount: 0 };
+    // ★HYK-280(coder-task.md §3) -- "세션이 아직 없다"(정상)와 "관측
+    // 자체가 안 됐다"(폴더 이름 파생 규칙이 실물과 어긋났을 가능성 등)를
+    // totalBytes:0 하나로 뭉개지 않는다. `observationUnavailable:true`는
+    // 호출부(dispatch-start-confirm-cli.mjs)가 NOT_STARTED("재배달
+    // 필요")로 접기 전에 "이 폴더 자체를 못 찾았다"를 구별할 수 있게
+    // 하는 부가 신호다(기존 필드는 그대로 -- 회귀 0).
+    return {
+      ok: true,
+      totalBytes: 0,
+      fileCount: 0,
+      excludedSymlinkCount: 0,
+      observationUnavailable: true,
+    };
   }
   if (!rootCheck.trusted) {
     // ★4R -- 뿌리 자신(claudeHomeDir·projects·projectDir 중 하나)이
