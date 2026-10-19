@@ -7,6 +7,7 @@
 import { serializeEditorToMarkdown } from "./serialize.mjs";
 import { restoreMarkdownIntoEditor } from "./restore.mjs";
 import { CURSOR_RAW_TAG } from "./cursor-raw.mjs";
+import { updateSaveIndicator } from "./save-indicator.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
 import {
   createMemoStore,
@@ -165,10 +166,14 @@ export function mountStorage(
   notice,
   adapter = createIndexedDbAdapter(),
   restoreOptions = {},
+  saveIndicatorEl = null,
 ) {
   const logFn = restoreOptions.logFn ?? ((...args) => console.error(...args));
   const store = createMemoStore(adapter, {
-    onStatusChange: (status) => updateSaveNotice(notice, status),
+    onStatusChange: (status) => {
+      updateSaveNotice(notice, status);
+      updateSaveIndicator(saveIndicatorEl, status);
+    },
   });
 
   const restoreState = {
