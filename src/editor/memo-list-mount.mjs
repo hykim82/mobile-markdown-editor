@@ -122,7 +122,18 @@ function createToastController(toast, { onErrorOverwritten } = {}) {
       // 원래 없었다 -- 위 restore(id) null 분기 주석 참고). 그 밖의
       // 조합(held→held · gone→held · gone→gone)은 전부 기존대로 아래
       // 덮어쓰기 경로를 그대로 탄다.
-      if (!errorState.goneRestore && goneRestore) {
+      // r2(HYK-304-gone-held-priority-1-r2, §2 요구 2, 검토 1R §2 ⓒ):
+      // 이 held 우선은 "다른(이미 없는) 메모"의 끼어듦만 막아야 한다 --
+      // "같은" id 가 자기 자신의 재시도에서 레코드가 그 사이 사라진
+      // 것을 발견한 경우(held→gone, 자기 발견)는 막을 대상이 아니다.
+      // 그 메모는 더 이상 "저장 실패"가 아니라 정말로 없는 메모이므로
+      // (재시도 수단 자체가 의미를 잃는다), base(b54bf31) 처럼 아래
+      // 덮어쓰기 경로로 통과시켜 goneRestore 표시로 전환돼야 다른
+      // 메모의 성공 조작으로 닫힐 수 있다(clearGoneRestoreOnSuccess).
+      // id 가 같을 때 이 분기를 막지 않으면(1R 상태), 그 표시는
+      // goneRestore:false 로 영원히 고정돼 §한계의 "닫히지 않는" 회귀가
+      // 된다.
+      if (!errorState.goneRestore && goneRestore && errorState.id !== id) {
         return;
       }
       toast.errorButton.removeEventListener("click", errorState.onClick);

@@ -83,6 +83,46 @@ function makeFakeClock() {
   };
 }
 
+// HYK-304-gone-held-priority-1-r2(§2 요구 3 보조): "느린 저장소
+// 끼어들기"(P3-1 시험과 같은 모양 -- get 을 id 별로 잠시 막는 래퍼)에
+// createLifecycle 스파이(restore 호출 순서 기록)를 더한 공용 헬퍼 --
+// gone→gone 칸(아래)이 이 둘을 함께 써서, 두 "이미 없는" 메모의
+// restore 를 동시에 매달아 둔 채 재시도가 마지막에 어느 id 를
+// 불렀는지로 덮어쓰기가 실제로 일어났는지를 값으로 가른다.
+function makeInterleavedRestoreHarness(baseAdapter) {
+  const restoreCalls = [];
+  const gates = new Map();
+  function holdGet(id) {
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    gates.set(id, { gate, release });
+  }
+  function releaseGet(id) {
+    gates.get(id)?.release();
+  }
+  const adapter = {
+    ...baseAdapter,
+    async get(id) {
+      const pending = gates.get(id);
+      if (pending) await pending.gate;
+      return baseAdapter.get(id);
+    },
+  };
+  const createLifecycle = (innerAdapter, options) => {
+    const real = createSoftDeleteLifecycle(innerAdapter, options);
+    return {
+      ...real,
+      restore: async (id) => {
+        restoreCalls.push(id);
+        return real.restore(id);
+      },
+    };
+  };
+  return { adapter, createLifecycle, holdGet, releaseGet, restoreCalls };
+}
+
 function dispatchPointer(el, type, clientX) {
   const event = new window.Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clientX", { value: clientX });
@@ -1635,5 +1675,174 @@ test("gone→held: 이미 없는 메모 표시 뒤에 진짜 저장 실패(held)
     cardIds(container).includes(idHeld),
     false,
     "표시가 B 로 정상 덮어써졌어야(held 우선 분기는 한 방향만 막는다) 재시도로 B 스와이프 삭제가 성공한다",
+  );
+});
+
+// HYK-304-gone-held-priority-1-r2(§2 요구 2, base 대비 회귀 재현 ·
+// 책임자 판정 1b_shown): held 우선 분기(위 "held 우선" 시험, §2 요구 1)
+// 는 "다른" id 의 끼어듦만 막아야 하는데, 1R 은 id 를 안 가려 "같은"
+// id 가 자기 자신의 재시도에서 레코드가 그 사이 사라진 것을 발견한
+// 경우(held→gone, 자기 발견)까지 막아버렸다 -- 그 표시는 goneRestore:
+// false 로 영원히 고정돼 어떤 성공 조작으로도 닫히지 않는다(base
+// b54bf31 대비 회귀, 검토 1R 아카이브 §2 ⓒ). 여기서는 A 자신의
+// 재시도가 gone 을 발견한 뒤, 다른 메모(C)의 성공 조작으로 그 표시가
+// 닫히는지를 값으로 잰다 -- 기준선 d5cd8e7 에서는 RED(닫히지 않는다),
+// r2 수정 뒤에는 GREEN(닫힌다, base 와 같은 동작으로 정정).
+test("같은 id held→gone: 레코드가 사라진 뒤의 자기 재시도는 다른 메모 성공으로 표시가 닫힌다(1b_shown, 기준선 d5cd8e7 에서 RED)", async () => {
+  const container = document.createElement("div");
+  const adapter = createFakeAdapter();
+  const idA = await createMemoAt(
+    adapter,
+    "진짜 저장 실패 후 레코드가 사라진 메모(같은 id 칸)",
+    100,
+  );
+  const idC = await createMemoAt(adapter, "다른 메모(성공, 같은 id 칸)", 200);
+  const clock = makeFakeClock();
+  const { list, toast } = makeList(container, adapter, clock);
+  await list.refresh();
+
+  // A 스와이프 → 되돌리기 put 거부(진짜 저장 실패, held) 표시.
+  swipe(container.querySelector(`[data-memo-id="${idA}"]`));
+  await settle();
+  adapter.forceNextPutFailures(1);
+  toast.undoButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "전제: A 의 held 표시가 떠야 한다",
+  );
+
+  // A 의 레코드가 그 사이 저장소에서 직접 사라진다(예: 동시 정리) --
+  // 아직 A 의 held 표시는 그대로 떠 있는 채다.
+  await adapter.remove(idA);
+
+  // A 자신의 재시도(같은 id) -- restore(A) 가 null 을 돌려주며 "이미
+  // 없는 메모"임을 발견한다. 1R 은 이 자리에서 id 를 안 가려 held 우선
+  // 분기가 이 자기 발견까지 막아버렸다(회귀) -- r2 는 같은 id 면 막지
+  // 않고 goneRestore 표시로 전환돼야 한다.
+  toast.errorButton.click();
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "A 자신의 재시도 뒤에도 표시는 그대로 떠 있어야 한다(아직 안 닫힘)",
+  );
+
+  // C 를 스와이프해 성공시킨다 -- A 의 표시가 goneRestore 로 제대로
+  // 전환됐다면 이 성공 조작(clearGoneRestoreOnSuccess)으로 닫혀야
+  // 한다(base b54bf31 과 같은 동작).
+  swipe(container.querySelector(`[data-memo-id="${idC}"]`));
+  await settle();
+  await settle();
+
+  assert.equal(
+    toast.errorButton.hidden,
+    true,
+    "A 자신의 held→gone 전환 뒤에는 다른 메모(C)의 성공 조작으로 표시가 닫혀야 한다(기준선 d5cd8e7 에서는 안 닫혀 RED, base b54bf31 동작과 일치해야 한다)",
+  );
+});
+
+// HYK-304-gone-held-priority-1-r2(§2 요구 3, P3-3 gone→gone 칸 · 변이
+// M5 생존 대상): held 우선 분기(§2 요구 1)는 "held 쪽이 떠 있을 때
+// gone 이 끼어드는" 한 경우만 막아야 한다 -- 이미 "gone" 표시가 떠
+// 있는 상태에서 다른(이미 없는) 메모의 gone 요청이 오는 경우(둘 다
+// goneRestore:true)는 기존 "덮어쓰기 = 해소" 경로를 그대로 타야 한다
+// (동작 불변, 1R·r2 모두 이 경로는 안 건드렸다). 변이 M5("goneRestore
+// 면 무조건 버린다" -- 현재 errorState 의 종류를 안 가리고 항상 막는
+// 잘못된 구현)는 이 칸을 RED 로 만든다: 그런 구현에서는 A 의 gone
+// 표시가 C 의 gone 요청으로 전혀 안 바뀌어 재시도가 끝까지 A 를
+// 가리킨다. P3-1 시험과 같은 "느린 저장소 끼어들기"(get 을 id 별로
+// 잠시 막는 래퍼)로 A·C 의 restore 를 동시에 매달아 둬, "다른 메모의
+// 성공 조작"(clearGoneRestoreOnSuccess)이 먼저 끼어들어 이 칸을
+// 흐리지 않게 한다 -- 표시가 실제로 C 로 덮어써졌는지는 createLifecycle
+// 스파이로 "재시도가 마지막에 어느 id 의 restore 를 불렀는지" 직접
+// 관찰해 가른다(두 id 모두 "이미 없음"이라 문구·가시성만으로는 A 와
+// C 를 구분할 수 없기 때문).
+test("gone→gone: 이미 없는 메모 표시 중 다른 이미 없는 메모의 gone 요청은 기존 덮어쓰기 경로로 통과한다(P3-3 닫힘, M5 생존 대상)", async () => {
+  const container = document.createElement("div");
+  const baseAdapter = createFakeAdapter();
+  const idA = await createMemoAt(
+    baseAdapter,
+    "이미 사라진 메모 A(gone→gone 칸)",
+    100,
+  );
+  const idC = await createMemoAt(
+    baseAdapter,
+    "이미 사라진 메모 C(gone→gone 칸)",
+    200,
+  );
+  const clock = makeFakeClock();
+  const { adapter, createLifecycle, holdGet, releaseGet, restoreCalls } =
+    makeInterleavedRestoreHarness(baseAdapter);
+
+  const { list, toast } = makeList(container, adapter, clock, {
+    createLifecycle,
+  });
+  await list.refresh();
+
+  // A 스와이프 → 레코드 직접 제거(이미 없는 메모) → 되돌리기(아직 안
+  // 끝난 채 매달아 둔다).
+  swipe(container.querySelector(`[data-memo-id="${idA}"]`));
+  await settle();
+  await baseAdapter.remove(idA);
+  holdGet(idA);
+  toast.undoButton.click();
+  await settle();
+
+  // C 스와이프(성공, get 을 막지 않았으므로 정상 종료) → C 의 되돌리기
+  // 토스트가 뜬다. 이 시점 A 쪽은 아직 restore 가 안 끝나 표시가
+  // 없다(P3-1 시험과 같은 전제 -- "다른 메모의 성공 조작"이 먼저
+  // 끼어들어 이 칸을 흐리지 않게 한다).
+  swipe(container.querySelector(`[data-memo-id="${idC}"]`));
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    true,
+    "전제: A 의 되돌리기가 아직 안 끝났으므로 표시가 없어야 한다",
+  );
+
+  // C 의 레코드도 직접 제거(이미 없는 메모로 만든다) → C 의 되돌리기도
+  // 매달아 둔다.
+  await baseAdapter.remove(idC);
+  holdGet(idC);
+  toast.undoButton.click();
+  await settle();
+
+  // A 의 get 을 먼저 풀어준다 -- A 는 이미 없으므로 restore 가 null 을
+  // 돌려주고 "이미 없는 메모" 표시(goneRestore:true)가 뜬다.
+  releaseGet(idA);
+  await settle();
+  await settle();
+  assert.equal(toast.errorButton.hidden, false, "A 의 gone 표시가 떠야 한다");
+
+  // C 의 get 을 풀어준다 -- C 도 이미 없으므로 restore 가 null 을
+  // 돌려주고 똑같이 goneRestore:true 요청을 한다(gone→gone). held
+  // 우선 분기는 errorState.goneRestore 가 이미 true 이므로 이 요청을
+  // 막지 않아야 하고(요구 1 은 held 쪽만 지킨다), 기존 덮어쓰기 경로를
+  // 타 errorState 가 C 로 바뀌어야 한다.
+  releaseGet(idC);
+  await settle();
+  await settle();
+  assert.equal(
+    toast.errorButton.hidden,
+    false,
+    "C 의 gone 표시로 덮어써진 뒤에도 표시 자체는 계속 떠 있어야 한다",
+  );
+
+  // 표시가 실제로 C 로 덮어써졌는지(바뀌어치기됐는지)를 값으로
+  // 확인한다 -- 재시도를 누르면 restore 가 "마지막으로" 어느 id 로
+  // 불렸는지 본다. M5(무조건 버림)라면 표시는 여전히 A 를 가리켜
+  // 재시도가 A 로 불린다.
+  toast.errorButton.click();
+  await settle();
+  await settle();
+
+  assert.equal(
+    restoreCalls[restoreCalls.length - 1],
+    idC,
+    "재시도가 C 의 restore 를 불러야 한다(표시가 C 로 정상 덮어써졌다는 뜻 -- gone→gone 덮어쓰기 경로 유지 · M5 생존 대상)",
   );
 });
