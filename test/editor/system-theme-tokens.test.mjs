@@ -68,7 +68,14 @@ function parseThemeRules(html) {
   const colorSchemeValue = rootRule
     ? rootRule.style.getPropertyValue("color-scheme").trim()
     : "";
-  return { rootRule, darkRootRule, colorSchemeValue, sheet };
+  return {
+    rootRule,
+    darkRootRule,
+    colorSchemeValue,
+    sheet,
+    window: dom.window,
+    document: dom.window.document,
+  };
 }
 
 // :root 가 아닌 모든 선택자(다크 블록 안의 :root 포함 -- selectorText 는
@@ -623,7 +630,13 @@ test("대비 가드(실패형): 화면에 실제로 쓰이는 글자/배경 쌍�
         theme,
         fg,
         bg,
+        // HYK-304-contrast-guard-e12-1 §2 요구 2 ⑴(E11 검토 P2-1): 판정은
+        // 아래 rawRatio(반올림 전 실수)로 한다 -- toFixed(2) 반올림은
+        // 4.4950 류 경계값을 "4.50"으로 올려 거짓 GREEN 을 낸다(R1 제자리
+        // 변이로 실증, 이 라운드가 고친 구멍). ratio(반올림 후)는 표시
+        // 문구용으로만 남긴다(판정에 쓰지 않음).
         ratio: Number(ratio.toFixed(2)),
+        rawRatio: ratio,
         minRatio: def.minRatio,
         exception: def.exception ?? null,
         note: def.note ?? null,
@@ -637,8 +650,8 @@ test("대비 가드(실패형): 화면에 실제로 쓰이는 글자/배경 쌍�
   t.diagnostic(`대비 가드 표(§2 요구 3): ${JSON.stringify(rows)}`);
   for (const row of rows) {
     assert.ok(
-      Number.isFinite(row.ratio) && row.ratio >= row.minRatio,
-      `${row.label}(${row.theme}) ${row.fg} on ${row.bg} = ${row.ratio} (요구 ≥ ${row.minRatio}${row.exception ? " · " + row.exception : ""})`,
+      Number.isFinite(row.rawRatio) && row.rawRatio >= row.minRatio,
+      `${row.label}(${row.theme}) ${row.fg} on ${row.bg} = ${row.ratio}(반올림 전 ${row.rawRatio}) (요구 ≥ ${row.minRatio}${row.exception ? " · " + row.exception : ""})`,
     );
   }
 });
@@ -717,6 +730,19 @@ const BINDING_DEFS = [
     property: "background",
     expected: "var(--color-bg-elevated)",
   },
+  // HYK-304-contrast-guard-e12-1 §2 요구 2 ⑶(E11 검토 ⓒ V3 · P3-1): 위
+  // "노션 복사 오류 토스트 글자" PAIR_DEFS 행은 bg 를 고정 문자열
+  // "--color-toast-error-bg" 로 적어 :root 값만 보고, 이 선택자의 실제
+  // background 선언이 그 변수를 여전히 쓰는지는 안 본다 -- 그래서 V3
+  // (이 선택자의 background 를 var(--color-bg-elevated) 로 바꿔치기)가
+  // 대비 가드·리터럴-0·기존 결선 칸을 모두 통과하며 생존했다(검토 ⓒ
+  // "생존 12/12"). 이 항목은 .memo-list-error 배경 결선과 같은 방식
+  // (findRulesBySelector + getPropertyValue)으로 그 선언 자체를 잡는다.
+  {
+    selector: '#notion-copy-toast[data-variant="error"]',
+    property: "background",
+    expected: "var(--color-toast-error-bg)",
+  },
 ];
 
 for (const def of BINDING_DEFS) {
@@ -737,6 +763,38 @@ for (const def of BINDING_DEFS) {
     );
   });
 }
+
+// HYK-304-contrast-guard-e12-1 §2 요구 2 ⑶(E11 검토 ⓒ V2 · P3-1): 위
+// BINDING_DEFS/findRulesBySelector 는 selectorText 가 정확히 같은 규칙만
+// 센다 -- 더 구체적인 후손 선택자(`#list-delete-toast #list-delete-undo-button`)
+// 를 따로 추가해 같은 엘리먼트의 color 를 덮어써도(검토 V2, 생존 12/12)
+// 그 선택자 자체는 손대지 않아 "정확히 1개" 단언이 그대로 통과한다.
+// window.getComputedStyle 은 selectorText 비교가 아니라 실제 엘리먼트에
+// 선택자 매칭 + 캐스케이드를 적용해 "최종 승자" 선언을 읽으므로 이
+// 반쪽을 잡는다 -- parseThemeRules 가 이미 올린 같은 jsdom document를
+// 쓴다(새 DOM 안 띄움).
+//
+// 한계(정직, 직접 실험으로 확인): jsdom(27.0.0)의 getComputedStyle 캐스케이드는
+// CSS 특이성이 아니라 "소스 순서상 마지막으로 매칭된 규칙"을 택하는 간이
+// 구현이다 -- 후손 선택자를 원본 규칙보다 소스 순서상 *앞*에 두면(실제
+// 브라우저라면 특이성으로 이겨야 함) jsdom 은 거꾸로 뒤에 오는 낮은
+// 특이성 규칙을 택한다(직접 실험: 동일 HTML에서 순서만 바꿔 재현).
+// 그래서 이 칸은 "원본 규칙보다 소스 순서가 늦은" 덮어쓰기만 확실히
+// 잡고, 더 앞서 선언됐지만 실제로는 특이성으로 이기는 모양은 못 잡는다
+// -- 일반 결선(모든 위치 조합)은 범위 밖, 이 칸은 V2 가 재현한 모양
+// (추가 삽입 = 소스 순서상 뒤)만 잡는 것으로 정직하게 남긴다.
+test("결선(computed-cascade, E12): #list-delete-undo-button 의 computed color 가 후손 선택자 덮어쓰기까지 반영해 rgb(122, 162, 242) 다", async () => {
+  const html = await loadIndexHtml();
+  const { window, document } = parseThemeRules(html);
+  const el = document.getElementById("list-delete-undo-button");
+  assert.ok(el, "전제: #list-delete-undo-button 엘리먼트가 있어야 한다");
+  const computed = window.getComputedStyle(el).getPropertyValue("color");
+  assert.equal(
+    computed,
+    "rgb(122, 162, 242)",
+    `#list-delete-undo-button 의 computed color 가 rgb(122, 162, 242)(#7aa2f2) 여야 하는데 ${computed}다(더 구체적인 선택자가 소스 순서상 뒤에서 덮어썼을 수 있다)`,
+  );
+});
 
 // HYK-304-contrast-e11-1 §2 요구 5(밑줄 비색 칸 -- P3-2). #list-save-error-button
 // 의 "오류 = 밑줄"(색이 아닌 표시) 관례가 그대로 남아 있는지를 재는 칸은
@@ -762,51 +820,74 @@ test("밑줄(비색 표시, E11): #list-save-error-button 의 text-decoration �
   );
 });
 
-// HYK-304-contrast-e11-1 §2 요구 6(대비 반올림 경계). 위 "대비 가드" 시험은
-// `ratio: Number(ratio.toFixed(2))` 로 소수 2자리까지 반올림한 값을
-// minRatio 와 비교한다(line 583 부근, 비교는 "반올림 후" 값으로 한다 --
-// 반올림 전 원시 값과 비교하지 않는다). JS 의 toFixed 는 부동소수 표현
-// 때문에 4.495 류의 경계값이 "반올림 전 실제로는 4.5 미달"인데도
-// "4.50"으로 올라갈 수 있다(아래에서 직접 값으로 보인다) -- 즉 이 게이트는
-// 경계에 아주 가까운 쌍(차이가 0.005 이내)에서는 반올림 때문에 거짓
-// GREEN 을 낼 수 있는 알려진 한계가 있다. 이 라운드가 고친 세 쌍의
-// 실측 마진(4.57 · 4.57 · 5.44 · 5.02, 모두 minRatio 4.5 와 0.02 이상
-// 차이)은 이 경계 폭(0.005)보다 훨씬 커서 이 한계의 영향을 받지 않는다 --
-// 그 사실을 아래에서 직접 계산해 단언한다(두 자리 반올림 후 값과
-// 4.5 사이 거리가 0.005 초과인지를 잰다, 손으로 베낀 숫자가 아니라
-// 이 파일의 contrastRatio 로 다시 계산한 값).
-test("대비 반올림 경계(E11): toFixed(2) 반올림 방식 확인 + 이 라운드가 고친 세 쌍의 마진이 경계 폭보다 크다", () => {
-  // 1) 반올림 방식 자체: JS toFixed 는 IEEE754 표현 오차로 4.495 를
-  // 4.50 으로 올린다(사사오입이 아니라 부동소수 표현 아티팩트) -- 이
-  // 게이트가 쓰는 비교가 "반올림 후" 값이라는 전제를 직접 값으로 보인다.
+// HYK-304-contrast-guard-e12-1 §2 요구 2 ⑵(E11 검토 ⓕ·ⓗ P2-1): 이 경계
+// 칸의 fixedPairs 는 E11 까지 손으로 적은 hex 8개였다(검토 지적 그대로 --
+// "숫자를 손으로 베끼지 않는다"던 주석과 달리 실제로는 베껴 적혀 있었다).
+// 그래서 production CSS 선언이 바뀌어도(R1 제자리 변이처럼) 이 칸은
+// 따라가지 않았다. 이제 색 값을 여기 적지 않고 PAIR_DEFS 에 이미 있는
+// 그 세 쌍의 fg/bg 스펙(문자열 변수 이름 또는 {selector, property} 실시간
+// 바인딩, 위 "대비 가드" 시험과 같은 resolveDefColor)으로 지금 이 파일이
+// 읽은 실제 public/index.html 선언에서 다시 뽑는다.
+//
+// 판정은 이제(§2 요구 2 ⑴) 반올림 전 rawRatio 로 하므로 메인 "대비 가드"
+// 시험이 R1 류 경계 변이를 이미 직접 잡는다 -- 이 칸은 그와 별개로
+// "반올림 후 표시값이 4.5 에 너무 가깝지 않은가"를 재는 독립 신호로
+// 남긴다(반올림 표시 자체의 경계 거동 확인 + 실 CSS 연동이라는 이
+// 라운드의 범위).
+test("대비 반올림 경계(E12): toFixed(2) 반올림 방식 확인 + 세 쌍의 마진을 실제 CSS 선언에서 다시 뽑아도 경계 폭보다 크다", async () => {
+  // 1) 반올림 방식 자체: JS toFixed 는 보통의 사사오입으로 4.495 를
+  // 4.50 으로 올린다 -- `(4.495).toPrecision(21)` = "4.49500000000000010658"
+  // 로 저장값이 4.495 보다 이미 살짝 크므로 "IEEE754 표현 오차로 내려가야
+  // 할 값이 올라간" 사례가 아니다(E11 검토 ⓗ 지적, 이전 주석의 부정확을
+  // 고친다). 이 게이트의 "표시용" 반올림이 경계에서 보이는 거동만
+  // 확인한다(판정은 위 "대비 가드" 시험이 rawRatio 로 한다).
   assert.equal(
     (4.495).toFixed(2),
     "4.50",
-    "이 JS 런타임의 toFixed(2) 경계 거동이 바뀌면 이 시험의 전제(반올림 후 비교)도 다시 재야 한다",
+    "이 JS 런타임의 toFixed(2) 경계 거동이 바뀌면 이 시험의 전제도 다시 재야 한다",
   );
   assert.equal((4.4949).toFixed(2), "4.49");
 
-  // 2) 이 라운드가 고친 세 쌍의 반올림-후 값(§2 요구 3 표에서 그대로)이
-  // 4.5 와 경계 폭(0.005)보다 더 떨어져 있는지 -- hexToRgb/relLuminance/
-  // contrastRatio 는 이 파일 위쪽에서 이미 정의된 그 함수를 그대로 쓴다
-  // (숫자를 손으로 베끼지 않는다).
+  // 2) E11/E12 가 고친 세 쌍의 반올림-후 값이 4.5 와 경계 폭(0.005)보다
+  // 더 떨어져 있는지 -- 색 값은 PAIR_DEFS 의 fg/bg 스펙으로 지금
+  // public/index.html 에서 다시 읽는다(숫자를 여기 손으로 적지 않는다).
   const ROUNDING_MARGIN = 0.005; // toFixed(2) 가 뒤집을 수 있는 최대 거리
+  const html = await loadIndexHtml();
+  const { rootRule, darkRootRule, sheet } = parseThemeRules(html);
+  function pairDef(label) {
+    const def = PAIR_DEFS.find((d) => d.label === label);
+    assert.ok(def, `PAIR_DEFS 에 라벨 "${label}" 이 있어야 한다`);
+    return def;
+  }
+  const undo = pairDef(
+    "되돌리기 버튼 글자(#list-delete-undo-button, 고정 #7aa2f2 on 고정 다크 칩 -- E11 수리)",
+  );
+  const toastErr = pairDef(
+    "노션 복사 오류 토스트 글자(고정 #ffffff, [data-variant=error] -- E11 수리)",
+  );
+  const listErr = pairDef(
+    "목록 불러오기 실패 글자(.memo-list-error, light+dark -- E11 수리)",
+  );
   const fixedPairs = [
-    { label: "되돌리기(고정 #7aa2f2 on #2a2d33)", a: "#7aa2f2", b: "#2a2d33" },
     {
-      label: "노션 오류 토스트(고정 #ffffff on #d14343)",
-      a: "#ffffff",
-      b: "#d14343",
+      label: "되돌리기(고정, 실 CSS 파생)",
+      a: resolveDefColor(sheet, rootRule, darkRootRule, "light", undo.fg),
+      b: resolveDefColor(sheet, rootRule, darkRootRule, "light", undo.bg),
     },
     {
-      label: ".memo-list-error 라이트(#d14343 on #ffffff)",
-      a: "#d14343",
-      b: "#ffffff",
+      label: "노션 오류 토스트(고정, 실 CSS 파생)",
+      a: resolveDefColor(sheet, rootRule, darkRootRule, "light", toastErr.fg),
+      b: resolveDefColor(sheet, rootRule, darkRootRule, "light", toastErr.bg),
     },
     {
-      label: ".memo-list-error 다크(#e06c6c on #1e2127)",
-      a: "#e06c6c",
-      b: "#1e2127",
+      label: ".memo-list-error 라이트(실 CSS 파생)",
+      a: resolveDefColor(sheet, rootRule, darkRootRule, "light", listErr.fg),
+      b: resolveDefColor(sheet, rootRule, darkRootRule, "light", listErr.bg),
+    },
+    {
+      label: ".memo-list-error 다크(실 CSS 파생)",
+      a: resolveDefColor(sheet, rootRule, darkRootRule, "dark", listErr.fg),
+      b: resolveDefColor(sheet, rootRule, darkRootRule, "dark", listErr.bg),
     },
   ];
   for (const { label, a, b } of fixedPairs) {
