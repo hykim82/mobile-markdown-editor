@@ -306,6 +306,9 @@ function findNonRootColorLiterals(sheet) {
   return found;
 }
 
+// E11 검토 P3-3: 아래 두 시험의 대조는 대소문자 무시 일치다(기대값·
+// 실제값 둘 다 .toLowerCase() 를 거친 뒤 비교한다) -- 토큰 파일이
+// `#7AA2F2`, CSS 선언이 `#7aa2f2` 처럼 대소문자가 달라도 같은 값으로 본다.
 test("라이트 값: :root 의 색 변수 11개가 토큰 light 값과 1:1", async () => {
   const tokens = await loadTokens();
   const html = await loadIndexHtml();
@@ -547,6 +550,13 @@ const PAIR_DEFS = [
     minRatio: 4.5,
     note: "1R 값(다크 2.54)을 이 라운드가 고쳤다.",
   },
+  // HYK-304-contrast-guard-e12-1 검토 P3-3(취약성 관찰, 결함 아님): 아래
+  // 두 바닥(minRatio)의 반올림 전 여유가 작다 -- 라이트 0.00088
+  // (이 라운드가 실제 진단 출력에서 다시 읽은 rawRatio 3.0508802569051796
+  // - minRatio 3.05) · 다크 0.0048(rawRatio 3.854787348768186 - minRatio
+  // 3.85). 반올림 전 실수(rawRatio)로 판정하게 바뀐 뒤 이 두 칸은 토큰의
+  // 아주 작은 변화에도 가장 먼저 빨개진다 -- "더 나빠지면 잡는다"는
+  // 의도된 거동이다(4.5 자체는 여전히 미달, exception 유지).
   {
     label: "notion-copy-button:disabled 글자(비활성, light)",
     fg: "--color-text-muted",
@@ -783,6 +793,20 @@ for (const def of BINDING_DEFS) {
 // 잡고, 더 앞서 선언됐지만 실제로는 특이성으로 이기는 모양은 못 잡는다
 // -- 일반 결선(모든 위치 조합)은 범위 밖, 이 칸은 V2 가 재현한 모양
 // (추가 삽입 = 소스 순서상 뒤)만 잡는 것으로 정직하게 남긴다.
+//
+// 같은 한계가 두 가지 더 있다(E12 검토 P3-2 · 〔직접〕 이 라운드에서 별도
+// probe 로 재확인, 결과는 이 파일 밖 임시 스크립트): ⑴ `!important` 도
+// 특이성과 똑같이 무시된다 -- 원본보다 소스 순서상 *앞*에 `!important`
+// 규칙을 둬도(실제 브라우저라면 이겨야 함) 뒤에 오는 평범한 규칙이
+// 이긴다. ⑵ computed 값에서 `var(--x)` 를 풀지 않는다 -- 리터럴 문자열
+// `"var(--x)"` 그대로 돌아온다(색으로 치환되지 않음). 그래서 E12 검토가
+// 재현한 V2(후손 선택자 덮어쓰기)가 실제로 RED 가 된 이유는 "색이
+// 다르다"가 아니라 덮어쓴 선언이 `var(--color-accent)` 였고 그 문자열이
+// 그대로 나와 기대값 `rgb(122, 162, 242)` 와 글자 그대로 달랐기
+// 때문이다(검토 ⓓ 실측, 실패 문구 원문 `… 여야 하는데
+// var(--color-accent)다`) -- 리터럴로 덮었어도 소스 순서상 뒤였다면
+// `rgb(59, 111, 224)` 로 여전히 RED 가 되므로 칸의 목적(원본보다 뒤에
+// 오는 덮어쓰기를 잡는다)은 var() 유무와 무관하게 지켜진다.
 test("결선(computed-cascade, E12): #list-delete-undo-button 의 computed color 가 후손 선택자 덮어쓰기까지 반영해 rgb(122, 162, 242) 다", async () => {
   const html = await loadIndexHtml();
   const { window, document } = parseThemeRules(html);
