@@ -124,4 +124,4 @@
   4. ✅ **스택 방향** — PWA + WYSIWYG 에디터 라이브러리.
 - **남은 placeholder**(착수 전 최종 확인 필요):
   1. ✅ **에디터 라이브러리** — Lexical 채택(`package.json` dependencies `lexical`/`@lexical/*` 0.51.0, 예: `src/editor/product-editor.mjs:5` `import { createEditor } from "lexical"`).
-  2. ✅ **목업 갱신** — `/spec/mockups/editor.html`·`/spec/mockups/list.html`은 최초 커밋(2026-07-03, `5ab2b68`) 이후 갱신 없음(로파이 상태 그대로, §6). 지금 화면의 정본은 `public/index.html`(예: `#editor-screen`·`#list-screen`)이다.
+  2. ✅ **목업(갱신 없음 · 정본 = public/index.html)** — `/spec/mockups/editor.html`·`/spec/mockups/list.html`은 최초 커밋(2026-07-03, `5ab2b68`) 이후 갱신 없음(로파이 상태 그대로, §6). 지금 화면의 정본은 `public/index.html`(예: `#editor-screen`·`#list-screen`)이다.
