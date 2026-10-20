@@ -71,6 +71,7 @@
 
 - **성능**: 실행→입력 1초 내(입력이 목록 로딩 안 기다림) / 전환 ≤200ms / 자동저장 1초 디바운스 / 초장문 입력·저장 차단 X.
 - **접근성**: 터치 ≥44px(엄지존) / 본문 ≥17pt·1.6 / focus.ring 2px.
+- **상태 표시 접근성**: 숨겨지는 상태 표시(예: 저장됨 인디케이터)는 보임/숨김 class 토글과 같은 자리에서 aria-hidden 도 함께 바꾼다 — opacity 등 시각적 숨김만으로는 화면 낭독기에 계속 읽히기 때문(구현: `src/editor/save-indicator.mjs`).
 - **프라이버시**: 요구 권한 없음 / 전부 기기 로컬 / 수집 0 / 최초 실행 1회 고지 "메모는 이 기기에만 저장됩니다" / 앱 삭제=전 메모 소실.
 
 ## 6. 디자인
@@ -122,5 +123,5 @@
   3. ✅ **단축키바 매핑 5종** 최종 확정(§5.3): 제목/목록/굵게/체크박스/취소선.
   4. ✅ **스택 방향** — PWA + WYSIWYG 에디터 라이브러리.
 - **남은 placeholder**(착수 전 최종 확인 필요):
-  1. ⚠ **에디터 라이브러리 구체 선정**(예: Tiptap/ProseMirror/Lexical 등) — "PWA+라이브러리" 방향만 확정, 라이브러리명 미정.
-  2. ⚠ **목업 갱신** — `/spec/mockups/editor.html`은 라이브 렌더링 확정 전 로파이 상태(원문 기호·자음더블 칩 라벨)로 남아있음(§6). 실제 WYSIWYG·칩 라벨(제목/목록/굵게/체크박스/취소선) 반영은 별도 이슈.
+  1. ✅ **에디터 라이브러리** — Lexical 채택(`package.json` dependencies `lexical`/`@lexical/*` 0.51.0, 예: `src/editor/product-editor.mjs:5` `import { createEditor } from "lexical"`).
+  2. ✅ **목업 갱신** — `/spec/mockups/editor.html`·`/spec/mockups/list.html`은 최초 커밋(2026-07-03, `5ab2b68`) 이후 갱신 없음(로파이 상태 그대로, §6). 지금 화면의 정본은 `public/index.html`(예: `#editor-screen`·`#list-screen`)이다.
