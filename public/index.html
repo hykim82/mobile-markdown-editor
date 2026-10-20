@@ -181,7 +181,14 @@
       #list-root .memo-list-error {
         display: block;
         width: 100%;
-        background: none;
+        /* HYK-304-contrast-e11-1 §2 요구 2 ⑶(책임자 판정): color.state.error
+           on color.bg 가 라이트 4.37 로 AA(4.5) 미달이었다(사전 존재, E11
+           보류분). 배경을 기존 토큰 --color-bg-elevated 로 바꾸면 라이트
+           4.57 · 다크 5.02 로 둘 다 4.5 이상이 된다(새 색 값 0, 토큰 값
+           변경 0 -- 이 선택자의 배경 선언만 바꾼다). 이 선택자에 별도
+           hover/focus 규칙이 없어(파일 전체 검색 확인) 시각적으로는
+           투명 배경이 표면색으로 바뀌는 것 외 차이가 없다. */
+        background: var(--color-bg-elevated);
         border: none;
         color: var(--color-state-error);
         padding: 32px 8px;
@@ -211,7 +218,17 @@
       #list-delete-undo-button {
         background: none;
         border: none;
-        color: var(--color-accent);
+        /* HYK-304-contrast-e11-1 §2 요구 2 ⑴(책임자 판정): 이 토스트 칩은
+           항상 고정 다크 배경(--color-toast-bg, 다크 미디어에서 재선언
+           안 됨 -- 위 :root 주석의 "일부러 반대 테마 값" 선례와 같은 축)
+           인데 글자색은 테마를 타는 --color-accent 였다 -- 라이트
+           2.98/다크 4.27 로 둘 다 AA(4.5) 미달(사전 존재, E11 보류분).
+           고정 #7aa2f2(= 기존 color.accent.hover 의 dark 값, spec/
+           design-tokens.json 무접촉 -- 새 색 값 0)로 바꾸면 두 테마 모두
+           5.44 로 통과한다(배경이 고정이라 글자도 고정이어야 늘 맞는다).
+           새 CSS 변수를 만들지 않고 리터럴로 고정한다 -- 아래 시험의
+           literal-allowlist 항목(결선 칸)이 이 값을 정확히 단언한다. */
+        color: #7aa2f2;
         font: inherit;
         font-weight: 600;
         min-height: 44px;
@@ -463,6 +480,18 @@
       }
       #notion-copy-toast[data-variant="error"] {
         background: var(--color-toast-error-bg);
+        /* HYK-304-contrast-e11-1 §2 요구 2 ⑵(책임자 판정): 이 글자는 위
+           #notion-copy-toast 의 color: var(--color-toast-text)(#fafaf8,
+           고정)를 상속해 고정 배경(--color-toast-error-bg #d14343) 위에서
+           두 테마 모두 4.37 로 AA(4.5) 미달이었다(사전 존재, E11 보류분
+           -- 검토 2R §6 계산). 고정 #ffffff(= 기존 --color-bg-elevated
+           라이트 값 · --color-on-accent 값과 같은 기존 값, 새 색 값 0)로
+           덮어쓰면 4.57 로 통과한다. var(--color-bg-elevated) 를 쓰지
+           않는 이유: 다크에서 그 변수가 어두운 값(#1e2127)으로 바뀌어
+           3.53 으로 더 나빠진다(E8 검토 4R P2-1, 위 §1 원문 참고) --
+           그래서 리터럴로 고정한다(새 CSS 변수 0, literal-allowlist 결선
+           칸이 이 값을 단언). */
+        color: #ffffff;
       }
       .raw-section {
         margin-top: 16px;
