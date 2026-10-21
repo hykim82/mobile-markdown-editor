@@ -378,11 +378,62 @@ test("hasGenuineTapCompletion: HYK-209 2R P1-2 ⒝ K5 (REVIEW-r1.md ⓑ real TAP
   );
 });
 
+// HYK-209 H4-2 (⑪, H41-P2-A ⒝ standalone regression guard -- H4-1 검토 2R
+// §3 P2-A 원문, REVIEW-r2.md(H4-1) §2 ⓖ 변이 V1): the K5 fixture above has
+// BOTH no column-0 plan line AND no duration_ms, so ⒜ (missing duration)
+// already blocks it on its own -- loosening PRODUCTION_PLAN_LINE_RE to
+// "anywhere, not just column-0-anchored" (V1: /1\.\.\d+/) does NOT turn K5
+// green, so K5 alone cannot catch that mutation (검토 2R 실측: V1 변이에서
+// runner-receipt-writer 41/41·isolated-suite-runner 38/38 전부 초록으로
+// 생존했다). This fixture (H4-1 검토 2R §2 ⓖ "S2" 원문) isolates ⒝ alone:
+// duration_ms IS present and even implausibly large (999999, so the ratio
+// check alone would pass it, same as K2), AND the forged plan line comes
+// out escaped as "# 1..9" (never real column-0) -- only ⒝'s own
+// column-0-anchor check can reject this standalone. Loosening the anchor
+// (V1) makes this exact fixture wrongly genuine.
+const S2_ESCAPED_PLAN_LINE_WITH_IMPLAUSIBLY_LARGE_DURATION =
+  "TAP version 13\n# 1..9\n# tests 9\n# suites 0\n# pass 9\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 999999\n";
+
+test("hasGenuineTapCompletion: HYK-209 H4-2 (⑪, H41-P2-A ⒝ mutation guard) -- a forged escaped '# 1..9' plan line with a PRESENT, implausibly-large duration_ms (so ⒜'s duration check alone would pass it, unlike K5) must still be rejected by ⒝'s column-0-anchor check alone", () => {
+  assert.equal(
+    hasGenuineTapCompletion(
+      S2_ESCAPED_PLAN_LINE_WITH_IMPLAUSIBLY_LARGE_DURATION,
+      { elapsedMs: 3350 },
+    ),
+    false,
+  );
+});
+
 test("hasGenuineTapCompletion: HYK-209 2R P1-2 ⒜ in isolation -- a genuine column-0 plan line immediately precedes the block (⒝ satisfied), but duration_ms is still missing -- the production path still rejects it (⒜ alone, no plan-line gap to hide behind)", () => {
   const planLineButNoDuration =
     "TAP version 13\n1..1\n# tests 1\n# pass 0\n# fail 1\n# skipped 0\n";
   assert.equal(
     hasGenuineTapCompletion(planLineButNoDuration, { elapsedMs: 999999 }),
+    false,
+  );
+});
+
+// HYK-209 H4-2 (P3-4, REVIEW-r1.md §3 P3-4, V9): a genuine, unescaped,
+// column-0 "1..N" plan line IS present, and the final block has a present
+// and plausible duration_ms -- but a line sits BETWEEN the plan line and
+// the block (not "바로 앞"/immediately preceding). PRODUCTION_PLAN_LINE_RE's
+// trailing `$` anchor requires the plan line to end the `before` text right
+// where the block starts; the intervening line here breaks that, so this
+// must still be rejected by ⒝ alone, isolating the anchor from ⒜'s
+// duration check (both K2/K5/S2 above have NO genuine column-0 plan line
+// anywhere in `before` at all, so they cannot tell "anchor missing" apart
+// from "anchor present but not immediately preceding" -- loosening
+// PRODUCTION_PLAN_LINE_RE to drop only its trailing `$` (keeping the
+// column-0 `^`/`\n` anchor) would let this exact fixture through, since
+// the regex would then match the plan line anywhere in `before`).
+const PLAN_LINE_NOT_IMMEDIATELY_BEFORE_BLOCK =
+  "TAP version 13\n1..1\n# some intervening line\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n# todo 0\n# duration_ms 999999\n";
+
+test("hasGenuineTapCompletion: HYK-209 H4-2 (P3-4) mutation guard -- a genuine column-0 '1..N' plan line exists but is NOT immediately before the final block (another line intervenes) -- not genuine, even with a present and plausible duration_ms", () => {
+  assert.equal(
+    hasGenuineTapCompletion(PLAN_LINE_NOT_IMMEDIATELY_BEFORE_BLOCK, {
+      elapsedMs: 3350,
+    }),
     false,
   );
 });
@@ -752,6 +803,22 @@ test("writeNumberedRunnerReceipt: writes the SAME shape buildRunnerReceipt produ
 
 // M5 (writeNumberedRunnerReceipt 짝): 번호 붙은 사본 쪽도 같은 공백이
 // 있었다 -- 같은 근거로 디스크에 쓰인 JSON을 직접 확인한다.
+// HYK-209 H4-2 (P3-1, REVIEW-r1.md §3
+// P3-1, correcting the ⑧/H5-P2-B comment this replaces): this file imports
+// `node:assert/strict` (line 1), so the mechanism is NOT a loose `==`
+// letting `undefined` slide past `null` -- that never applied here.
+// buildRunnerReceipt always coalesces the param with `?? null`
+// (runner-receipt-writer.mjs:365, `node_version_warning: nodeVersionWarning
+// ?? null`), so if the writer drops the `nodeVersionWarning,` threading
+// (M5d), the param arrives as `undefined` and is coalesced to the same
+// `null` the field gets when correctly threaded with a `null` input --
+// the written key is never omitted, it is `null` either way. The original
+// fixture's input value was itself `nodeVersionWarning: null`, so the
+// dropped-threading output and the correctly-threaded output coincided
+// (both `null`) and M5d survived with no observable RED, strict equality
+// or not. A non-null input value (below) makes the dropped-threading
+// output (coalesced `null`) observably differ from the correctly-threaded
+// output (the real string).
 test("writeNumberedRunnerReceipt: nodeVersion/nodeVersionWarning actually reach the written JSON on disk (M5 mutation guard)", () => {
   let writeArgs;
   writeNumberedRunnerReceipt({
@@ -762,14 +829,18 @@ test("writeNumberedRunnerReceipt: nodeVersion/nodeVersionWarning actually reach 
     headCommit: "cafef00d",
     finishedAtMs: 0,
     nodeVersion: "v20.11.0",
-    nodeVersionWarning: null,
+    nodeVersionWarning:
+      "MISMATCH: fixture value (H5-P2-B, must not be dropped)",
     writeFileFn: (...args) => {
       writeArgs = args;
     },
   });
   const written = JSON.parse(writeArgs[1]);
   assert.equal(written.node_version, "v20.11.0");
-  assert.equal(written.node_version_warning, null);
+  assert.equal(
+    written.node_version_warning,
+    "MISMATCH: fixture value (H5-P2-B, must not be dropped)",
+  );
 });
 
 test("allocateRunSlot + writeNumberedRunnerReceipt full pipeline (real fs): after two runs, the LATEST runner-receipt.json (written separately via writeRunnerReceipt) is completely unaffected -- byte-identical to what writeRunnerReceipt alone would produce (완료조건3: 기존 독자 무영향)", () => {

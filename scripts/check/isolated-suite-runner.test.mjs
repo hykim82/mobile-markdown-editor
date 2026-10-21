@@ -557,7 +557,7 @@ test("runIsolatedSuite: HYK-209 2R P1-2 K5 (REVIEW-r1.md ⓑ real TAP bytes, for
 test("runIsolatedSuite: HYK-464 2R P2-6 -- a real Node-major MISMATCH lands on the SAME first line as the concurrency banner (banner first, warning appended, token 'WARNING: NODE_VERSION_MISMATCH'), never a separate second line, and still rides the receipt payload (unchanged 'MISMATCH:' token for backward compat)", () => {
   const receipts = [];
   const logs = [];
-  runIsolatedSuite({
+  const exitCode = runIsolatedSuite({
     startSampler: () => null,
     stopSampler: () => null,
     execFile: execFileForReceiptTests(),
@@ -582,6 +582,19 @@ test("runIsolatedSuite: HYK-464 2R P2-6 -- a real Node-major MISMATCH lands on t
   );
   assert.equal(receipts[0].nodeVersion, "v26.2.0");
   assert.match(receipts[0].nodeVersionWarning, /^MISMATCH:/);
+  // HYK-209 H4-2 (⑧, H5-P2-A, REVIEW-r2.md(H5) §3 P2-A, M1b 헛시험 부분):
+  // a real Node-major MISMATCH alongside a REAL GREEN spawn (status 0) must
+  // still return exit code 0 -- "report only, exit code/judgement
+  // unaffected" per this round's own warning token. M1 (a MISMATCH forcing a
+  // REAL FAILING spawn's exit code to 1) was already caught by the M1
+  // mutation guard below; M1b (a MISMATCH forcing only a REAL GREEN spawn's
+  // 0 to 1, leaving a real failure's own code untouched) slipped through
+  // because no test here asserted the green case's own exit code.
+  assert.equal(
+    exitCode,
+    0,
+    "a Node-major MISMATCH must not turn a genuinely green spawn (status 0) into a non-zero exit code -- warnings must never silently become failures",
+  );
 });
 
 test("runIsolatedSuite: matching Node majors -> no warning logged, receipt's nodeVersionWarning is null, nodeVersion is still recorded", () => {

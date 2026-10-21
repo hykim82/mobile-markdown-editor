@@ -240,6 +240,12 @@ const TAP_SUBTEST_CLOSE_RE = /^(?:not )?ok \d+ .*\r?$/gm;
 // 가짜 블록은 구조적으로 열 0 계획 줄을 가질 수 없다(REVIEW-r1.md ⓑ K5
 // TAP 원문 실측: `# 1..9`). 기존 fixture(elapsedMs 미지정이거나 노이즈
 // 바닥 아래)는 이 두 요구 모두를 건너뛰므로 무변경이다.
+// HYK-209 H4-2 (⑫, H41-P3-a 한계 기록, 동작 변경 0): 이 바닥(2초) 아래서
+// suite 전체가 죽으면(실측 B1: 가짜 블록 + kill 1000ms -> 경과 1299ms) ⒜·⒝
+// 가 둘 다 쉬어 가짜 계수가 그대로 TESTS_FAILED·9/9/0/0으로 적힌다 -- 이
+// 저장소의 정본 전건 러너는 약 10분(실측 623303ms)이라 생산 경로에서는
+// 도달하지 않고, 그 결과도 runner_exit 1(TESTS_FAILED)이라 "가짜 초록"은
+// 아니다(REVIEW-r2.md(H4-1) §3 P3-a, 상신 대상 아님으로 판정됨).
 const MIN_ELAPSED_FOR_CHECK_MS = 2000;
 const MIN_DURATION_RATIO = 0.5;
 const TRAILING_DURATION_RE = /^(?:# todo \d+\r?\n)?# duration_ms ([\d.]+)\r?$/m;
