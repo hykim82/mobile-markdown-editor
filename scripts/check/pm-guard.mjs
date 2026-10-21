@@ -36,7 +36,7 @@ const LINEAR_WRITE_TOOL_RE =
 // substitutePmGuardControlRoom there) -- exported so pm-guard.test.mjs can
 // derive its fixtures from whatever value is actually live, in this repo
 // or an installed copy, instead of duplicating the literal a second time.
-export const CONTROL_ROOM_ROOT = "D:/문서관리/에디터-관제실";
+export const CONTROL_ROOM_ROOT = "D:/문서관리/하네스-관제실";
 const SCRATCHPAD_MARKER = "appdata/local/temp/claude/";
 
 // HYK-309 2R (REVIEW P2): exported with an optional `root` override (default
