@@ -409,11 +409,17 @@ test("하위 경로 오프라인 폴백(P2-4): 캐시에 없는 딥링크를 오
     true,
     "앱 껍데기 밖의 딥링크라도 navigate 모드면 가로채야 한다",
   );
-  assert.equal(
-    result.response.ok,
-    true,
-    "캐시에 없는 딥링크라도 오프라인이면 하위 경로의 index.html 로 폴백해야 한다 -- INDEX_URL 이 루트로 되돌려지면 폴백 응답이 undefined 가 되어 이 칸이 깨진다",
+  // 3R(검토 2R P1-1 과 같은 결의 지적, P2-3): INDEX_URL 이 루트로 되돌려지면
+  // caches.match(INDEX_URL) 이 undefined 를 돌려줘 result.response 자체가
+  // undefined 가 된다 -- 그 상태에서 바로 result.response.ok 를 읽으면
+  // "Cannot read properties of undefined" TypeError 로 죽어, 이 칸이
+  // 설계한 단언 문구가 아니라 엉뚱한 메시지로 빨개진다. 응답이 존재하는지
+  // 먼저 단언해 변이가 "폴백 응답이 없다"는 설계한 문구로 떨어지게 한다.
+  assert.ok(
+    result.response,
+    "캐시에 없는 딥링크라도 오프라인이면 하위 경로의 index.html 로 폴백 응답이 있어야 한다 -- INDEX_URL 이 루트로 되돌려지면 폴백 응답이 undefined 가 되어 이 칸이 깨진다",
   );
+  assert.equal(result.response.ok, true, "폴백 응답이 ok 여야 한다");
   assert.equal(
     result.response.url,
     "https://hykim82.github.io/mobile-markdown-editor/index.html",

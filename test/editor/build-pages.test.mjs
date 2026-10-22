@@ -5,6 +5,7 @@
 // 개발 출력은 무변인지, 그리고 실제로 실행하면 public/dist/app.js 가
 // 압축·sourcemap 없이 생기는지를 값으로 잰다(드리프트 방지 칸).
 import { readFile, rm, stat } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -17,6 +18,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
+const buildPagesScript = join(repoRoot, "scripts", "build-pages.mjs");
 const devServerSource = await readFile(
   join(repoRoot, "src", "editor", "dev-server.mjs"),
   "utf8",
@@ -39,6 +41,11 @@ test("정적 대조: dev-server.mjs 와 scripts/build-pages.mjs 둘 다 src/edit
   );
 });
 
+// 3R(검토 2R P1-1): 이 두 칸은 esbuild 를 실제로 부르지 않고 옵션 객체
+// 모양만 재는 "설정 동일성" 칸이다(scripts/build-pages.mjs 파일 자체의
+// outdir·minify 하드코딩은 안 본다) -- 그래서 import 로 남겨도 된다. 실제
+// 스크립트 자리 변이(outdir·개발 출력 되돌림)를 잡는 책임은 아래 "실행"
+// 칸(자식 프로세스로 scripts/build-pages.mjs 를 그대로 돌림)에 있다.
 test("createBuildOptions()(개발 서버용): entry 가 src/editor/app.mjs, outdir 가 public/dist, bundle:true, format:esm, sourcemap:true, minify 미설정(기본 false)이다 -- 2R 배포 전용 옵션(minify·sourcemap)이 섞여 들어오면 이 칸이 깨진다(개발 출력 무변 근거)", () => {
   const options = createBuildOptions();
   assert.equal(options.entryPoints.length, 1);
@@ -65,13 +72,23 @@ test("createDeployBuildOptions()(배포용): minify:true, sourcemap:false, 그 �
   assert.equal(deployOptions.format, devOptions.format);
 });
 
-test("실행: scripts/build-pages.mjs 와 같은 옵션(createDeployBuildOptions)으로 실제로 돌리면 public/dist/app.js 가 생기고(.gitignore 대상, 커밋에는 포함되지 않는다), 압축 상한 밑이며 sourcemap 파일이 없다(1R 미압축 1,247,790B 대비)", async () => {
+// 3R(검토 2R P1-1): 배포가 실제로 부르는 것은 scripts/build-pages.mjs
+// 파일이다 -- createDeployBuildOptions() 를 여기서 직접 import 해 esbuild
+// 를 부르면 그 파일 자신의 outdir·minify·sourcemap 하드코딩은 한 번도
+// 안 거친다(2R 에서 1R M13(outdir -> public/wrong)과 배포를 개발 출력으로
+// 되돌리는 변이가 둘 다 이 칸을 GREEN 으로 통과한 이유). 이 칸은 그
+// 파일을 자식 프로세스로 그대로 실행해(node scripts/build-pages.mjs,
+// 종료코드는 execFileSync 가 비정상 종료 시 던지는 것으로 판정) 그
+// 하드코딩을 직접 거치게 한다.
+test("실행: node scripts/build-pages.mjs 를 자식 프로세스로 실제 실행하면(설정 import 아님) public/dist/app.js 가 생기고(.gitignore 대상, 커밋에는 포함되지 않는다), 압축 상한 밑이며 sourcemap 파일이 없다(1R 미압축 1,247,790B 대비) -- outdir 를 public/wrong 으로 바꾸거나 배포를 개발 출력(minify:false, sourcemap:true)으로 되돌리는 변이는 이 칸이 걸린다(2R 검토 P1-1 수리)", async () => {
   const outFile = join(publicDir, "dist", "app.js");
   const mapFile = `${outFile}.map`;
   await rm(join(publicDir, "dist"), { recursive: true, force: true });
 
-  const { build } = await import("esbuild");
-  await build(createDeployBuildOptions());
+  execFileSync(process.execPath, [buildPagesScript], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
 
   const stats = await stat(outFile);
   assert.ok(stats.size > 0, "public/dist/app.js 가 비어있지 않아야 한다");

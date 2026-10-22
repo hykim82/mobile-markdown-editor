@@ -104,25 +104,17 @@ test("배포 워크플로: pages/id-token 권한이 워크플로 안에서만 �
   );
 });
 
-// P2-2(산출물 포함 확인): 업로드 경로(public)를 실제로 빌드하면
-// dist/app.js 가 그 디렉터리 "안"에 생긴다 -- outdir 가 public 밖으로
-// 빠지는 변이(예: "dist")가 걸리는 칸(build-pages.test.mjs 의 outdir
-// 칸과는 별개로, 여기서는 "업로드되는 그 디렉터리"를 기준으로 잰다).
-test("배포 워크플로: 업로드 경로(public) 아래에 실제 빌드 산출물 dist/app.js 가 포함된다", async () => {
-  const { stat, rm } = await import("node:fs/promises");
-  const { createDeployBuildOptions, publicDir } =
-    await import("../../src/editor/esbuild-config.mjs");
-  const { build } = await import("esbuild");
-
-  await rm(join(publicDir, "dist"), { recursive: true, force: true });
-  await build(createDeployBuildOptions());
-
-  const stats = await stat(join(publicDir, "dist", "app.js"));
-  assert.ok(
-    stats.size > 0,
-    "업로드 경로(public) 아래 dist/app.js 가 비어있지 않아야 한다",
-  );
-});
+// P2-2(산출물 포함 확인) -- 3R(검토 2R P1-1 수리, P2-1 경합 제거): 이
+// 칸은 원래 public/dist 를 지우고 다시 빌드해 "업로드 경로(public) 아래에
+// dist/app.js 가 있다"를 쟀는데, build-pages.test.mjs 의 실행 칸도 같은
+// public/dist 를 지우고 다시 빌드한다 -- node --test 는 서로 다른 시험
+// 파일을 별도 프로세스로 동시에 돌리므로 두 칸이 같은 디스크 경로를 두고
+// 경합한다(한쪽이 지우는 사이 다른 쪽이 읽어 ENOENT·부분 파일을 보는
+// 산발적 실패). outdir(= publicDir/"dist")가 "public 아래"라는 사실은
+// build-pages.test.mjs 의 createBuildOptions() 칸(outdir 를 join(publicDir,
+// "dist") 로 직접 단언)과 그 "실행" 칸(자식 프로세스 실행 뒤 그 경로에서
+// app.js 를 실제로 찾아낸다)이 이미 값으로 재므로, 이 칸은 그 쪽으로
+// 합친다(중복 빌드 제거 -- 한 파일로 모음).
 
 test("배포 워크플로: 조용한 초록 금지 -- continue-on-error · if: 로 실패를 삼키는 조건부 건너뜀 · `|| true` 가 0개다", () => {
   assert.doesNotMatch(workflow, /continue-on-error/);
