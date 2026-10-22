@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { inflateSync } from "node:zlib";
 import { renderIconPng } from "../../scripts/gen-pwa-icons.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -24,6 +25,28 @@ function readPngDimensions(buf) {
   // PNG IHDR 칸: 서명 8바이트 뒤 length(4)+type(4) 다음이 IHDR 본문이고,
   // 그 안 처음 4바이트가 width, 다음 4바이트가 height(둘 다 빅엔디안).
   return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+// 검토 1R P2-7 수리: IDAT 청크(들)를 모아 inflate 해서 "압축 전 픽셀
+// 바이트"를 뽑는다 -- zlib.deflateSync 가 만드는 압축 바이트 자체는 zlib
+// 버전마다(로컬 Node 26 의 zlib 1.3.1 대 CI Node 20 의 zlib 판) 달라질 수
+// 있어도, 그걸 풀면 나오는 원본 픽셀 바이트는 입력(크기·색)이 같으면
+// 항상 같다 -- 그래서 이 비교는 CI 의 Node 판(20)과 로컬 Node 판(26) 차이에
+// 흔들리지 않는다(〔못쟀다〕: CI Node 20 에서 실제로 같은 결과가 나오는지는
+// 이 좌석에 Node 20 이 없어 직접 못 쟀다 -- CI 초록 판독으로 확인될 항목).
+function extractInflatedIdat(buf) {
+  const chunks = [];
+  let offset = 8; // PNG 서명 8바이트를 건너뛴다.
+  while (offset < buf.length) {
+    const length = buf.readUInt32BE(offset);
+    const type = buf.toString("ascii", offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    if (type === "IDAT") {
+      chunks.push(buf.subarray(dataStart, dataStart + length));
+    }
+    offset = dataStart + length + 4; // 4바이트 CRC 를 건너뛴다.
+  }
+  return inflateSync(Buffer.concat(chunks));
 }
 
 test("manifest: 필수 칸이 전부 있고 PRD 제목·색 토큰 값과 일치한다", async () => {
@@ -85,7 +108,7 @@ test("아이콘 파일: iOS apple-touch-icon(180) 이 실재하고 180x180 이�
   assert.equal(height, 180);
 });
 
-test("아이콘: scripts/gen-pwa-icons.mjs 재생성 결과가 커밋된 파일과 바이트 단위로 같다(결정적 생성 증거)", async () => {
+test("아이콘: scripts/gen-pwa-icons.mjs 재생성 결과가 커밋된 파일과 픽셀 바이트까지 같다(결정적 생성 증거, zlib 판 차이에 안 흔들림)", async () => {
   const cases = [
     [192, "icon-192.png"],
     [512, "icon-512.png"],
@@ -94,9 +117,11 @@ test("아이콘: scripts/gen-pwa-icons.mjs 재생성 결과가 커밋된 파일�
   for (const [size, filename] of cases) {
     const generated = renderIconPng(size);
     const committed = await readFile(join(iconsDir, filename));
+    const generatedPixels = extractInflatedIdat(generated);
+    const committedPixels = extractInflatedIdat(committed);
     assert.ok(
-      generated.equals(committed),
-      `${filename}: 생성기 재실행 출력이 커밋된 파일과 바이트까지 같아야 한다(결정적)`,
+      generatedPixels.equals(committedPixels),
+      `${filename}: 생성기 재실행 출력의 픽셀 바이트(IDAT 를 푼 값)가 커밋된 파일과 같아야 한다(결정적)`,
     );
   }
 });

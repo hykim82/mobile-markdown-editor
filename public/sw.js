@@ -45,36 +45,38 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-// 탐색(문서) 요청 = 네트워크 우선. 캐시만 우선이면 새 판을 배포해도 이미
-// 설치된 앱이 영원히 옛 index.html 을 보게 된다("업데이트가 영영 안
-// 보이는" 위험, coder-task.md §2 요구 3) -- 네트워크가 성공하면 그 응답을
-// 쓰고 캐시도 최신으로 갱신한다. 네트워크가 실패(오프라인)할 때만 캐시로
-// 떨어진다.
-function respondToNavigation(request) {
+// 검토 1R P1 수리: 탐색뿐 아니라 앱 껍데기 전부(번들·manifest·아이콘)를
+// 네트워크 우선으로 바꾼다. 이전 판은 번들·manifest·아이콘을 "캐시
+// 우선"으로만 줬는데, 그러면 캐시 판 이름(CACHE_VERSION, 손으로 올리는
+// 상수)을 올리지 않는 한 새로 배포한 번들이 이미 설치된 클라이언트에
+// 영영 안 보인다 -- 서비스 워커 자신의 바이트가 안 바뀌면 새 install 자체가
+// 안 일어나므로(브라우저 스펙), v1 캐시가 그대로 남아 "새 index.html +
+// 옛 번들"에 영구히 갇힌다(검토 1R 탐침 재현: 배포 뒤 온라인 7회 방문해도
+// 번들 A 유지). 온라인일 때는 매번 네트워크를 다시 타서 최신 응답을 쓰고
+// 캐시도 그 응답으로 갱신하므로, "손으로 올리는 상수"에만 기대지 않고도
+// 다음 온라인 방문에서 바로 새 판이 보인다. 네트워크가 실패(오프라인)할
+// 때만 캐시(설치 시점 또는 마지막으로 온라인에서 받은 판)로 떨어진다.
+//
+// 검토 1R P2-1 수리: 응답이 ok(2xx)일 때만 cache.put 한다 -- 서버가 오류
+// 응답(예: 500)을 줘도 그 응답으로 캐시된 정상 껍데기를 덮어쓰지 않는다.
+// 덮어썼다면 다음 오프라인 방문이 그 오류 응답을 영구히 돌려주는 사고가
+// 난다.
+function respondToShellRequest(request) {
   return fetch(request)
     .then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+      if (response.ok) {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+      }
       return response;
     })
     .catch(() =>
-      caches
-        .match(request)
-        .then((cached) => cached || caches.match("/index.html")),
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        if (request.mode === "navigate") return caches.match("/index.html");
+        return undefined;
+      }),
     );
-}
-
-// 그 외 앱 껍데기 자원(번들·manifest·아이콘) = 캐시 우선. 오프라인에서도
-// 지연 없이 뜬다. 캐시에 없으면 네트워크에서 받아 캐시를 채운다.
-function respondToShellAsset(request) {
-  return caches.match(request).then((cached) => {
-    if (cached) return cached;
-    return fetch(request).then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-      return response;
-    });
-  });
 }
 
 self.addEventListener("fetch", (event) => {
@@ -83,11 +85,11 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    event.respondWith(respondToNavigation(request));
+    event.respondWith(respondToShellRequest(request));
     return;
   }
 
   if (APP_SHELL.includes(url.pathname)) {
-    event.respondWith(respondToShellAsset(request));
+    event.respondWith(respondToShellRequest(request));
   }
 });

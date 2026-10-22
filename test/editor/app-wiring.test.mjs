@@ -430,3 +430,92 @@ test("배선 10: navigator.serviceWorker 가 있으면 등록을 정확히 1회,
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0], ["/sw.js", { scope: "/" }]);
 });
+
+// 번호 11 (HYK-304-pwa-installable-1-r2 §2 요구 2, P2-2): 검토 1R이 "기존
+// 메모가 보이는가" 칸이 0개라고 지적했다 -- 작성자가 근거로 든 기존
+// 배선 1~8은 네트워크 차단을 전혀 걸지 않는다. 이 시험은 검토자 탐침
+// (offline-memo-probe.mjs)과 같은 모양으로, 가짜 IndexedDB에 메모를 심고
+// window.fetch/전역 fetch를 둘 다 throw로 바꾼 뒤(서비스 워커 자체는
+// jsdom에 없으므로 "오프라인"을 fetch 차단으로 재현한다) 실제 app.mjs
+// 번들을 부팅해 목록에 그 메모 카드가(제목 텍스트까지) 보이는지 값으로
+// 잰다. 서비스 워커는 IndexedDB를 전혀 건드리지 않으므로(public/sw.js에
+// indexedDB 실사용 0, service-worker.test.mjs의 정적 대조 시험) 메모가
+// 오프라인과 무관하게 보이는 것 자체가 그 설계의 증거다.
+test("배선 11: 네트워크가 차단돼도(오프라인 재현) 기존 메모가 목록에 그대로 보인다(P2-2)", async () => {
+  const originalGlobalFetch = globalThis.fetch;
+  try {
+    const dom = await bootApp({
+      seed: async (bootedDom) => {
+        await seedMemo("offline-existing-1", "오프라인에서도 보여야 하는 메모");
+        const blockedFetch = () => {
+          throw new TypeError(
+            "app-wiring 배선 11: 네트워크 차단 재현(오프라인)",
+          );
+        };
+        bootedDom.window.fetch = blockedFetch;
+        globalThis.fetch = blockedFetch;
+      },
+    });
+    const { document } = dom.window;
+    await waitFor(
+      () =>
+        document.querySelector('[data-memo-id="offline-existing-1"]') !== null,
+    );
+    assert.equal(
+      document.querySelector(
+        '[data-memo-id="offline-existing-1"] .memo-card-title',
+      ).textContent,
+      "오프라인에서도 보여야 하는 메모",
+      "네트워크 없이도(fetch 가 전부 throw) 기존 메모 카드 제목이 그대로 보여야 한다 -- 메모는 IndexedDB에 있고 서비스 워커/네트워크와 무관하다",
+    );
+  } finally {
+    // 전역 fetch 를 영구히 막아두면 이 뒤에 도는 다른 시험(이 파일의
+    // 배선 12, 또는 같은 node --test 프로세스로 묶이는 다른 시험 파일)이
+    // 모두 "네트워크 차단" 상태로 잘못 돈다 -- 반드시 복원한다.
+    globalThis.fetch = originalGlobalFetch;
+  }
+});
+
+// 번호 12 (§2 요구 5, P2-6): register()가 거부(reject)해도 부팅 오류 0,
+// 앱 동작에 영향 0, 콘솔 1줄(조용한 실패 아님)을 값으로 잰다 --
+// sw-register.mjs의 `.catch(error => console.error("[sw] 등록 실패",
+// error))` 경로.
+test("배선 12: register 가 거부해도 부팅 오류 0·앱 동작 영향 0·콘솔 1줄(조용한 실패 아님, P2-6)", async () => {
+  const originalConsoleError = console.error;
+  const consoleCalls = [];
+  console.error = (...args) => {
+    consoleCalls.push(args);
+  };
+  try {
+    const dom = await bootApp({
+      seed: (bootedDom) => {
+        Object.defineProperty(bootedDom.window.navigator, "serviceWorker", {
+          value: {
+            register: () =>
+              Promise.reject(new Error("배선 12: register 거부 재현")),
+          },
+          configurable: true,
+        });
+      },
+    });
+    const { document } = dom.window;
+    await waitFor(
+      () => document.querySelector("#list-root .memo-list-empty") !== null,
+    );
+    await waitFor(() => consoleCalls.length > 0, { timeout: 2000 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(
+      consoleCalls.length,
+      1,
+      "조용한 실패가 아니라 콘솔에 정확히 1줄 남겨야 한다",
+    );
+    assert.equal(consoleCalls[0][0], "[sw] 등록 실패");
+    assert.equal(
+      document.getElementById("list-screen").hidden,
+      false,
+      "register 거부가 앱 동작(화면 표시)에 영향을 주면 안 된다",
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+});

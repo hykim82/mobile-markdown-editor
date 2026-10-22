@@ -14,18 +14,23 @@ const here = dirname(fileURLToPath(import.meta.url));
 const swPath = join(here, "..", "..", "public", "sw.js");
 
 // 실 Response 의 clone()/ok 만 흉내 낸 최소 가짜 -- body 스트림은 이
-// 시험들이 들여다보지 않는다(캐시 적중 여부·호출 횟수만 잰다).
+// 시험들이 들여다보지 않는다(캐시 적중 여부·호출 횟수만 잰다). `version`
+// 은 실제 Response API 에 없는 시험 전용 칸 -- "서버가 지금 어느 배포
+// 판을 주고 있었는지"를 캐시에 저장된 뒤에도 구분해 재기 위해 둔다
+// (coder-task.md §2 요구 1, P1 업데이트 함정 재현/수리 확인 칸).
 class FakeResponse {
-  constructor({ url, ok = true, status = 200 } = {}) {
+  constructor({ url, ok = true, status = 200, version } = {}) {
     this.url = url;
     this.ok = ok;
     this.status = status;
+    this.version = version;
   }
   clone() {
     return new FakeResponse({
       url: this.url,
       ok: this.ok,
       status: this.status,
+      version: this.version,
     });
   }
 }
@@ -127,12 +132,23 @@ function makeFetchEvent(request) {
 
 // origin = 가짜 self.location.origin(동일 출처 요청 판정의 기준). online
 // = false 로 만들면 fetchImpl 이 전부 reject 한다(오프라인 재현).
+// serverVersion = 지금 "서버가 주는" 배포 판 표지(P1 업데이트 함정 재현용
+// -- setServerVersion() 으로 재배포를 흉내낼 수 있다). 캐시에 응답이
+// 저장된 뒤에도 그 응답이 담고 있던 version 값은 안 바뀌므로, 온라인
+// 재요청이 "새 판을 받아오는지"와 오프라인이 "캐시된 옛 판에 머무는지"를
+// 값으로 구분해 잴 수 있다.
 export function loadServiceWorker({
   origin = "https://example.test",
   online = true,
+  serverVersion = "A",
 } = {}) {
   const listeners = {};
   let isOnline = online;
+  let currentServerVersion = serverVersion;
+  // null = 정상 응답. 숫자(예: 500)면 그 상태코드로 ok:false 응답을 준다
+  // (P2-1 수리 확인 칸 -- "온라인 오류 응답이 캐시된 정상 껍데기를
+  // 덮지 않는다").
+  let serverErrorStatus = null;
   const fetchLog = [];
 
   async function fakeFetch(input) {
@@ -141,7 +157,15 @@ export function loadServiceWorker({
     if (!isOnline) {
       throw new TypeError("sw-harness: simulated offline network failure");
     }
-    return new FakeResponse({ url, ok: true });
+    if (serverErrorStatus !== null) {
+      return new FakeResponse({
+        url,
+        ok: false,
+        status: serverErrorStatus,
+        version: currentServerVersion,
+      });
+    }
+    return new FakeResponse({ url, ok: true, version: currentServerVersion });
   }
 
   const fakeCaches = createFakeCacheStorage(fakeFetch, origin);
@@ -167,6 +191,12 @@ export function loadServiceWorker({
     setOnline(value) {
       isOnline = value;
     },
+    setServerVersion(value) {
+      currentServerVersion = value;
+    },
+    setServerError(status) {
+      serverErrorStatus = status;
+    },
     async runInstall() {
       const event = makeLifecycleEvent();
       listeners.install(event);
@@ -179,9 +209,16 @@ export function loadServiceWorker({
       await event.settled;
       return event;
     },
-    // path 는 origin 과 합쳐 전체 URL 이 된다(예: "/index.html").
+    // path 는 origin 과 합쳐 전체 URL 이 된다(예: "/index.html"). 검토 1R
+    // P2-4 수리: path 가 이미 절대 URL(스킴 포함, 예:
+    // "https://cdn.other-origin.test/thing.js")이면 origin 을 앞에 덧붙여
+    // 깨뜨리지 않고 그 값 그대로 쓴다 -- 수리 전에는 origin + path 로
+    // 뭉개져 "다른 출처 입력"이 실제로는 한 번도 들어가지 않았다(칸
+    // 이름이 말하는 입력이 그대로 하니스에 들어가게 하는 것이 이 수리의
+    // 목적).
     async runFetch(path, { mode = "same-origin" } = {}) {
-      const event = makeFetchEvent({ url: origin + path, mode });
+      const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(path) ? path : origin + path;
+      const event = makeFetchEvent({ url, mode });
       listeners.fetch(event);
       if (!event.responded) return { intercepted: false };
       return { intercepted: true, response: await event.response };
