@@ -1,6 +1,5 @@
 // HYK-304-pwa-installable-1 (coder-task.md §2 요구 3): 오프라인에서 앱
-// 껍데기를 띄우는 서비스 워커. public/ 이 esbuild dev-server.mjs 의
-// servedir 최상위라 이 파일의 등록 scope 는 앱 전체("/")다.
+// 껍데기를 띄우는 서비스 워커.
 //
 // ⛔IndexedDB·메모 데이터 무접촉: 이 파일은 indexedDB 를 전혀 참조하지
 // 않는다(아래 전체에서 그 낱말이 없다 -- grep 으로 직접 확인 가능).
@@ -13,15 +12,29 @@
 // push/sync 이벤트 리스너를 등록하지 않는다.
 const CACHE_VERSION = "v1";
 const CACHE_NAME = "mobile-markdown-editor-shell-" + CACHE_VERSION;
-const APP_SHELL = [
-  "/",
-  "/index.html",
-  "/dist/app.js",
-  "/manifest.json",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/icons/apple-touch-icon-180.png",
+
+// HYK-304-pages-deploy-1 (coder-task.md §2 요구 2ⓑ, 하위 경로): 이 서비스
+// 워커는 GitHub Pages 하위 경로(예: /mobile-markdown-editor/)와 개발
+// 서버 루트(/) 양쪽에서 그대로 등록된다(src/editor/sw-register.mjs 가
+// scope 를 넘기지 않으므로 기본 scope = 이 스크립트가 있는 디렉터리).
+// self.registration.scope 는 등록 즉시(설치 전에도) 그 디렉터리의 절대
+// URL 을 준다 -- 이 값을 기준으로 앱 껍데기 경로를 상대로 계산하면
+// "/..." 로 하드코딩한 루트 절대 경로 없이 두 환경 모두에서 맞는다.
+const SCOPE = self.registration.scope;
+const APP_SHELL_RELATIVE = [
+  "",
+  "index.html",
+  "dist/app.js",
+  "manifest.json",
+  "icons/icon-192.png",
+  "icons/icon-512.png",
+  "icons/apple-touch-icon-180.png",
 ];
+const APP_SHELL = APP_SHELL_RELATIVE.map((path) => new URL(path, SCOPE).href);
+const APP_SHELL_PATHNAMES = new Set(
+  APP_SHELL.map((href) => new URL(href).pathname),
+);
+const INDEX_URL = new URL("index.html", SCOPE).href;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -45,38 +58,53 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-// 검토 1R P1 수리: 탐색뿐 아니라 앱 껍데기 전부(번들·manifest·아이콘)를
-// 네트워크 우선으로 바꾼다. 이전 판은 번들·manifest·아이콘을 "캐시
-// 우선"으로만 줬는데, 그러면 캐시 판 이름(CACHE_VERSION, 손으로 올리는
-// 상수)을 올리지 않는 한 새로 배포한 번들이 이미 설치된 클라이언트에
-// 영영 안 보인다 -- 서비스 워커 자신의 바이트가 안 바뀌면 새 install 자체가
-// 안 일어나므로(브라우저 스펙), v1 캐시가 그대로 남아 "새 index.html +
-// 옛 번들"에 영구히 갇힌다(검토 1R 탐침 재현: 배포 뒤 온라인 7회 방문해도
-// 번들 A 유지). 온라인일 때는 매번 네트워크를 다시 타서 최신 응답을 쓰고
-// 캐시도 그 응답으로 갱신하므로, "손으로 올리는 상수"에만 기대지 않고도
-// 다음 온라인 방문에서 바로 새 판이 보인다. 네트워크가 실패(오프라인)할
-// 때만 캐시(설치 시점 또는 마지막으로 온라인에서 받은 판)로 떨어진다.
+// HYK-304-pages-deploy-1 (coder-task.md §2 요구 2ⓒ, P2-N1 전략 ⓒ):
+// 캐시-즉시-응답 + 백그라운드 갱신(stale-while-revalidate). 이전 판
+// (네트워크 우선, HYK-304-pwa-installable-1-r2 P1 수리)은 온라인일 때마다
+// 네트워크 응답을 "기다려" 첫 화면을 그렸다 -- 네트워크가 느리면 그만큼
+// 첫 화면도 늦어진다(PRD §5b "실행→입력 1초" NFR 과 충돌 가능). 이번 판은
+// 캐시가 있으면 그것을 즉시 돌려주고(첫 화면 지연 0), 같은 요청에 대한
+// 네트워크 응답도 별도로 기다려 ok 면 캐시를 그걸로 덮어쓴다 -- "이번
+// 방문"은 옛 판을 보더라도 캐시가 새 판으로 바뀌어 있으므로 "다음 방문"
+// 부터는 새 판이 캐시에서 바로 나온다(E17 1R P1 "영영 옛 판에 갇힘"과는
+// 반대로, 여기서는 최소 한 번의 후속 방문마다 갱신이 들어온다 -- 아래
+// service-worker.test.mjs 의 재배포 재현 칸). 캐시가 아예 없으면(첫 설치
+// 전 등) 네트워크 응답을 기다린다 -- 그마저 실패하면(오프라인) 다시 캐시를
+// 찾고, 탐색 요청이면 index.html 로 떨어진다.
 //
-// 검토 1R P2-1 수리: 응답이 ok(2xx)일 때만 cache.put 한다 -- 서버가 오류
-// 응답(예: 500)을 줘도 그 응답으로 캐시된 정상 껍데기를 덮어쓰지 않는다.
-// 덮어썼다면 다음 오프라인 방문이 그 오류 응답을 영구히 돌려주는 사고가
-// 난다.
-function respondToShellRequest(request) {
-  return fetch(request)
+// P2-N3(coder-task.md §2 요구 2ⓓ): cache.put 은 반드시 event.waitUntil 로
+// 넘긴 약속 "안에서" 완료된다(아래 networkUpdate 가 event.waitUntil 인자
+// 그 자체다) -- waitUntil 밖에서 fire-and-forget 으로 두면 브라우저가 fetch
+// 이벤트가 끝났다고 보고 워커를 재활용할 때 그 put 이 완료되기 전에
+// 끊길 수 있다(스펙: waitUntil 로 안 묶인 비동기 작업은 수명 보장이 없다).
+function staleWhileRevalidate(request) {
+  const networkUpdate = fetch(request)
     .then((response) => {
-      if (response.ok) {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-      }
-      return response;
+      if (!response.ok) return response;
+      const copy = response.clone();
+      return caches
+        .open(CACHE_NAME)
+        .then((cache) => cache.put(request, copy))
+        .then(() => response);
     })
-    .catch(() =>
-      caches.match(request).then((cached) => {
-        if (cached) return cached;
-        if (request.mode === "navigate") return caches.match("/index.html");
-        return undefined;
-      }),
-    );
+    .catch(() => undefined);
+
+  const respondPromise = caches.match(request).then((cached) => {
+    if (cached) return cached;
+    return networkUpdate.then((response) => {
+      if (response) return response;
+      if (request.mode === "navigate") return caches.match(INDEX_URL);
+      return undefined;
+    });
+  });
+
+  return { respondPromise, networkUpdate };
+}
+
+function respondToShellRequest(event, request) {
+  const { respondPromise, networkUpdate } = staleWhileRevalidate(request);
+  event.respondWith(respondPromise);
+  event.waitUntil(networkUpdate);
 }
 
 self.addEventListener("fetch", (event) => {
@@ -85,11 +113,11 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    event.respondWith(respondToShellRequest(request));
+    respondToShellRequest(event, request);
     return;
   }
 
-  if (APP_SHELL.includes(url.pathname)) {
-    event.respondWith(respondToShellRequest(request));
+  if (APP_SHELL_PATHNAMES.has(url.pathname)) {
+    respondToShellRequest(event, request);
   }
 });

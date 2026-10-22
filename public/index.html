@@ -13,7 +13,13 @@
          값). theme-color 2개는 라이트/다크 각각(E8 시스템 테마 @media
          분기와 같은 값 -- 새 색 0, 충돌 0). apple-touch-icon 은 iOS 홈
          화면 아이콘(아래 생성 스크립트: scripts/gen-pwa-icons.mjs). -->
-    <link rel="manifest" href="/manifest.json" />
+    <!-- HYK-304-pages-deploy-1 (coder-task.md §2 요구 2ⓑ): 아래 href/src 는
+         전부 루트 절대 경로("/...")가 아니라 문서 상대 경로다 --
+         GitHub Pages 하위 경로(/mobile-markdown-editor/)와 개발 서버
+         루트(/) 양쪽에서 이 파일이 어디에 떠 있든 "지금 디렉터리 기준"
+         으로 풀리게 하려는 것이다(새 BASE_PATH 상수 없이, 상대 경로
+         자체가 두 환경에서 같은 결과가 나온다). -->
+    <link rel="manifest" href="manifest.json" />
     <meta
       name="theme-color"
       media="(prefers-color-scheme: light)"
@@ -28,18 +34,18 @@
       rel="icon"
       type="image/png"
       sizes="192x192"
-      href="/icons/icon-192.png"
+      href="icons/icon-192.png"
     />
     <link
       rel="icon"
       type="image/png"
       sizes="512x512"
-      href="/icons/icon-512.png"
+      href="icons/icon-512.png"
     />
     <link
       rel="apple-touch-icon"
       sizes="180x180"
-      href="/icons/apple-touch-icon-180.png"
+      href="icons/apple-touch-icon-180.png"
     />
     <!-- iOS 사파리는 manifest의 display:standalone을 오래 무시해 왔다 --
          이 두 meta 가 "홈 화면에 추가" 뒤 독립 실행(크롬 없음)을 켜는
@@ -589,6 +595,6 @@
         <pre id="raw-panel"></pre>
       </div>
     </div>
-    <script type="module" src="/dist/app.js"></script>
+    <script type="module" src="dist/app.js"></script>
   </body>
 </html>

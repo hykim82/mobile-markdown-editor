@@ -60,8 +60,12 @@ test("manifest: 필수 칸이 전부 있고 PRD 제목·색 토큰 값과 일치
   );
   assert.equal(typeof manifest.short_name, "string");
   assert.ok(manifest.short_name.length > 0 && manifest.short_name.length <= 12);
-  assert.equal(manifest.start_url, "/");
-  assert.equal(manifest.scope, "/");
+  // HYK-304-pages-deploy-1(§2 요구 2ⓑ, 하위 경로): "." / "./" 는 manifest
+  // 자신의 URL 기준 상대 경로다 -- 루트("/") 와 GitHub Pages 하위 경로
+  // (/mobile-markdown-editor/) 양쪽에서 manifest 가 있는 바로 그 디렉터리로
+  // 풀린다(스펙: start_url·scope 는 manifest URL 기준으로 해석된다).
+  assert.equal(manifest.start_url, ".");
+  assert.equal(manifest.scope, "./");
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.lang, "ko");
   assert.equal(
@@ -86,7 +90,9 @@ test("manifest: icons 배열에 192·512 가 PNG·any+maskable 로 있다", asyn
     assert.equal(icon.type, "image/png");
     assert.match(icon.purpose, /\bany\b/);
     assert.match(icon.purpose, /\bmaskable\b/);
-    assert.equal(icon.src, `/icons/icon-${sizes.split("x")[0]}.png`);
+    // 상대 경로(선행 "/" 없음) -- manifest URL 기준으로 풀려 하위 경로에서도
+    // 맞는다(위 start_url/scope 주석과 같은 근거).
+    assert.equal(icon.src, `icons/icon-${sizes.split("x")[0]}.png`);
   }
 });
 
@@ -128,7 +134,11 @@ test("아이콘: scripts/gen-pwa-icons.mjs 재생성 결과가 커밋된 파일�
 
 test("index.html head: manifest 링크·theme-color(라이트·다크)·apple-touch-icon 이 있다", async () => {
   const html = await readFile(indexHtmlPath, "utf8");
-  assert.match(html, /<link[^>]*rel="manifest"[^>]*href="\/manifest\.json"/);
+  // HYK-304-pages-deploy-1(§2 요구 2ⓑ): href 가 "/manifest.json" 처럼
+  // 루트 절대 경로가 아니라 "manifest.json"(문서 상대)이어야 한다 -- 루트
+  // 절대 경로는 GitHub Pages 하위 경로(/mobile-markdown-editor/)에서
+  // 사이트 루트로 빗나간다.
+  assert.match(html, /<link[^>]*rel="manifest"[^>]*href="manifest\.json"/);
   assert.match(
     html,
     /<meta[^>]*name="theme-color"[^>]*media="\(prefers-color-scheme:\s*light\)"[^>]*content="#3B6FE0"/,
@@ -139,10 +149,30 @@ test("index.html head: manifest 링크·theme-color(라이트·다크)·apple-to
   );
   assert.match(
     html,
-    /<link[^>]*rel="apple-touch-icon"[^>]*sizes="180x180"[^>]*href="\/icons\/apple-touch-icon-180\.png"/,
+    /<link[^>]*rel="apple-touch-icon"[^>]*sizes="180x180"[^>]*href="icons\/apple-touch-icon-180\.png"/,
+  );
+  assert.match(
+    html,
+    /<link[^>]*rel="icon"[^>]*sizes="192x192"[^>]*href="icons\/icon-192\.png"/,
+  );
+  assert.match(
+    html,
+    /<link[^>]*rel="icon"[^>]*sizes="512x512"[^>]*href="icons\/icon-512\.png"/,
   );
   assert.match(
     html,
     /<meta[^>]*name="apple-mobile-web-app-capable"[^>]*content="yes"/,
+  );
+});
+
+// HYK-304-pages-deploy-1(§2 요구 2ⓑ): index.html 의 서비스 워커 번들
+// 스크립트 태그도 같은 이유로 문서 상대여야 한다(/dist/app.js 가 아니라
+// dist/app.js).
+test("index.html: 번들 script 태그가 문서 상대 경로다(/dist/app.js 아님)", async () => {
+  const html = await readFile(indexHtmlPath, "utf8");
+  assert.match(
+    html,
+    /<script[^>]*type="module"[^>]*src="dist\/app\.js"/,
+    "src 가 'dist/app.js'(선행 '/' 없음)여야 하위 경로에서도 맞는다",
   );
 });
