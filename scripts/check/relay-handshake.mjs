@@ -12,7 +12,7 @@ import {
   droppedAtScanText,
 } from "./reject-streak.mjs";
 import {
-  archiveRoundEnvelope,
+  archiveRoundEnvelopeIfNew,
   archiveRoundTaskFileIfNew,
 } from "./envelope-archive.mjs";
 import {
@@ -755,8 +755,28 @@ function resolveResultDoneOutcome(resultContent, resultDone, ageCtx) {
 // invisible to a caller that needs a boolean. checkRelayHandshake's OWN
 // return value/exit code contract is untouched (§3 금지) -- this return
 // value is new surface, not a repurposing of an existing one.
+// HYK-209-install-closure-3: archiveRoundEnvelopeIfNew instead of the plain
+// archiveRoundEnvelope this call used before -- a re-consumption of an
+// unchanged result (e.g. a prior consumption attempt that completed this
+// handshake's own ok:true verdict and archived the envelope, but then
+// failed a later, independent side effect such as admission-completion
+// release and exited 3, prompting a retry against the SAME unchanged
+// `<role>.md`) would otherwise have this call site write a second,
+// byte-identical `rounds/<role>-r<N>.md` every time, shifting round
+// numbering for no reason (mirrors autoArchiveRoundTaskFile's own
+// archiveRoundTaskFileIfNew rationale immediately above -- same bug shape,
+// the TASK-file axis already had this guard and the envelope axis did
+// not). archiveRoundEnvelopeIfNew skips that duplicate (ok:true,
+// skipped:true) while still delegating unchanged to archiveRoundEnvelope
+// whenever no identical snapshot exists yet -- outcome.ok stays the same
+// true/false either way, so this function's own success/failure contract
+// to its caller is unchanged.
 function autoArchiveRoundEnvelope({ role, resultContent, harnessDir }) {
-  const outcome = archiveRoundEnvelope({ role, resultContent, harnessDir });
+  const outcome = archiveRoundEnvelopeIfNew({
+    role,
+    resultContent,
+    harnessDir,
+  });
   if (outcome.ok) {
     console.log(outcome.reason);
   } else {

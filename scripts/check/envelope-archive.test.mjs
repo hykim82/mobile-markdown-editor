@@ -22,6 +22,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   archiveRoundEnvelope,
+  archiveRoundEnvelopeIfNew,
+  hasIdenticalArchivedRoundEnvelope,
   archiveUnconsumedRoundEnvelope,
   nextArchiveFileName,
   archiveRoundTaskFile,
@@ -474,6 +476,114 @@ test("archiveRoundEnvelope: role missing -> ok:false, never throws", () => {
     });
     assert.equal(outcome.ok, false);
     assert.match(outcome.reason, /role missing/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HYK-209-install-closure-3: archiveRoundEnvelopeIfNew / hasIdenticalArchived
+// RoundEnvelope -- the result-envelope axis's own IDENTICAL-content dedup,
+// mirroring archiveRoundTaskFileIfNew/hasIdenticalArchivedTaskFile's
+// contract one-to-one (envelope-archive.mjs 쪽 그 두 함수 바로 아래 정의).
+// ---------------------------------------------------------------------------
+
+test("archiveRoundEnvelopeIfNew: re-archiving IDENTICAL content for the same role is skipped (ok:true, skipped:true) -- no second file is written", () => {
+  withFixtureDir("envelope-archive-ifnew-identical-", (dir) => {
+    const content =
+      "task_id: HYK-209\n\n>>> DONE: CODER @ 2026-10-16 06:10 KST\n";
+    const first = archiveRoundEnvelopeIfNew({
+      role: "coder",
+      resultContent: content,
+      harnessDir: dir,
+    });
+    assert.equal(first.ok, true);
+    assert.equal(first.skipped, false);
+
+    const second = archiveRoundEnvelopeIfNew({
+      role: "coder",
+      resultContent: content,
+      harnessDir: dir,
+    });
+    assert.equal(second.ok, true);
+    assert.equal(
+      second.skipped,
+      true,
+      "a byte-identical re-consumption must be skipped, not written as a second file",
+    );
+    assert.match(second.reason, /already preserved/);
+
+    const files = readdirSync(join(dir, "rounds")).filter((n) =>
+      /^coder-r\d+\.md$/i.test(n),
+    );
+    assert.deepEqual(
+      files,
+      ["coder-r1.md"],
+      "exactly one archive copy must exist after two identical-content calls",
+    );
+  });
+});
+
+test("archiveRoundEnvelopeIfNew: genuinely different content for the same role is NOT skipped -- writes a new round file (r2)", () => {
+  withFixtureDir("envelope-archive-ifnew-different-", (dir) => {
+    const round1 =
+      "task_id: HYK-209\n\n>>> DONE: CODER @ 2026-10-16 06:10 KST\n";
+    const round2 =
+      "task_id: HYK-209\n\n>>> DONE: CODER @ 2026-10-16 07:10 KST\n";
+    archiveRoundEnvelopeIfNew({
+      role: "coder",
+      resultContent: round1,
+      harnessDir: dir,
+    });
+    const second = archiveRoundEnvelopeIfNew({
+      role: "coder",
+      resultContent: round2,
+      harnessDir: dir,
+    });
+    assert.equal(second.ok, true);
+    assert.equal(
+      second.skipped,
+      false,
+      "1바이트라도 다른 내용은 진짜 다음 라운드로 취급해 그대로 보관한다",
+    );
+    const files = readdirSync(join(dir, "rounds")).filter((n) =>
+      /^coder-r\d+\.md$/i.test(n),
+    );
+    assert.deepEqual(files.sort(), ["coder-r1.md", "coder-r2.md"]);
+  });
+});
+
+test("archiveRoundEnvelopeIfNew: identical content but a DIFFERENT role is NOT skipped -- role namespaces never cross", () => {
+  withFixtureDir("envelope-archive-ifnew-cross-role-", (dir) => {
+    const content =
+      "task_id: HYK-209\n\n>>> DONE: CODER @ 2026-10-16 06:10 KST\n";
+    archiveRoundEnvelopeIfNew({
+      role: "coder",
+      resultContent: content,
+      harnessDir: dir,
+    });
+    const otherRole = archiveRoundEnvelopeIfNew({
+      role: "review",
+      resultContent: content,
+      harnessDir: dir,
+    });
+    assert.equal(otherRole.ok, true);
+    assert.equal(
+      otherRole.skipped,
+      false,
+      "같은 내용이라도 role이 다르면 서로의 보관을 건너뛰지 않는다",
+    );
+    const files = readdirSync(join(dir, "rounds")).sort();
+    assert.deepEqual(files, ["coder-r1.md", "review-r1.md"]);
+  });
+});
+
+test("hasIdenticalArchivedRoundEnvelope: unreadable archive dir (never created) -> false, never throws (fail toward archiving)", () => {
+  withFixtureDir("envelope-archive-hasidentical-missing-dir-", (dir) => {
+    const found = hasIdenticalArchivedRoundEnvelope({
+      role: "coder",
+      resultContent: "anything",
+      harnessDir: dir,
+    });
+    assert.equal(found, false);
   });
 });
 

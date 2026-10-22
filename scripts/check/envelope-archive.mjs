@@ -398,6 +398,99 @@ export function archiveRoundEnvelope({
   }
 }
 
+// HYK-209-install-closure-3: archiveRoundEnvelope's TASK-file sibling
+// (hasIdenticalArchivedTaskFile above) already refuses to duplicate a
+// byte-identical snapshot; this function never got the same guard, so a
+// re-consumption of an unchanged result (e.g. the real incident this
+// closes -- first consumption fails after the envelope is already archived
+// (admission-completion exit 3), ORCH re-runs the same CLI against the
+// same unchanged `<role>.md`) writes a second `rounds/<role>-r<N>.md`
+// that is byte-identical to the first, shifting round numbering for no
+// reason (2026-10-16 11:2x 실측, 판정 1240 §3). Mirrors
+// hasIdenticalArchivedTaskFile exactly: scans `<role>-r(\d+)\.md` (role
+// match case-insensitive, same convention as nextArchiveFileName) and
+// compares each archive's header-stripped body against `resultContent`.
+// Never throws -- an unreadable archive dir/file is treated as "no match
+// found" (fail toward archiving, not toward silently skipping a round
+// that in fact isn't preserved yet -- same reasoning as the TASK-file
+// sibling's own comment).
+export function hasIdenticalArchivedRoundEnvelope({
+  role,
+  resultContent,
+  harnessDir,
+  readdirFn = readdirSync,
+  readFileFn = readFileSync,
+}) {
+  const archiveDir = join(harnessDir, ARCHIVE_SUBDIR);
+  let names;
+  try {
+    names = readdirFn(archiveDir);
+  } catch {
+    return false;
+  }
+  const pattern = new RegExp(`^${escapeForRegex(role)}-r(\\d+)\\.md$`, "i");
+  for (const name of names) {
+    if (!pattern.test(name)) continue;
+    let body;
+    try {
+      body = stripArchiveHeader(readFileFn(join(archiveDir, name), "utf8"));
+    } catch {
+      continue;
+    }
+    if (body === resultContent) return true;
+  }
+  return false;
+}
+
+// Thin wrapper around archiveRoundEnvelope: skips the write (ok:true,
+// skipped:true) when an archive with IDENTICAL content already exists for
+// this role, otherwise delegates unchanged. archiveRoundEnvelope itself is
+// untouched (⛔기존 계약 변경 금지 -- every existing caller/test of that
+// function keeps its exact current behavior); this is a new, additive
+// entry point, mirroring archiveRoundTaskFileIfNew's shape on this
+// function's own axis.
+export function archiveRoundEnvelopeIfNew({
+  role,
+  resultContent,
+  harnessDir,
+  readdirFn = readdirSync,
+  mkdirFn = mkdirSync,
+  writeFileFn = writeFileSync,
+  existsFn = existsSync,
+  readFileFn = readFileSync,
+}) {
+  if (
+    typeof role === "string" &&
+    role !== "" &&
+    typeof resultContent === "string" &&
+    hasIdenticalArchivedRoundEnvelope({
+      role,
+      resultContent,
+      harnessDir,
+      readdirFn,
+      readFileFn,
+    })
+  ) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: `envelope-archive: ${role} round content already preserved (identical snapshot exists in ${ARCHIVE_SUBDIR}/) -- skipped duplicate`,
+    };
+  }
+  return {
+    ...archiveRoundEnvelope({
+      role,
+      resultContent,
+      harnessDir,
+      readdirFn,
+      mkdirFn,
+      writeFileFn,
+      existsFn,
+    }),
+    skipped: false,
+  };
+}
+
 // HYK-461 §4-C: this round's runner receipt, preserved next to the round
 // copy. Naming: `<role>-r<N>-runner-receipt.json`, co-located under `rounds/`
 // with the round copy and sharing its round number N (derived from the round
