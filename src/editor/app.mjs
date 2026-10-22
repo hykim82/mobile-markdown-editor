@@ -13,6 +13,7 @@ import { mountFirstRunNotice } from "./first-run-notice.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
 import { writeCurrentMemoId } from "../storage/current-memo-pointer.mjs";
 import { cleanupExpiredDeletes } from "../storage/memo-lifecycle.mjs";
+import { registerServiceWorker } from "./sw-register.mjs";
 
 // HYK-304-system-theme-1: 색 토큰 6개(--color-bg·--color-bg-elevated·
 // --color-text-primary·--color-text-muted·--color-accent·--color-border)는
@@ -173,6 +174,9 @@ function main() {
   // 초기 복원(initialRestoreReady)은 아무 일도 하지 않아 기다릴 것이 없다.
   list.refresh();
   showScreen(elements.screens, "list");
+  // PWA 설치 가능(HYK-304-pwa-installable-1 §2 요구 4): 위 동기 구간이
+  // 이미 끝난 뒤에 등록을 미룬다(sw-register.mjs 머리 주석 근거).
+  registerServiceWorker();
 }
 
 main();

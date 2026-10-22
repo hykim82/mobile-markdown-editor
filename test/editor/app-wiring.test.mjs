@@ -378,3 +378,55 @@ test("배선 8 대조: 유예가 아직 많이 남은 soft-delete 레코드는 �
     "삭제시각이 있으니 목록에는 원래부터 안 보인다",
   );
 });
+
+// 번호 9 (HYK-304-pwa-installable-1 §2 요구 4·7, 번들 부팅 칸): jsdom
+// (27.0.0) 기본 navigator 에는 serviceWorker 가 없다(직접 확인 -- "in"
+// 연산자로 바로 아래에서 재확인). sw-register.mjs 의 registerServiceWorker
+// 는 그 경우 아무 일도 하지 않아야 한다 -- 이 시험이 실제로 재는 것은
+// "부팅이 오류 없이 끝까지 간다"는 것 자체다(등록 시도가 있었다면
+// navigator.serviceWorker 가 undefined 라 TypeError 로 bootApp() 의
+// await import 가 reject 했을 것).
+test("배선 9: navigator.serviceWorker 가 없으면(지원 없음) 등록을 시도하지 않고 부팅 오류도 없다", async () => {
+  const dom = await bootApp();
+  const { document, navigator } = dom.window;
+  assert.equal(
+    "serviceWorker" in navigator,
+    false,
+    "전제: jsdom 기본 navigator 에는 serviceWorker 가 없다",
+  );
+  await waitFor(
+    () => document.querySelector("#list-root .memo-list-empty") !== null,
+  );
+});
+
+// 번호 10 (§2 요구 4·7): seed 훅으로 navigator 에 가짜 serviceWorker.
+// register 를 심으면(bootApp 의 installDomGlobals 뒤 · 번들 import 전)
+// app.mjs main() 이 그걸 정확히 1회, 경로("/sw.js")·scope("/") 인자로
+// 부른다 -- sw-register.mjs 는 setTimeout(..., 0)으로 다음 매크로태스크에
+// 등록을 미루므로(실행→입력을 막지 않으려고) waitFor 로 호출을 기다린다.
+test("배선 10: navigator.serviceWorker 가 있으면 등록을 정확히 1회, 경로·scope 인자로 호출한다", async () => {
+  const calls = [];
+  const dom = await bootApp({
+    seed: (bootedDom) => {
+      Object.defineProperty(bootedDom.window.navigator, "serviceWorker", {
+        value: {
+          register: (...args) => {
+            calls.push(args);
+            return Promise.resolve({});
+          },
+        },
+        configurable: true,
+      });
+    },
+  });
+  const { document } = dom.window;
+  await waitFor(
+    () => document.querySelector("#list-root .memo-list-empty") !== null,
+  );
+  await waitFor(() => calls.length > 0, { timeout: 2000 });
+  // setTimeout 틱이 더 돈다 해도 등록은 한 번만 불려야 한다 -- 짧게
+  // settle 한 뒤에도 여전히 1회인지 본다.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ["/sw.js", { scope: "/" }]);
+});
