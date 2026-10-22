@@ -19,3 +19,15 @@ export function createBuildOptions() {
     logLevel: "info",
   };
 }
+
+// HYK-304-pages-deploy-1 2R(판정 2245 §2 ②): 배포 산출물만 압축(minify)하고
+// sourcemap 을 끈다 -- 개발 서버(dev-server.mjs)는 여전히 createBuildOptions()
+// 를 그대로 쓰므로 entry·bundle·outdir·sourcemap:true 등 개발 출력은 무변,
+// 배포 출력 옵션(minify·sourcemap)만 여기서 덮어쓴다(공유 설정 모듈은 같다).
+export function createDeployBuildOptions() {
+  return {
+    ...createBuildOptions(),
+    minify: true,
+    sourcemap: false,
+  };
+}

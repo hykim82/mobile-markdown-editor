@@ -13,6 +13,12 @@ env:
 jobs:
   enforce:
     runs-on: ubuntu-latest
+    # HYK-304-pages-deploy-1 2R(판정 2245 §1 P2-1): 멈추는 변이(검토 1R M3)가
+    # CI 잡 기본 제한까지 깔려있지 않게 한다 -- 값 근거(추론, 실제 GitHub
+    # Actions 소요는 못 쟀다): 로컬 `npm test` 전체 스위트 측정
+    # 120.9s(.harness/rounds/CODER-r1.md:77) + CI 전용 단계(npm ci, gitleaks
+    # 다운로드 등, 로컬 미측정) 여유.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4

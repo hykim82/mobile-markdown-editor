@@ -279,46 +279,58 @@ function isStillPending(promise) {
   );
 }
 
-test("P2-N3: cache.put 은 event.waitUntil 로 넘긴 약속 안에서 일어난다(waitUntil 자체가 불렸고, 그 약속이 끝나기 전엔 캐시가 안 바뀐다)", async () => {
-  const sw = loadServiceWorker({ serverVersion: "A" });
-  await sw.runInstall();
-  sw.setServerVersion("B");
-  const releaseCachePut = sw.pauseCachePut(); // cache.put 을 묶어 둔다.
+// HYK-304-pages-deploy-1 2R(coder-task.md §2 요구 1, P2-1 -- 검토 1R M3):
+// 캐시-즉시-응답이 "캐시 있어도 네트워크부터 기다린다"로 망가지면 이 칸의
+// `await event.response` 가 pauseCachePut 으로 묶인 networkUpdate 체인에
+// 걸려 끝나지 않는다(releaseCachePut 을 호출하기 전에 응답을 기다리는
+// 순서라서다). timeout 옵션으로 "멈춤" 대신 "짧은 시간 안의 실패"로
+// 바꾼다 -- 값 근거: 이 칸은 정상 판에서 2ms 안쪽으로 끝난다(위 node
+// --test 측정), 5000ms 면 정상 판 여유는 넉넉하고 멈추는 변이는 CI
+// 기본 잡 제한(실질 무제한)까지 기다리지 않는다.
+test(
+  "P2-N3: cache.put 은 event.waitUntil 로 넘긴 약속 안에서 일어난다(waitUntil 자체가 불렸고, 그 약속이 끝나기 전엔 캐시가 안 바뀐다)",
+  { timeout: 5000 },
+  async () => {
+    const sw = loadServiceWorker({ serverVersion: "A" });
+    await sw.runInstall();
+    sw.setServerVersion("B");
+    const releaseCachePut = sw.pauseCachePut(); // cache.put 을 묶어 둔다.
 
-  const event = sw.dispatchFetch("/dist/app.js");
-  assert.equal(event.responded, true, "respondWith 가 불렸어야 한다");
-  assert.equal(
-    event.waitUntilCalled,
-    true,
-    "respondToShellRequest 는 event.waitUntil 을 호출해야 한다 -- 호출 자체가 없으면(fire-and-forget) 이 값이 false 로 남는다",
-  );
+    const event = sw.dispatchFetch("/dist/app.js");
+    assert.equal(event.responded, true, "respondWith 가 불렸어야 한다");
+    assert.equal(
+      event.waitUntilCalled,
+      true,
+      "respondToShellRequest 는 event.waitUntil 을 호출해야 한다 -- 호출 자체가 없으면(fire-and-forget) 이 값이 false 로 남는다",
+    );
 
-  const response = await event.response; // 사용자에게 나가는 응답(캐시, 여전히 A).
-  assert.equal(
-    response.version,
-    "A",
-    "cache.put 이 묶여 있어도 캐시-즉시-응답(cache.match)은 그와 무관하게 바로 나간다",
-  );
+    const response = await event.response; // 사용자에게 나가는 응답(캐시, 여전히 A).
+    assert.equal(
+      response.version,
+      "A",
+      "cache.put 이 묶여 있어도 캐시-즉시-응답(cache.match)은 그와 무관하게 바로 나간다",
+    );
 
-  assert.equal(
-    await isStillPending(event.settled),
-    true,
-    "cache.put 을 아직 풀지 않았으므로 event.waitUntil 로 넘긴 약속도 아직 안 끝나 있어야 한다 -- cache.put 이 waitUntil '밖'에서 일어났다면(또는 waitUntil 에 엉뚱한, 이미 끝난 약속을 넘겼다면) settled 는 이 시점에 이미 끝나 있을 것이다",
-  );
+    assert.equal(
+      await isStillPending(event.settled),
+      true,
+      "cache.put 을 아직 풀지 않았으므로 event.waitUntil 로 넘긴 약속도 아직 안 끝나 있어야 한다 -- cache.put 이 waitUntil '밖'에서 일어났다면(또는 waitUntil 에 엉뚱한, 이미 끝난 약속을 넘겼다면) settled 는 이 시점에 이미 끝나 있을 것이다",
+    );
 
-  releaseCachePut(); // 이제 cache.put 이 끝나도록 풀어 준다.
-  await event.settled; // event.waitUntil 로 넘긴 그 약속이 끝나길 기다린다.
+    releaseCachePut(); // 이제 cache.put 이 끝나도록 풀어 준다.
+    await event.settled; // event.waitUntil 로 넘긴 그 약속이 끝나길 기다린다.
 
-  const cache = await sw.caches.open("mobile-markdown-editor-shell-v1");
-  const afterRelease = await cache.match({
-    url: "https://example.test/dist/app.js",
-  });
-  assert.equal(
-    afterRelease.version,
-    "B",
-    "cache.put 을 풀고 event.settled 가 끝난 뒤에는 캐시가 새 판(B)으로 갱신돼 있어야 한다",
-  );
-});
+    const cache = await sw.caches.open("mobile-markdown-editor-shell-v1");
+    const afterRelease = await cache.match({
+      url: "https://example.test/dist/app.js",
+    });
+    assert.equal(
+      afterRelease.version,
+      "B",
+      "cache.put 을 풀고 event.settled 가 끝난 뒤에는 캐시가 새 판(B)으로 갱신돼 있어야 한다",
+    );
+  },
+);
 
 // HYK-304-pages-deploy-1 §2 요구 2ⓑ(하위 경로): GitHub Pages 는
 // https://hykim82.github.io/mobile-markdown-editor/ 처럼 저장소 이름이
@@ -368,4 +380,43 @@ test("하위 경로(P2-N1 ⓑ): 등록 scope 밖의 같은 출처 경로(예: �
   const result = await sw.runFetch("/dist/app.js");
   assert.equal(result.intercepted, false);
   assert.deepEqual(sw.fetchLog, []);
+});
+
+// HYK-304-pages-deploy-1 2R(coder-task.md §2 요구 4, P2-4): sw.js 의
+// INDEX_URL 은 self.registration.scope 기준 상대 경로(new URL("index.html",
+// SCOPE))로 계산된다 -- 하위 경로(GitHub Pages)에서도 그 하위 경로의
+// index.html 로 떨어져야 한다. INDEX_URL 을 "/index.html"(루트 절대 경로)
+// 로 되돌리는 변이가 걸리는 칸: 하위 경로 + 오프라인 + 캐시에 없는 탐색
+// 요청(앱 껍데기 밖의 딥링크 경로)을 보내 staleWhileRevalidate 의 마지막
+// 폴백(caches.match(INDEX_URL))이 "하위 경로의" index.html 로 떨어지는지
+// 값으로 잰다. INDEX_URL 이 루트로 되돌려지면 하위 경로에는 그 캐시
+// 엔트리가 없어(설치 시 "/mobile-markdown-editor/index.html"로 캐시됐지,
+// "/index.html"로는 캐시되지 않았다) 폴백이 undefined 가 되고 이 칸이
+// 빨개진다.
+test("하위 경로 오프라인 폴백(P2-4): 캐시에 없는 딥링크를 오프라인으로 탐색하면 하위 경로의 index.html 로 떨어진다(INDEX_URL 을 루트로 되돌리는 변이 RED)", async () => {
+  const sw = loadServiceWorker({
+    origin: "https://hykim82.github.io",
+    basePath: "/mobile-markdown-editor/",
+  });
+  await sw.runInstall(); // 하위 경로 기준으로 APP_SHELL(index.html 포함) 캐시.
+  sw.setOnline(false); // 오프라인 -- networkUpdate 도 실패한다.
+
+  const result = await sw.runFetch("/mobile-markdown-editor/some/deep/route", {
+    mode: "navigate",
+  });
+  assert.equal(
+    result.intercepted,
+    true,
+    "앱 껍데기 밖의 딥링크라도 navigate 모드면 가로채야 한다",
+  );
+  assert.equal(
+    result.response.ok,
+    true,
+    "캐시에 없는 딥링크라도 오프라인이면 하위 경로의 index.html 로 폴백해야 한다 -- INDEX_URL 이 루트로 되돌려지면 폴백 응답이 undefined 가 되어 이 칸이 깨진다",
+  );
+  assert.equal(
+    result.response.url,
+    "https://hykim82.github.io/mobile-markdown-editor/index.html",
+    "폴백 응답은 하위 경로의 index.html 이어야 한다(사이트 루트의 index.html 이 아니다)",
+  );
 });

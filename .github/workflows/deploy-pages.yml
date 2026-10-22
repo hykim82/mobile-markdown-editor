@@ -1,15 +1,13 @@
 name: deploy-pages
 
-# HYK-304-pages-deploy-1 (판정 1945 §1 ⓐ): main push 때마다 자동 배포.
-# workflow_dispatch 도 더한다(수동 재실행 근거 1줄): 한용이 저장소 설정에서
-# Pages Source=GitHub Actions 를 클릭하는 시점은 이 워크플로 파일이 main에
-# 병합되는 시점과 다를 수 있는데, 그 사이 새 push가 없으면 클릭 뒤 배포를
-# 보려고 빈 커밋을 만들 필요 없이 이 탭에서 수동으로 한 번 돌릴 수 있다.
+# HYK-304-pages-deploy-1 2R(판정 2245 §2 ① -- 판정 1945 §1 ⓐ의 workflow_dispatch
+# 근거를 대체): main push 때만 배포한다. workflow_dispatch 는 더 두지 않는다
+# -- 수동 실행은 main 밖 가지(배포 안 쓴 변경)에서도 돌 수 있는 구멍이라
+# 조건부 건너뛰기 단계를 두지 않고 트리거 자체를 push:main 하나로 좁힌다.
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 # ⛔저장소 설정 변경 0 -- 이 권한은 이 워크플로가 실행되는 동안에만
 # 적용되는 워크플로 내부 선언이다(repo Settings > Actions 의 전역 권한과는

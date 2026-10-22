@@ -30,15 +30,20 @@ const enforcePath = join(
 
 const workflow = await readFile(workflowPath, "utf8");
 
-test("배포 워크플로: main push 가 트리거다(+ workflow_dispatch 수동 실행, 근거는 파일 주석)", () => {
+test("배포 워크플로: main push 만 트리거다(2R 판정 2245 §2 ① -- 수동 실행(workflow_dispatch) 0, pull_request(_target) 0)", () => {
   assert.match(
     workflow,
     /^on:\n(?:.*\n)*?\s*push:\n\s*branches:\n\s*-\s*main/m,
   );
-  assert.match(
+  assert.doesNotMatch(
     workflow,
     /workflow_dispatch:/,
-    "수동 실행 트리거도 선언돼 있어야 한다(파일 머리 주석의 1줄 근거 참고)",
+    "수동 실행 트리거는 제거돼야 한다 -- main 밖 가지에서도 돌 수 있는 구멍이었다(판정 2245 §2 ①)",
+  );
+  assert.doesNotMatch(
+    workflow,
+    /pull_request(_target)?:/,
+    "PR 트리거(pull_request/pull_request_target)는 0개여야 한다(P2-5)",
   );
 });
 
@@ -79,16 +84,43 @@ test("배포 워크플로: pages/id-token 권한이 워크플로 안에서만 �
     "빌드 -> 산출물 업로드 -> 배포 순서로 등장해야 한다",
   );
 
-  assert.match(
-    workflow,
-    /actions\/upload-pages-artifact@v3\s*\n\s*with:\s*\n\s*path:\s*public/,
-    "업로드 산출물 경로가 public(= dist/app.js 를 포함하는 디렉터리)이어야 한다",
+  // P2-2: path 값이 정확히 "public"(끝 고정)이어야 한다 -- 끝을 고정하지
+  // 않으면 "public/icons" 같은 하위 디렉터리로 좁히는 변이도 이 정규식을
+  // 그대로 통과한다(그러면 dist/app.js 가 업로드 산출물 밖으로 빠진다).
+  const pathMatch = workflow.match(
+    /actions\/upload-pages-artifact@v3\s*\n\s*with:\s*\n\s*path:\s*(\S+)\s*$/m,
+  );
+  assert.ok(pathMatch, "upload-pages-artifact 의 path: 값을 찾을 수 없다");
+  assert.equal(
+    pathMatch[1],
+    "public",
+    "업로드 산출물 경로가 정확히 public 이어야 한다(하위 디렉터리로 좁히면 dist/app.js 가 빠진다)",
   );
 
   assert.match(
     workflow,
     /needs:\s*build/,
     "deploy 잡은 build 잡이 끝난 뒤에 돌아야 한다(needs: build)",
+  );
+});
+
+// P2-2(산출물 포함 확인): 업로드 경로(public)를 실제로 빌드하면
+// dist/app.js 가 그 디렉터리 "안"에 생긴다 -- outdir 가 public 밖으로
+// 빠지는 변이(예: "dist")가 걸리는 칸(build-pages.test.mjs 의 outdir
+// 칸과는 별개로, 여기서는 "업로드되는 그 디렉터리"를 기준으로 잰다).
+test("배포 워크플로: 업로드 경로(public) 아래에 실제 빌드 산출물 dist/app.js 가 포함된다", async () => {
+  const { stat, rm } = await import("node:fs/promises");
+  const { createDeployBuildOptions, publicDir } =
+    await import("../../src/editor/esbuild-config.mjs");
+  const { build } = await import("esbuild");
+
+  await rm(join(publicDir, "dist"), { recursive: true, force: true });
+  await build(createDeployBuildOptions());
+
+  const stats = await stat(join(publicDir, "dist", "app.js"));
+  assert.ok(
+    stats.size > 0,
+    "업로드 경로(public) 아래 dist/app.js 가 비어있지 않아야 한다",
   );
 });
 
@@ -120,11 +152,25 @@ test("배포 워크플로: 액션 판이 전부 메이저 태그로 고정돼 �
   }
 });
 
-test("배포 워크플로: enforce.yml(기존 품질 게이트)은 이 변경으로 건드리지 않았다", async () => {
+test("배포 워크플로: enforce.yml(기존 품질 게이트)은 여전히 존재하고 이름이 그대로다(2R 변경은 timeout-minutes 1줄뿐, 아래 별도 칸)", async () => {
   const enforce = await readFile(enforcePath, "utf8");
   assert.match(enforce, /name: enforce/);
   // 이 테스트는 enforce.yml 이 여전히 존재하고 이름이 그대로임을 확인한다
   // (내용 전체 바이트 비교는 git diff 가 더 정확히 증명한다, 결과 파일
   // §5 "git diff --name-only" 칸 참고 -- 이 칸은 "실수로 같은 디렉터리의
   // 다른 워크플로를 건드리지 않았다"는 안전망).
+});
+
+// P2-1(coder-task.md §2 요구 1): enforce 잡에 timeout-minutes 가 있어야
+// 한다 -- 캐시 즉시 응답이 깨지는 변이(검토 1R M3)가 걸려도 CI 잡 기본
+// 제한까지 멈춰 있지 않고 이 숫자 분 안에 실패로 끝난다.
+test("enforce.yml: enforce 잡에 timeout-minutes 가 선언돼 있고 합리적인 분 단위 숫자다(멈추는 변이의 CI 쪽 안전망)", async () => {
+  const enforce = await readFile(enforcePath, "utf8");
+  const match = enforce.match(/^\s*timeout-minutes:\s*(\d+)\s*$/m);
+  assert.ok(match, "enforce 잡에 timeout-minutes: 가 있어야 한다");
+  const minutes = Number(match[1]);
+  assert.ok(
+    minutes > 0 && minutes <= 60,
+    `timeout-minutes 값(${minutes})이 1~60 분 사이여야 한다(0 이하는 즉시 실패, 60 초과는 안전망 의미 없음)`,
+  );
 });
