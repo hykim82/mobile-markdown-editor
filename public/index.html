@@ -7,6 +7,47 @@
       content="width=device-width, initial-scale=1, maximum-scale=1"
     />
     <title>모바일 마크다운 에디터 (HYK-304)</title>
+    <!-- HYK-304-pwa-installable-1 §2 요구 2·5: PWA 설치(홈 화면에 추가)
+         조건. manifest 는 public/manifest.json(정본, 아래 아이콘·테마
+         색은 그 파일과 spec/design-tokens.json 의 color.accent 와 같은
+         값). theme-color 2개는 라이트/다크 각각(E8 시스템 테마 @media
+         분기와 같은 값 -- 새 색 0, 충돌 0). apple-touch-icon 은 iOS 홈
+         화면 아이콘(아래 생성 스크립트: scripts/gen-pwa-icons.mjs). -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: light)"
+      content="#3B6FE0"
+    />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#5B8DEF"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="192x192"
+      href="/icons/icon-192.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="512x512"
+      href="/icons/icon-512.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/icons/apple-touch-icon-180.png"
+    />
+    <!-- iOS 사파리는 manifest의 display:standalone을 오래 무시해 왔다 --
+         이 두 meta 가 "홈 화면에 추가" 뒤 독립 실행(크롬 없음)을 켜는
+         iOS 전용 경로다(apple-mobile-web-app-status-bar-style 은 일부러
+         0 -- 상태바 스타일은 시스템 자동을 따르게 둔다, PRD §3 "테마:
+         시스템 자동" 원칙과 같은 근거). -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="마크다운 에디터" />
     <style>
       :root {
         /* PRD §3 "테마: 둘 다 + 시스템 자동(OS 변경 시 즉시 반영)". UA
