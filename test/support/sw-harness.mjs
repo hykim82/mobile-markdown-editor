@@ -133,12 +133,18 @@ function makeFetchEvent(request) {
       : request;
   let responsePromise;
   let waitUntilPromise = Promise.resolve();
+  // waitUntil 이 한 번도 안 불렸으면(=P2-N3 가 깨진 변이) settled 는 이
+  // 기본값(이미 끝난 약속)에 그대로 머문다 -- waitUntilCalled 로 "호출
+  // 자체가 있었는가"를 구조적으로 잡고, hasSettledYet(아래)으로 "그
+  // 약속이 아직 안 끝났을 수 있는가"를 시간상으로도 잡는다.
+  let waitUntilCalled = false;
   return {
     request: normalized,
     respondWith(promise) {
       responsePromise = promise;
     },
     waitUntil(promise) {
+      waitUntilCalled = true;
       waitUntilPromise = promise;
     },
     get responded() {
@@ -149,6 +155,9 @@ function makeFetchEvent(request) {
     },
     get settled() {
       return waitUntilPromise;
+    },
+    get waitUntilCalled() {
+      return waitUntilCalled;
     },
   };
 }

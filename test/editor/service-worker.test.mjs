@@ -262,7 +262,24 @@ test("앱 껍데기 목록 밖의 같은 출처 요청은 가로채지 않는다
 // (sw.pauseCachePut) -- dispatchFetch(runFetch 와 달리 settled 를 미리
 // 기다리지 않는 원시 버전)로 "응답은 이미 나갔는데 cache.put 은 아직
 // 묶여 있는" 상태를 만들고, 풀어 준 뒤에야 캐시가 바뀌는지 본다.
-test("P2-N3: cache.put 은 event.waitUntil 로 넘긴 약속 안에서 일어난다(그 약속이 끝나기 전엔 캐시가 안 바뀐다)", async () => {
+// 이 가짜 환경은 실제 I/O 지연이 없어(모든 가짜 fetch/cache 가 마이크로
+// 태스크 한두 틱 안에 끝난다), "release 뒤 아무 await 나 하고 캐시를
+// 본다"는 식의 시험은 waitUntil 연결 여부와 무관하게 통과해 버릴 수 있다
+// (release() 가 큐에 올린 재개 작업이, 우리가 어떤 약속을 기다리든 그
+// 사이에 끼어 먼저 돌 수 있어서다 -- 실측으로 확인). 그래서 "아직 안
+// 풀었을 때 settled 가 진짜로 아직 안 끝나 있는가"를 Promise.race 로
+// 직접 재는 쪽이 타이밍에 흔들리지 않는다: 이미 끝난 약속과 경합시키면
+// 늘 그 이미 끝난 쪽이 이긴다(동일 틱에서 먼저 등록된 쪽이 이기는 V8
+// 규칙), 아직 안 끝난 약속과 경합시키면 항상 방금 만든 비교용 약속이
+// 이긴다.
+function isStillPending(promise) {
+  const pendingMarker = Symbol("pending");
+  return Promise.race([promise, Promise.resolve(pendingMarker)]).then(
+    (value) => value === pendingMarker,
+  );
+}
+
+test("P2-N3: cache.put 은 event.waitUntil 로 넘긴 약속 안에서 일어난다(waitUntil 자체가 불렸고, 그 약속이 끝나기 전엔 캐시가 안 바뀐다)", async () => {
   const sw = loadServiceWorker({ serverVersion: "A" });
   await sw.runInstall();
   sw.setServerVersion("B");
@@ -270,6 +287,12 @@ test("P2-N3: cache.put 은 event.waitUntil 로 넘긴 약속 안에서 일어난
 
   const event = sw.dispatchFetch("/dist/app.js");
   assert.equal(event.responded, true, "respondWith 가 불렸어야 한다");
+  assert.equal(
+    event.waitUntilCalled,
+    true,
+    "respondToShellRequest 는 event.waitUntil 을 호출해야 한다 -- 호출 자체가 없으면(fire-and-forget) 이 값이 false 로 남는다",
+  );
+
   const response = await event.response; // 사용자에게 나가는 응답(캐시, 여전히 A).
   assert.equal(
     response.version,
@@ -277,18 +300,16 @@ test("P2-N3: cache.put 은 event.waitUntil 로 넘긴 약속 안에서 일어난
     "cache.put 이 묶여 있어도 캐시-즉시-응답(cache.match)은 그와 무관하게 바로 나간다",
   );
 
-  const cache = await sw.caches.open("mobile-markdown-editor-shell-v1");
-  const beforeRelease = await cache.match({
-    url: "https://example.test/dist/app.js",
-  });
   assert.equal(
-    beforeRelease.version,
-    "A",
-    "cache.put 을 아직 풀지 않았으므로(=event.waitUntil 로 넘긴 약속이 아직 안 끝남) 캐시는 여전히 A 여야 한다 -- cache.put 이 waitUntil '밖'에서 fire-and-forget 으로 일어났다면 이 값은 이미 B 로 바뀌어 있을 것이다",
+    await isStillPending(event.settled),
+    true,
+    "cache.put 을 아직 풀지 않았으므로 event.waitUntil 로 넘긴 약속도 아직 안 끝나 있어야 한다 -- cache.put 이 waitUntil '밖'에서 일어났다면(또는 waitUntil 에 엉뚱한, 이미 끝난 약속을 넘겼다면) settled 는 이 시점에 이미 끝나 있을 것이다",
   );
+
   releaseCachePut(); // 이제 cache.put 이 끝나도록 풀어 준다.
   await event.settled; // event.waitUntil 로 넘긴 그 약속이 끝나길 기다린다.
 
+  const cache = await sw.caches.open("mobile-markdown-editor-shell-v1");
   const afterRelease = await cache.match({
     url: "https://example.test/dist/app.js",
   });
