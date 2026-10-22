@@ -181,6 +181,38 @@ test("외부 출처 요청 가로채기 0: origin 이 다른 요청은 respondWi
   assert.equal(result.intercepted, false);
 });
 
+// HYK-304-test-gaps-1(책임자 판정 2026-10-22 17:50 §3, E17 검토 2R
+// P2-N2): 위 칸의 입력 pathname("/thing.js")은 APP_SHELL 밖이고
+// mode도 navigate가 아니라서, sw.js 85행의 origin 가드 줄을 지워도
+// 92행 APP_SHELL.includes 검사에서 이미 걸러져 intercepted:false가
+// 그대로 나온다(가드가 실제로 막은 게 아니라 다른 조건이 우연히 같은
+// 결과를 냈다) -- review.md §2 M5(가드 줄 제거 변이, 12/12 ok, RED
+// 0건)가 그 증거다. 가드가 실제로 일하는 입력(APP_SHELL 경로 또는
+// navigate 모드를 다른 출처로 보냄)으로 아래 두 칸을 추가한다.
+test("외부 출처 + APP_SHELL 경로(P2-N2): 다른 출처의 /index.html 요청은 가로채지 않는다(같은 출처라면 걸릴 경로)", async () => {
+  const sw = loadServiceWorker();
+  await sw.runInstall();
+  const result = await sw.runFetch("https://cdn.other-origin.test/index.html");
+  assert.equal(
+    result.intercepted,
+    false,
+    "pathname 은 APP_SHELL 안에 있지만 origin 이 달라서 가로채지 않아야 한다 -- origin 가드를 지우면 이 칸이 빨개진다(APP_SHELL.includes 가 걸려 intercepted:true 가 됨)",
+  );
+});
+
+test("외부 출처 + navigate 모드(P2-N2): 다른 출처의 탐색 요청은 가로채지 않는다(같은 출처라면 걸릴 경로)", async () => {
+  const sw = loadServiceWorker();
+  await sw.runInstall();
+  const result = await sw.runFetch("https://cdn.other-origin.test/some-page", {
+    mode: "navigate",
+  });
+  assert.equal(
+    result.intercepted,
+    false,
+    "navigate 모드는 pathname 과 무관하게 가로채는 경로지만 origin 이 다르면 걸리지 않아야 한다 -- origin 가드를 지우면 이 칸이 빨개진다(navigate 분기가 먼저 걸려 intercepted:true 가 됨)",
+  );
+});
+
 test("앱 껍데기 목록 밖의 같은 출처 요청은 가로채지 않는다(가짜 fetch 로그에 0회 -- 그대로 네트워크로 흘러간다는 뜻)", async () => {
   const sw = loadServiceWorker();
   await sw.runInstall();

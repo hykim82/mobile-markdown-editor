@@ -349,3 +349,71 @@ test("mountNotionCopy: 실패 시 재시도 문구가 뜨고 원문은 store 에
     "실패해도 원문 로컬 보존(수용 기준④)",
   );
 });
+
+// HYK-304-test-gaps-1(책임자 판정 2026-10-22 17:50 §3): 위 시험은
+// /다시/ 정규식만 대조해 "복사가 안됐어요다시 재시도" 처럼 glossary
+// 확정 문구와 다른 1글자 변형도 통과시킨다(ORCH 사전 측정: 전체
+// test/ 에 "복사가 안 됐어요" 리터럴 0건). 아래는 GLOSSARY 확정 문구
+// 원문 전체(notion-copy.mjs 의 ERROR_TEXT 상수를 import 해 비교하지
+// 않고, 코드펜스 밖 문자열 그대로 박아 둔다 -- 상수를 그대로 베끼면
+// 상수 자체가 바뀌어도 시험이 따라 바뀌어 아무것도 못 잡는다)와
+// data-variant="error" 를 함께 단정한다.
+test("mountNotionCopy: 실패 토스트 문구는 GLOSSARY 확정 문구 원문과 바이트가 같고, variant=error 다", async () => {
+  const { editor } = makeProductEditor();
+  const adapter = createFakeAdapter();
+  const store = createMemoStore(adapter);
+  await store.onContentChange("원문 보존 확인용 본문");
+
+  const { button, toast } = makeElements();
+  const clipboard = makeFailingClipboard();
+  mountNotionCopy(editor, store, { button, toast }, { clipboard });
+
+  button.dispatchEvent(new window.Event("click"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assertByteIdentical(
+    toast.textContent,
+    "복사가 안 됐어요. 다시",
+    "오류 토스트 문구는 GLOSSARY 확정 문구 원문과 바이트가 같아야 한다",
+  );
+  assert.equal(
+    toast.dataset.variant,
+    "error",
+    "오류 토스트는 data-variant=error 로 표시돼야 한다(성공 토스트와 모양 구분)",
+  );
+});
+
+test("mountNotionCopy: 성공 토스트 문구는 GLOSSARY 확정 문구 원문과 바이트가 같고, variant=success 다(반대 방향)", async () => {
+  const { editor } = makeProductEditor();
+  editor.update(
+    () => {
+      const root = $getRoot();
+      root.clear();
+      const paragraph = $createParagraphNode();
+      paragraph.append($createTextNode("성공 경로 본문"));
+      root.append(paragraph);
+    },
+    { discrete: true },
+  );
+  const adapter = createFakeAdapter();
+  const store = createMemoStore(adapter);
+  await store.onContentChange("성공 경로 본문");
+
+  const { button, toast } = makeElements();
+  const clipboard = makeFakeClipboard();
+  mountNotionCopy(editor, store, { button, toast }, { clipboard });
+
+  button.dispatchEvent(new window.Event("click"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assertByteIdentical(
+    toast.textContent,
+    "노션에 복사됐어요 ✓",
+    "성공 토스트 문구는 GLOSSARY 확정 문구 원문과 바이트가 같아야 한다",
+  );
+  assert.equal(
+    toast.dataset.variant,
+    "success",
+    "성공 토스트는 data-variant=success 여야 한다(오류 토스트와 모양 구분)",
+  );
+});
