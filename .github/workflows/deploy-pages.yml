@@ -1,0 +1,80 @@
+name: deploy-pages
+
+# HYK-304-pages-deploy-1 (판정 1945 §1 ⓐ): main push 때마다 자동 배포.
+# workflow_dispatch 도 더한다(수동 재실행 근거 1줄): 한용이 저장소 설정에서
+# Pages Source=GitHub Actions 를 클릭하는 시점은 이 워크플로 파일이 main에
+# 병합되는 시점과 다를 수 있는데, 그 사이 새 push가 없으면 클릭 뒤 배포를
+# 보려고 빈 커밋을 만들 필요 없이 이 탭에서 수동으로 한 번 돌릴 수 있다.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# ⛔저장소 설정 변경 0 -- 이 권한은 이 워크플로가 실행되는 동안에만
+# 적용되는 워크플로 내부 선언이다(repo Settings > Actions 의 전역 권한과는
+# 별개). deploy 잡에서만 pages/id-token 이 필요하므로 잡 단위로 좁힌다
+# (아래 deploy 잡 참고) -- 최상위에는 build 잡이 쓰는 contents:read 만 둔다.
+permissions:
+  contents: read
+
+# 같은 배포가 겹쳐 돌면 순서가 꼬일 수 있어 하나만 돈다(GitHub Pages 공식
+# 예시와 같은 관례) -- cancel-in-progress:false 로 둬서 진행 중인 배포를
+# 끊지 않고 다음 배포를 뒤에 줄 세운다(조용한 중단 대신 순서대로 끝까지).
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # enforce.yml 과 같은 Node 20(ubuntu) -- 빌드 산출물이 CI 품질 게이트가
+      # 본 것과 같은 런타임에서 나오게 맞춘다(근거: coder-task.md §2 요구 2ⓐ).
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      # src/editor/esbuild-config.mjs 를 dev-server.mjs 와 공유하는 바로 그
+      # 설정으로 public/dist/app.js 를 만든다(scripts/build-pages.mjs).
+      - name: Build app bundle (public/dist/app.js)
+        run: npm run build:pages
+
+      - name: Verify build produced public/dist/app.js
+        run: test -f public/dist/app.js
+
+      # repo Settings 의 Pages 활성화 여부와 무관하게 호출되는 메타데이터
+      # 단계 -- Pages 가 꺼져 있으면(Source 미설정) 여기서 실패한다(조용한
+      # 초록 금지, coder-task.md §2 요구 6).
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      # path=public: 아이콘·manifest·sw.js·index.html 과 방금 만든
+      # dist/app.js 가 전부 이 디렉터리 아래에 있다(산출물에 dist 포함 칸).
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # pages/id-token 은 이 잡에서만 선언한다(최상위에 두지 않음 -- build
+    # 잡은 이 권한이 필요 없다, coder-task.md §2 요구 2ⓐ "워크플로 안에서만").
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

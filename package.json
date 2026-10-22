@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "dev": "node src/editor/dev-server.mjs"
+    "dev": "node src/editor/dev-server.mjs",
+    "build:pages": "node scripts/build-pages.mjs"
   },
   "dependencies": {
     "@lexical/list": "0.51.0",

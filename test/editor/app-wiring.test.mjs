@@ -401,10 +401,14 @@ test("배선 9: navigator.serviceWorker 가 없으면(지원 없음) 등록을 �
 
 // 번호 10 (§2 요구 4·7): seed 훅으로 navigator 에 가짜 serviceWorker.
 // register 를 심으면(bootApp 의 installDomGlobals 뒤 · 번들 import 전)
-// app.mjs main() 이 그걸 정확히 1회, 경로("/sw.js")·scope("/") 인자로
-// 부른다 -- sw-register.mjs 는 setTimeout(..., 0)으로 다음 매크로태스크에
-// 등록을 미루므로(실행→입력을 막지 않으려고) waitFor 로 호출을 기다린다.
-test("배선 10: navigator.serviceWorker 가 있으면 등록을 정확히 1회, 경로·scope 인자로 호출한다", async () => {
+// app.mjs main() 이 그걸 정확히 1회, 경로("sw.js") 인자로 부른다 --
+// sw-register.mjs 는 setTimeout(..., 0)으로 다음 매크로태스크에 등록을
+// 미루므로(실행→입력을 막지 않으려고) waitFor 로 호출을 기다린다.
+// HYK-304-pages-deploy-1(§2 요구 2ⓑ): 경로가 더 이상 "/sw.js" + 명시
+// scope("/")가 아니라 문서 상대 "sw.js"(옵션 없음)다 -- GitHub Pages
+// 하위 경로(/mobile-markdown-editor/)에서도 등록이 그 디렉터리 "안"으로
+// 좁혀지려면 루트 절대 경로를 하드코딩하면 안 된다(위 sw-register.mjs 주석).
+test("배선 10: navigator.serviceWorker 가 있으면 등록을 정확히 1회, 문서 상대 경로로 호출한다", async () => {
   const calls = [];
   const dom = await bootApp({
     seed: (bootedDom) => {
@@ -428,7 +432,7 @@ test("배선 10: navigator.serviceWorker 가 있으면 등록을 정확히 1회,
   // settle 한 뒤에도 여전히 1회인지 본다.
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], ["/sw.js", { scope: "/" }]);
+  assert.deepEqual(calls[0], ["sw.js"]);
 });
 
 // 번호 11 (HYK-304-pwa-installable-1-r2 §2 요구 2, P2-2): 검토 1R이 "기존

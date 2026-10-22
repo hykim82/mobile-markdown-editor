@@ -3,13 +3,9 @@
 // 0.0.0.0 으로 열어 같은 와이파이의 휴대폰에서도 접속 가능하게 한다.
 import { context } from "esbuild";
 import { networkInterfaces } from "node:os";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { resolveBindHost } from "./dev-server-host.mjs";
+import { createBuildOptions, publicDir } from "./esbuild-config.mjs";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(here, "..", "..");
-const publicDir = join(repoRoot, "public");
 const PORT = 5173;
 
 function lanAddresses() {
@@ -25,14 +21,7 @@ function lanAddresses() {
 }
 
 async function main() {
-  const ctx = await context({
-    entryPoints: [join(here, "app.mjs")],
-    bundle: true,
-    outdir: join(publicDir, "dist"),
-    format: "esm",
-    sourcemap: true,
-    logLevel: "info",
-  });
+  const ctx = await context(createBuildOptions());
 
   const host = resolveBindHost();
   const { port } = await ctx.serve({
