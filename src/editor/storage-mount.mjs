@@ -17,6 +17,7 @@ import {
   readCurrentMemoId,
   writeCurrentMemoId,
 } from "../storage/current-memo-pointer.mjs";
+import { recordNewMemo } from "./usage-metrics.mjs";
 
 // HYK-304-linebreak-3(REVIEW-r2.md §1-1): bodyFormat 필드가 CURRENT_BODY_
 // FORMAT 이 아니면(없거나 다르면) main(dac26cf, 이 필드가 생기기 전
@@ -221,8 +222,16 @@ export function mountStorage(
       return;
     }
     const body = serializeEditorToMarkdown(editor);
+    // HYK-304-usage-metrics-1: memo-store.mjs(createNewMemo 주석 "실제
+    // 생성은 첫 글자 입력")가 새 메모를 만드는 조건과 정확히 같은 값을
+    // 호출 "전"에 읽어 둔다 -- store.getMemoId() 가 아직 null 이고 본문이
+    // 비어 있지 않으면 이 onContentChange 가 반드시 createNewMemo 를
+    // 거친다(storage/memo-store.mjs 를 건드리지 않고 그 결정 지점을
+    // 바깥에서 그대로 재구성한다, product_scope "새 메모 생성 지점").
+    const willCreateNewMemo = store.getMemoId() === null && body.length > 0;
     store.onContentChange(body).then(() => {
       writeCurrentMemoId(store.getMemoId());
+      if (willCreateNewMemo) recordNewMemo();
     });
   });
 

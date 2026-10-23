@@ -10,6 +10,7 @@ import { mountNotionCopy } from "./notion-copy.mjs";
 import { mountShortcutBar } from "./shortcut-bar.mjs";
 import { mountMemoList } from "./memo-list-mount.mjs";
 import { mountFirstRunNotice } from "./first-run-notice.mjs";
+import { recordAppOpen, mountUsageStatsCard } from "./usage-metrics.mjs";
 import { createIndexedDbAdapter } from "../storage/indexeddb-adapter.mjs";
 import { writeCurrentMemoId } from "../storage/current-memo-pointer.mjs";
 import { cleanupExpiredDeletes } from "../storage/memo-lifecycle.mjs";
@@ -85,6 +86,14 @@ function grabElements() {
     listSaveErrorButton: document.getElementById("list-save-error-button"),
     newMemoButton: document.getElementById("new-memo-button"),
     backButton: document.getElementById("back-to-list-button"),
+    // HYK-304-usage-metrics-1: 목록 제목 길게 누르기로만 열리는 숨은
+    // 통계 카드(usage-metrics.mjs 의 mountUsageStatsCard 가 결선 전부를
+    // 맡는다 -- 여기는 DOM 참조 셋을 모으기만 한다).
+    usageStats: {
+      trigger: document.querySelector("#list-screen .topbar h1"),
+      card: document.getElementById("usage-stats-card"),
+      closeButton: document.getElementById("usage-stats-close-button"),
+    },
     screens: {
       list: document.getElementById("list-screen"),
       editor: document.getElementById("editor-screen"),
@@ -116,6 +125,9 @@ function wireListNavigation({ newMemoButton, backButton, screens }, ctx) {
 function main() {
   applyDesignTokens();
   const elements = grabElements();
+  // HYK-304-usage-metrics-1: 앱 시작 1회당 1(메모 내용·네트워크 전송 0).
+  recordAppOpen();
+  mountUsageStatsCard(elements.usageStats);
   // PRD §5b "최초 실행 1회 고지": 동기 호출이고(localStorage 읽기만,
   // await 없음) 입력을 막지 않는 배너라 그 뒤 에디터 마운트·입력 가능
   // 시점과 경합하지 않는다(실행→입력 1초 NFR, first-run-notice.mjs

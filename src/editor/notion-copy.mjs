@@ -9,6 +9,8 @@ export function getNotionCopyBody(store) {
   return store.getBody();
 }
 
+import { recordCopySuccess } from "./usage-metrics.mjs";
+
 // §1-⑷ "빈 본문일 때 버튼 비활성" -- 원문 길이 0에만(트림 안 함, 공백·
 // 마커만인 본문은 비어 있지 않다).
 export function isNotionCopyDisabled(store) {
@@ -66,6 +68,7 @@ export function mountNotionCopy(editor, store, elements, deps = {}) {
       await performNotionCopy(store, clipboard);
       vibrate(10);
       showToast(toast, SUCCESS_TEXT, "success");
+      recordCopySuccess(); // HYK-304-usage-metrics-1: 성공 경로에서만(실패 0)
       // 정책(PRD §5.4 수용 기준②): 성공 토스트는 2초. 복사 후 에디터는
       // 그대로 유지된다(이 핸들러는 editor.update 를 한 번도 부르지
       // 않는다 -- 그래서 커서·스크롤이 날아갈 방법이 구조적으로 없다).
