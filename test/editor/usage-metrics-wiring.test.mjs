@@ -91,6 +91,92 @@ test("반대 방향: 한글 조합 중 지우기는 재입력 추정에 들어�
   );
 });
 
+// 2R(검토 1R P1-1 반려 수리, 책임자 판정 2026-10-23 15:45 §1 A) -- 두
+// 방향 칸. 위 테스트는 "조합 중 지우기 = 0"(반대 방향)을 이미 잰다. 아래
+// 둘은 "조합으로 다시 입력 = 1"과 "같은 조합 안 여러 insertCompositionText
+// = 1(2 아님)"을 잰다.
+test("한글 조합으로 다시 입력하면 재입력 추정에 1로 잡힌다(지우기 3회 -> 조합 중 insertCompositionText)", () => {
+  window.localStorage.clear();
+  const { editor, root } = makeProductEditor();
+  const fakeDom = makeFakeDom();
+  seedText(editor, "안녕하세요테스트조합");
+
+  // 실제 지우기 3회(조합 밖) -- deleteStreak 가 임계값을 넘어 pendingRetypeSince 가 선다.
+  typeBeforeInput(fakeDom, root, "deleteContentBackward");
+  typeBeforeInput(fakeDom, root, "deleteContentBackward");
+  typeBeforeInput(fakeDom, root, "deleteContentBackward");
+
+  root.dispatchEvent(
+    new window.CompositionEvent("compositionstart", {
+      data: "",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(editor.isComposing(), true, "사전 조건: 조합 중이어야 한다");
+
+  // 조합이 "다시 입력"을 밀어 넣는 첫 beforeinput.
+  typeBeforeInput(fakeDom, root, "insertCompositionText", "ㄱ");
+
+  root.dispatchEvent(
+    new window.CompositionEvent("compositionend", {
+      data: "가",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(editor.isComposing(), false);
+
+  const { thisWeek } = readRecentWeeks();
+  assert.equal(
+    thisWeek.retypes,
+    1,
+    "지우기 3회 뒤 한글 조합으로 다시 입력하면 재입력 추정이 1이어야 한다",
+  );
+});
+
+test("같은 조합 안에서 insertCompositionText 가 여러 번 와도 재입력 추정은 1로만 잡힌다(2 아님)", () => {
+  window.localStorage.clear();
+  const { editor, root } = makeProductEditor();
+  const fakeDom = makeFakeDom();
+  seedText(editor, "안녕하세요테스트조합");
+
+  typeBeforeInput(fakeDom, root, "deleteContentBackward");
+  typeBeforeInput(fakeDom, root, "deleteContentBackward");
+  typeBeforeInput(fakeDom, root, "deleteContentBackward");
+
+  root.dispatchEvent(
+    new window.CompositionEvent("compositionstart", {
+      data: "",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(editor.isComposing(), true, "사전 조건: 조합 중이어야 한다");
+
+  // 같은 조합 안에서 자모가 쌓이며 여러 번 오는 insertCompositionText --
+  // 첫 번째만 재입력으로 세고 나머지는 중복 계수되면 안 된다.
+  typeBeforeInput(fakeDom, root, "insertCompositionText", "ㄱ");
+  typeBeforeInput(fakeDom, root, "insertCompositionText", "가");
+  typeBeforeInput(fakeDom, root, "insertCompositionText", "각");
+
+  root.dispatchEvent(
+    new window.CompositionEvent("compositionend", {
+      data: "각",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(editor.isComposing(), false);
+
+  const { thisWeek } = readRecentWeeks();
+  assert.equal(
+    thisWeek.retypes,
+    1,
+    "같은 조합 안 여러 insertCompositionText 는 중복 계수되면 안 된다(1이어야 한다)",
+  );
+});
+
 test("반대 방향: 2글자만 연속 지우고 다시 입력하면 재입력 추정은 0회다", () => {
   window.localStorage.clear();
   const { editor, root } = makeProductEditor();
@@ -243,6 +329,80 @@ test("결선 전체: 앱 열기·새 메모·복사 성공·실행취소·재입
   // 평소 화면에는 숫자 외 메모 "내용"이 전혀 안 보인다 -- 메모 본문
   // "안녕하세요x"는 raw-panel(개발용 표시)에만 있고 카드엔 숫자만.
   assert.doesNotMatch(card.textContent, /안녕/);
+});
+
+// P2-1(2R, 책임자 판정 2026-10-23 15:45 §1 A) -- 새 메모는 "생성 1회당
+// 1"만 센다. storage-mount.mjs 는 이 라운드 변경 범위 밖(product_scope)
+// 이라 손대지 않는다 -- willCreateNewMemo 가 store.getMemoId() === null
+// 일 때만 서는 기존 결선을 그대로 거쳐 "재오픈·리세이브는 안 늘어난다"를
+// 시험으로 고정한다.
+test("P2-1: 새 메모는 생성 1회당 1만 센다(같은 메모를 다시 열거나 다시 저장해도 늘지 않는다)", async (t) => {
+  const dom = await bootApp({
+    seed: (d) => installBeforeInputShims(d),
+  });
+  const { document } = dom.window;
+  await waitForListScreen(document);
+
+  // 새 메모 1.
+  document.getElementById("new-memo-button").click();
+  await waitFor(
+    () => document.getElementById("editor-screen").hidden === false,
+  );
+  let root = document.getElementById("editor-root");
+  typeBeforeInput(dom, root, "insertText", "메모하나");
+  await waitFor(() =>
+    document.getElementById("save-indicator").classList.contains("is-visible"),
+  );
+  document.getElementById("back-to-list-button").click();
+  await waitFor(() => document.getElementById("list-screen").hidden === false);
+
+  // 새 메모 2.
+  document.getElementById("new-memo-button").click();
+  await waitFor(
+    () => document.getElementById("editor-screen").hidden === false,
+  );
+  root = document.getElementById("editor-root");
+  typeBeforeInput(dom, root, "insertText", "메모둘");
+  await waitFor(() =>
+    document.getElementById("save-indicator").classList.contains("is-visible"),
+  );
+  document.getElementById("back-to-list-button").click();
+  await waitFor(() => document.getElementById("list-screen").hidden === false);
+
+  // 메모 1을 다시 연다(재오픈) -> 글자를 더 쳐서 다시 저장한다(리세이브)
+  // -- 둘 다 생성이 아니므로 newMemos 가 늘면 안 된다.
+  await waitFor(() =>
+    [...document.querySelectorAll(".memo-card-title")].some(
+      (node) => node.textContent === "메모하나",
+    ),
+  );
+  const reopenCard = [...document.querySelectorAll(".memo-card")].find(
+    (card) => card.querySelector(".memo-card-title").textContent === "메모하나",
+  );
+  reopenCard.click();
+  await waitFor(
+    () => document.getElementById("editor-screen").hidden === false,
+  );
+  await waitFor(
+    () => document.getElementById("raw-panel").textContent === "메모하나",
+  );
+  root = document.getElementById("editor-root");
+  typeBeforeInput(dom, root, "insertText", "추가");
+  await waitFor(
+    () => document.getElementById("raw-panel").textContent === "메모하나추가",
+  );
+  await waitFor(() =>
+    document.getElementById("save-indicator").classList.contains("is-visible"),
+  );
+  document.getElementById("back-to-list-button").click();
+  await waitFor(() => document.getElementById("list-screen").hidden === false);
+
+  longPressTitle(t, document);
+  assert.equal(
+    statCell(document, "newMemos", "this").textContent,
+    "2",
+    "재오픈·리세이브는 생성이 아니므로 새 메모 2개를 센 2 그대로여야 한다",
+  );
 });
 
 test("반대 방향: 노션 복사가 실패하면 복사 성공 카운터는 0이다", async (t) => {

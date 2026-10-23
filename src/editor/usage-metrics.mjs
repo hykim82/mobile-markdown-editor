@@ -198,9 +198,20 @@ export function mountUsageStatsCard(
 // 를 센다. 재입력 추정 = 3글자 이상 «연속» 지우기(=연속된 delete* 타입
 // beforeinput, 근거: backspace 1회 = beforeinput 1회이므로 3회 연속
 // backspace ≈ 3자 지우기) 뒤 5초 안에 다시 입력(insert* 타입)하면 1회로
-// 센다. 한글 조합 중(editor.isComposing())인 이벤트는 둘 다 무시한다
-// (연속 지우기 판정에 넣지도, 재입력 판정을 끊지도 않는다 -- 조합 자체가
-// 끝나야 다음 실제 delete/insert 로 판정이 재개된다).
+// 센다.
+//
+// 2R(검토 1R P1-1 반려 수리, 책임자 판정 2026-10-23 15:45 §1 A): 한글
+// 조합 중(editor.isComposing())에는 «delete 계열만» 무시한다(연속 지우기
+// 판정에 넣지 않는다 -- 조합 안에서 지우는 것은 "다시 지우기 시작"이
+// 아니다). insert 계열(= IME 조합이 글자를 밀어 넣는 insertCompositionText)
+// 은 무시하지 않고 그대로 아래 isInsertInputType 분기를 탄다 -- 그래서
+// 지우기 3회 뒤 한글로 "다시 입력"하면 그 조합의 첫 insertCompositionText
+// 에서 재입력 1회가 잡힌다. 같은 조합 안에서 뒤이어 오는
+// insertCompositionText 들은 중복 계수되지 않는다 -- 첫 번째가 이미
+// pendingRetypeSince 를 null 로 되돌려 놔서(아래 isInsertInputType 분기
+// 공통 로직), 그 뒤 호출은 "참 조건"을 다시 만들 조건(pendingRetypeSince
+// !== null)이 거짓이라 자연히 걸러진다(조합별 상태를 따로 두지 않아도
+// 된다).
 const RETYPE_THRESHOLD = 3;
 const RETYPE_WINDOW_MS = 5000;
 
@@ -222,8 +233,11 @@ export function registerUsageInputTracking(editor, options = {}) {
   let detachGuard = null;
 
   const handleBeforeInput = (event) => {
-    if (editor.isComposing()) return;
     const inputType = event.inputType;
+    // 조합 중에는 delete 계열만 무시한다(위 §1 ORCH 해석 2R) -- insert
+    // 계열(insertCompositionText 포함)·historyUndo 는 그대로 아래로
+    // 흘러 평소 판정을 탄다.
+    if (editor.isComposing() && isDeleteInputType(inputType)) return;
     if (inputType === "historyUndo") {
       recordUndo();
       deleteStreak = 0;
