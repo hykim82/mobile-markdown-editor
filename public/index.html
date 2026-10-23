@@ -220,6 +220,53 @@
         font-size: 13px;
         color: var(--color-text-muted);
       }
+      /* HYK-304-usage-metrics-1: 숨은 통계 카드(목록 제목 길게 누르기로만
+         열림, 평소 화면 요소 0 -- hidden 기본). 기존 토스트류와 같은
+         표면(bg.elevated·border·radius.md)을 쓴다, 새 색 값 0. */
+      #usage-stats-card {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        top: 16px;
+        z-index: 1;
+        background: var(--color-bg-elevated);
+        border: 1px solid var(--color-border);
+        border-radius: 12px;
+        padding: 16px;
+        color: var(--color-text-primary);
+      }
+      .usage-stats-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+      #usage-stats-close-button {
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        font: inherit;
+        min-height: 44px;
+        min-width: 44px;
+        padding: 0;
+        cursor: pointer;
+      }
+      .usage-stats-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      .usage-stats-table th,
+      .usage-stats-table td {
+        text-align: right;
+        padding: 4px 0;
+        color: var(--color-text-muted);
+      }
+      .usage-stats-table th:first-child,
+      .usage-stats-table td:first-child {
+        text-align: left;
+        color: var(--color-text-primary);
+      }
       #list-root .memo-list-empty {
         color: var(--color-text-muted);
         padding: 32px 8px;
@@ -571,6 +618,55 @@
     <div id="list-screen" hidden>
       <div class="topbar">
         <h1>메모</h1>
+      </div>
+      <!-- HYK-304-usage-metrics-1: 위 h1 을 길게 누르면 열린다(목록 제목
+           외엔 진입 지점이 없다 -- 평소 화면 요소 추가 0, PRD "요소
+           최소" 유지). 숫자 5개 x 이번 주/지난주, 재입력은 "추정"
+           문구를 달아 둔다(5초 안 재입력 추정치일 뿐 정확한 실행취소
+           횟수가 아님). -->
+      <div id="usage-stats-card" hidden>
+        <div class="usage-stats-header">
+          <strong>사용 통계(이 기기에만)</strong>
+          <button id="usage-stats-close-button" type="button" aria-label="닫기">
+            ✕
+          </button>
+        </div>
+        <table class="usage-stats-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>이번 주</th>
+              <th>지난주</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>앱 연 횟수</td>
+              <td data-metric="opens" data-period="this">0</td>
+              <td data-metric="opens" data-period="last">0</td>
+            </tr>
+            <tr>
+              <td>새 메모</td>
+              <td data-metric="newMemos" data-period="this">0</td>
+              <td data-metric="newMemos" data-period="last">0</td>
+            </tr>
+            <tr>
+              <td>노션 복사 성공</td>
+              <td data-metric="copies" data-period="this">0</td>
+              <td data-metric="copies" data-period="last">0</td>
+            </tr>
+            <tr>
+              <td>실행취소</td>
+              <td data-metric="undos" data-period="this">0</td>
+              <td data-metric="undos" data-period="last">0</td>
+            </tr>
+            <tr>
+              <td>재입력(추정)</td>
+              <td data-metric="retypes" data-period="this">0</td>
+              <td data-metric="retypes" data-period="last">0</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
       <div id="list-root" class="list"></div>
       <div id="list-delete-toast" hidden>

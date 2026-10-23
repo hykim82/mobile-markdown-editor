@@ -10,6 +10,7 @@ import { EDITOR_THEME } from "./theme.mjs";
 import { registerCursorRaw } from "./cursor-raw.mjs";
 import { registerChecklistPromotion } from "./checklist-promote.mjs";
 import { registerCheckboxTap } from "./checkbox-tap.mjs";
+import { registerUsageInputTracking } from "./usage-metrics.mjs";
 
 export function createProductEditor(root, { namespace, onError }) {
   const editor = createEditor({
@@ -24,5 +25,9 @@ export function createProductEditor(root, { namespace, onError }) {
   registerChecklistPromotion(editor);
   registerCheckboxTap(editor);
   registerCursorRaw(editor);
+  // HYK-304-usage-metrics-1: 실행취소·재입력 추정 카운터(usage-metrics.mjs
+  // 머리 주석) -- 시험 헬퍼(test/support/make-editor.mjs)도 이 함수를
+  // 그대로 쓰므로 결선이 시험·제품에서 복제되지 않는다.
+  registerUsageInputTracking(editor);
   return editor;
 }
