@@ -4,7 +4,7 @@
 //
 // 매핑은 PRD §5.3 문면 그대로다(임의 추가 0). 굵게만 커서 위치가 정해져 있다
 // ("커서 가운데") -- caret 은 삽입된 문자열 안에서의 오프셋이다.
-import { $getSelection, $isRangeSelection } from "lexical";
+import { $getSelection, $isRangeSelection, HISTORY_MERGE_TAG } from "lexical";
 //
 // 블록 3종(제목·목록·체크박스)은 본문을 넣은 뒤 마지막 공백 한 글자를 칩이 별도
 // 입력 이벤트로 흘린다(space: true). §5.2 트리거(@lexical/markdown 의
@@ -45,9 +45,17 @@ export function insertChip(editor, chip) {
   );
   if (applied && chip.space) {
     // 마지막 공백은 별도 update 한 글자 입력으로 흘린다 -- 트리거는 그 입력에서 발화한다.
-    editor.update(() => {
-      $getSelection().insertText(" ");
-    });
+    // HISTORY_MERGE_TAG: 이 update를 바로 앞 본문 삽입 update와 같은 실행취소
+    // 단계로 강제 묶는다 -- 안 묶으면 @lexical/history의 changeType 추정이
+    // chip.text 길이에 따라 갈린다(1글자 삽입은 공백과 같은 종류라 300ms 안에서
+    // 저절로 병합되지만, 체크박스처럼 여러 글자면 종류가 달라 병합되지 않아
+    // 실행취소가 1단계 더 든다, HYK-304-editor-undo-1 검토 1R P2-1).
+    editor.update(
+      () => {
+        $getSelection().insertText(" ");
+      },
+      { tag: HISTORY_MERGE_TAG },
+    );
   }
   return applied;
 }

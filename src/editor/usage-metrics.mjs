@@ -11,6 +11,8 @@
 // 허용 목록(document/window/navigator)을 넘지 않으려고 bare localStorage
 // 대신 window.localStorage 로 접근한다(first-run-notice.mjs 머리 주석과
 // 같은 경계 근거).
+import { UNDO_COMMAND, COMMAND_PRIORITY_LOW } from "lexical";
+
 const KEY = "mobile-markdown-editor:usage-metrics";
 
 // 최근 8주(약 2개월)만 보관한다 -- 통계 카드는 "이번 주·지난주" 두
@@ -193,9 +195,17 @@ export function mountUsageStatsCard(
 
 // -- 편집 입력 리스너: 실행취소·재입력 추정 ------------------------------
 //
-// §1 ORCH 해석(coder-task.md): 이 앱에는 편집 실행취소 버튼이 없으므로
-// beforeinput 의 inputType==="historyUndo"(키보드·OS 네이티브 실행취소)
-// 를 센다. 재입력 추정 = 3글자 이상 «연속» 지우기(=연속된 delete* 타입
+// §1 ORCH 해석(coder-task.md) + HYK-304-undo-finish-1(E21 검토 1R P2-3
+// 상신 수리): 실행취소 횟수 = 편집 실행취소 "명령" 횟수(입력 경로 무관,
+// 판정 0845 §1 ⓐ 보충) -- beforeinput inputType==="historyUndo" 만 보면
+// 키보드 Ctrl/Meta+Z(lexical 코어가 keydown 에서 바로 UNDO_COMMAND 를
+// 디스패치 -- LexicalEvents.ts:1725 prevent('z', CONTROL_OR_META,
+// UNDO_COMMAND) -- beforeinput 을 아예 거치지 않는다)가 안 잡힌다. 두
+// 경로 모두 결국 UNDO_COMMAND 로 모인다(OS 네이티브 historyUndo 도
+// LexicalEvents.ts:1227 dispatchCommand(editor, UNDO_COMMAND) 를 거친다)
+// -- 그래서 beforeinput 대신 editor.registerCommand(UNDO_COMMAND, ...)
+// 하나로 두 경로를 "명령 1회 = 계수 1회"로 센다(아래 registerCommand 호출).
+// 재입력 추정 = 3글자 이상 «연속» 지우기(=연속된 delete* 타입
 // beforeinput, 근거: backspace 1회 = beforeinput 1회이므로 3회 연속
 // backspace ≈ 3자 지우기) 뒤 5초 안에 다시 입력(insert* 타입)하면 1회로
 // 센다.
@@ -236,14 +246,10 @@ export function registerUsageInputTracking(editor, options = {}) {
     const inputType = event.inputType;
     // 조합 중에는 delete 계열만 무시한다(위 §1 ORCH 해석 2R) -- insert
     // 계열(insertCompositionText 포함)·historyUndo 는 그대로 아래로
-    // 흘러 평소 판정을 탄다.
+    // 흘러 평소 판정을 탄다. historyUndo 자체의 계수는 이제 아래
+    // registerCommand(UNDO_COMMAND) 가 맡는다(이 함수는 "그 밖의 입력"
+    // 분기로 떨어져 연속 지우기 흐름만 끊는다 -- 중복 계수 0).
     if (editor.isComposing() && isDeleteInputType(inputType)) return;
-    if (inputType === "historyUndo") {
-      recordUndo();
-      deleteStreak = 0;
-      pendingRetypeSince = null;
-      return;
-    }
     if (isDeleteInputType(inputType)) {
       deleteStreak += 1;
       if (deleteStreak >= RETYPE_THRESHOLD) pendingRetypeSince = now();
@@ -275,9 +281,30 @@ export function registerUsageInputTracking(editor, options = {}) {
     };
   });
 
+  // UNDO_COMMAND: 키보드(keydown -> 바로 이 커맨드)·OS 네이티브(beforeinput
+  // historyUndo -> 이 커맨드로 위임, 위 머리 주석) 두 경로가 여기로 모인다.
+  // COMMAND_PRIORITY_LOW(=1)는 registerHistory 의 실제 undo 리스너(등록
+  // 우선순위 COMMAND_PRIORITY_EDITOR=0)보다 높아 먼저 불리지만, false 를
+  // 돌려줘 전파를 막지 않는다 -- 그래서 같은 커맨드 디스패치 안에서 계수와
+  // 실제 실행취소가 둘 다 일어나고(순서 무관, 서로 다른 일), 디스패치 1회
+  // = 계수 1회로 고정된다(키보드·OS 두 경로 각각 이 디스패치를 1번씩만
+  // 만든다 -- 중복 계수 0).
+  const handleUndoCommand = () => {
+    recordUndo();
+    deleteStreak = 0;
+    pendingRetypeSince = null;
+    return false;
+  };
+  const unregisterUndoCommand = editor.registerCommand(
+    UNDO_COMMAND,
+    handleUndoCommand,
+    COMMAND_PRIORITY_LOW,
+  );
+
   return () => {
     if (detachGuard) detachGuard();
     detachGuard = null;
     unregisterRootListener();
+    unregisterUndoCommand();
   };
 }

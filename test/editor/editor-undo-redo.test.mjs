@@ -53,12 +53,54 @@ import assert from "node:assert/strict";
 
 // CAN_USE_BEFORE_INPUT 고정 전에 shim 적용(위 "실측 전제 2") -- 아래
 // 동적 import 들이 이 뒤에서 lexical 을 처음 평가한다.
+//
+// 시험 격리 1칸(E21 검토 1R P2-4 상신 수리 -- 아래 "실측" 문단에 원래
+// 시도와 다른 점을 적는다): globalThis.window 는 jsdom-env.mjs 모듈
+// "자체"가 쥐고 있고, --test-isolation=none 으로 여러 시험 파일을 한
+// 프로세스에 모으면 ESM 모듈 캐시가 공유돼 그 window 인스턴스도 파일들
+// 사이에서 공유된다 -- 이 파일만의 shim(바로 아래)을 계속 걸어 두면
+// 다음 시험 파일로 그대로 샌다. lexical의 CAN_USE_BEFORE_INPUT(환경
+// 모듈이 "처음 평가되는 순간" 1회만 확인하는 상수, 위 실측 전제 2)은 바로
+// 아래 `await import("lexical")` 한 줄에서 "그 순간"이 지나가므로, shim은
+// 그 직후 즉시 원래 값(undefined -- jsdom의 InputEvent 에는 기본적으로
+// 없다)으로 되돌린다 -- 모듈 평가가 끝나야 복원하는 게 아니라 "그 평가가
+// 이미 끝난" 바로 다음 줄에서 복원한다.
+//
+// ⚠️실측(계획과 다름): 처음엔 node:test 의 `after()`로 "파일이 끝나면"
+// 복원하려 했으나, --test-isolation=none 에서는 `after()`가 파일 경계가
+// 아니라 "전체 실행이 끝난 뒤"에만 불린다(직접 재현: 파일 a가 after()로
+// 전역을 복원해도, 같은 프로세스의 파일 b가 그 복원 "전에" 이미 실행돼
+// 오래된 값을 본다 -- scratch 쌍 파일로 확인). 그래서 after() 대신 "쓸모가
+// 끝나는 그 지점"(바로 다음 줄)에서 즉시 되돌린다 -- 이러면 파일 순서에
+// 기대지 않는다.
+//
+// ⚠️남는 몫: installBeforeInputShims(bundle-typing.mjs, 공유 파일)는 각
+// 시험이 makeFakeDom() 을 부를 때마다 "똑같은" shim을 다시 건다(이 파일의
+// product_scope 밖, 다른 시험 파일들도 똑같이 쓰는 기존 관례) -- 그래서 이
+// 파일의 "마지막" 시험이 makeFakeDom()을 불렀다면 그 뒤에도 같은 shim이
+// 남는다. 이건 이 파일이 "새로 추가한" shim이 아니라 공유 헬퍼의 기존
+// 동작이라 이 조각 범위 밖이다. E21 검토가 지목한 usage-metrics-wiring.
+// test.mjs:55 거짓 빨강(--test-isolation=none 결과, 아래 §3-4 에도 적음)을
+// 다시 재보면, 이 shim 복원과 무관하게 "그대로" 재현된다(직접 확인) --
+// 진짜 원인은 CAN_USE_BEFORE_INPUT 자체이고, 그건 위에서부터 이 조각의
+// 범위 밖이다(지시서 §2-4 "현재 npm test 결과 무변" -- 파일별 프로세스인
+// 지금의 npm test 는 이 leak 들 중 무엇의 영향도 받지 않는다).
+const ORIGINAL_GET_TARGET_RANGES =
+  globalThis.window.InputEvent.prototype.getTargetRanges;
 globalThis.window.InputEvent.prototype.getTargetRanges =
   function getTargetRanges() {
     return [];
   };
 
 const lexical = await import("lexical");
+
+if (ORIGINAL_GET_TARGET_RANGES === undefined) {
+  delete globalThis.window.InputEvent.prototype.getTargetRanges;
+} else {
+  globalThis.window.InputEvent.prototype.getTargetRanges =
+    ORIGINAL_GET_TARGET_RANGES;
+}
+
 const { makeProductEditor } = await import("../support/make-editor.mjs");
 const { installBeforeInputShims, typeBeforeInput } =
   await import("../support/bundle-typing.mjs");
@@ -94,6 +136,25 @@ function seedText(editor, text) {
       paragraph.append(textNode);
       root.append(paragraph);
       textNode.select(text.length, text.length);
+    },
+    { discrete: true },
+  );
+}
+
+// "줄 머리"(Enter 뒤) 칸을 재려고 두 번째(빈) 문단 머리에 커서를 둔다 --
+// 실제 Enter keydown 대신 구조를 직접 만든다(markdown 블록 트랜스포머는
+// "parentNode.getFirstChild() === anchorNode && 부모가 root"만 보므로,
+// Enter 로 만든 빈 문단과 node-구조가 같다).
+function seedTwoParagraphs(editor, firstText) {
+  editor.update(
+    () => {
+      const root = lexical.$getRoot();
+      root.clear();
+      const first = lexical.$createParagraphNode();
+      first.append(lexical.$createTextNode(firstText));
+      const second = lexical.$createParagraphNode();
+      root.append(first, second);
+      second.selectStart();
     },
     { discrete: true },
   );
@@ -270,13 +331,47 @@ test("단축키바 칩('목록') 삽입 1회 → Ctrl+Z 한 번 = 그 삽입만 
   );
 });
 
-// 〔직접〕실측 예외(결과 파일에도 적는다): 체크박스 칩만 "본문 삽입"과
-// "공백 삽입"이 서로 다른 undo 단계로 쌓인다(굵게·목록과 다름) -- 1회째는
-// 공백만 지운다. product_scope 가 이 라운드에서 shortcut-bar.mjs 변경을
-// 허용하지 않아 고치지 않고 있는 그대로 등재한다(지시서 §2-4 와 달리 실제
-// 데이터 손실은 두 undo 어느 단계에서도 없다 -- 그 앞 "앞문장 "은 항상
-// 그대로다).
-test("〔직접〕예외: '체크박스' 칩은 Ctrl+Z 한 번으로는 흘린 공백만 지워진다(2회째에 칩 본문까지 복원, 원문 손실은 0)", async () => {
+test("단축키바 칩('제목') 삽입 1회 → Ctrl+Z 한 번 = 그 삽입만 되돌린다(회귀 칸, 공백 흘림 포함)", async () => {
+  const { editor, root } = makeProductEditor();
+  seedText(editor, "앞문장 ");
+  await settle();
+
+  insertChip(editor, { label: "제목", text: "#", space: true });
+  await settle();
+  assert.equal(markdownOf(editor), "앞문장 # ");
+
+  pressUndo(root);
+  await settle();
+  assert.equal(
+    markdownOf(editor),
+    "앞문장 ",
+    "칩 본문과 칩이 흘린 공백이 한 undo 단위로 같이 되돌려져야 한다(회귀 무변)",
+  );
+});
+
+test("단축키바 칩('취소선') 삽입 1회 → Ctrl+Z 한 번 = 그 삽입만 되돌린다(회귀 칸, 공백 없음)", async () => {
+  const { editor, root } = makeProductEditor();
+  seedText(editor, "앞문장 ");
+  await settle();
+
+  insertChip(editor, { label: "취소선", text: "~~ ~~" });
+  await settle();
+  assert.equal(markdownOf(editor), "앞문장 ~~ ~~");
+
+  pressUndo(root);
+  await settle();
+  assert.equal(
+    markdownOf(editor),
+    "앞문장 ",
+    "space 가 없는 칩은 원래부터 update 1번뿐이라 이번 수리의 영향을 안 받아야 한다(회귀 무변)",
+  );
+});
+
+// HYK-304-undo-finish-1(§2-1 수리, E21 검토 1R P2-1 상신 수리): 체크박스
+// 칩의 "본문 삽입"과 "공백 삽입"을 이제 HISTORY_MERGE_TAG 로 강제로 같은
+// undo 단계에 묶는다(shortcut-bar.mjs) -- 그래서 줄 중간에서는 굵게·목록·
+// 제목·취소선과 "같은 모양"으로 Ctrl+Z 한 번에 삽입 전체가 되돌아간다.
+test("체크박스 칩 삽입(줄 중간) 1회 → Ctrl+Z 한 번 = 그 삽입 전체(본문+공백)를 되돌린다(HYK-304-undo-finish-1 수리, 원문 손실 0)", async () => {
   const { editor, root } = makeProductEditor();
   seedText(editor, "앞문장 ");
   await settle();
@@ -289,16 +384,64 @@ test("〔직접〕예외: '체크박스' 칩은 Ctrl+Z 한 번으로는 흘린 �
   await settle();
   assert.equal(
     markdownOf(editor),
-    "앞문장 - [ ]",
-    "실측: 1회째는 칩이 흘린 공백만 지운다(목록/제목 칩과 다른 모양)",
+    "앞문장 ",
+    "수리 뒤: 1회째로 칩 본문(5글자)과 흘린 공백이 함께 되돌아가야 한다(목록/제목 칩과 같은 모양)",
+  );
+
+  pressRedoShiftZ(root);
+  await settle();
+  assert.equal(
+    markdownOf(editor),
+    "앞문장 - [ ] ",
+    "다시 실행 1회 = 삽입 뒤 본문으로 복원돼야 한다",
+  );
+});
+
+// 줄 머리(Enter 뒤)에서는 "- [ ] " 가 markdown 블록 트랜스포머에 걸려
+// 체크리스트로 자동 서식된다 -- 그 서식 전환은 shortcut-bar.mjs 가 아니라
+// @lexical/markdown 자신의 update가 만들고, 그 update는 그 모듈이 직접
+// $addUpdateTag(HISTORY_PUSH_TAG) 를 찍어 항상 별도 push 다(제목·목록
+// 칩도 마찬가지, node_modules/@lexical/markdown/src/MarkdownShortcuts.ts:657
+// -- 이 라운드의 product_scope 밖). 그래서 줄 머리에서는 "삽입 자체"(이제
+// 1 push로 병합됨)와 "자동 서식"(별도 push) 두 단계가 남는다 -- 이것이
+// 바로 "다른 칩과 같은 모양"이다(제목 칩도 헤딩 서식 때문에 똑같이 2단계).
+test("체크박스 칩 삽입(줄 머리, Enter 뒤) → 1회째는 체크리스트 서식만 되돌리고 원문('- [ ] ')은 손실 0, 2회째로 삽입 자체가 되돌아간다(다른 블록 칩과 같은 모양)", async () => {
+  const { editor, root } = makeProductEditor();
+  seedTwoParagraphs(editor, "앞문장");
+  await settle();
+
+  insertChip(editor, { label: "체크박스", text: "- [ ]", space: true });
+  await settle();
+  assert.equal(markdownOf(editor), "앞문장\n\n- [ ] ");
+  assert.equal(
+    editor
+      .getEditorState()
+      .read(() => lexical.$getRoot().getChildAtIndex(1).getType()),
+    "list",
+    "사전 조건: '- [ ] ' 가 체크리스트(list > listitem)로 서식됐어야 한다",
   );
 
   pressUndo(root);
   await settle();
   assert.equal(
     markdownOf(editor),
-    "앞문장 ",
-    "2회째로 칩 본문까지 전부 되돌아간다 -- 두 undo 모두에서 그 앞 본문은 손실되지 않는다",
+    "앞문장\n\n- [ ] ",
+    "1회째는 체크리스트 서식만 되돌려야 한다 -- 원문 '- [ ] ' 글자는 그대로 남아야 한다(원문 손실 0)",
+  );
+  assert.equal(
+    editor
+      .getEditorState()
+      .read(() => lexical.$getRoot().getChildAtIndex(1).getType()),
+    "paragraph",
+    "되돌린 뒤에는 평범한 문단이어야 한다(체크리스트 서식이 풀림)",
+  );
+
+  pressUndo(root);
+  await settle();
+  assert.equal(
+    markdownOf(editor),
+    "앞문장\n\n",
+    "2회째로 칩이 넣은 본문+공백 삽입 자체가(한 undo 단위로) 되돌아가야 한다",
   );
 });
 
@@ -360,7 +503,12 @@ test("실행취소 뒤에도 자동저장 결선이 끊기지 않는다(되돌�
   );
 });
 
-test("E20 카운터: beforeinput historyUndo(OS 네이티브)는 세고, Ctrl+Z(키보드)는 안 센다(§1 ORCH 관찰 실측 확인)", async () => {
+// HYK-304-undo-finish-1(§2-2 수리, E21 검토 1R P2-3 상신 수리 · 판정
+// 0845 §1 ⓐ 보충 "입력 경로 무관"): 카운터를 UNDO_COMMAND 리스너로
+// 옮겨 키보드·OS 네이티브 두 경로가 이제 "둘 다" 1씩 센다(옛 E20 비대칭
+// 깨짐 -- 아래 두 번째 test가 "수리 전엔 Ctrl+Z 가 0 이었다"를 그대로
+// 등재한다).
+test("실행취소 카운터: Ctrl+Z(키보드)와 beforeinput historyUndo(OS 네이티브) 둘 다 1씩 센다(중복 0, HYK-304-undo-finish-1 수리)", async () => {
   window.localStorage.clear();
   const { editor, root } = makeProductEditor();
   const fakeDom = makeFakeDom();
@@ -378,8 +526,8 @@ test("E20 카운터: beforeinput historyUndo(OS 네이티브)는 세고, Ctrl+Z(
   );
   assert.equal(
     readRecentWeeks().thisWeek.undos,
-    0,
-    "실측: Ctrl+Z 는 keydown 에서 바로 UNDO_COMMAND 로 가므로 beforeinput 을 거치지 않는다 -- E20 실행취소 카운터는 0이어야 한다",
+    1,
+    "수리 뒤: 키보드 Ctrl+Z 도 UNDO_COMMAND 디스패치 1회로 카운터가 1 올라야 한다(옛 E20 은 0 이었다 -- beforeinput 만 봐서)",
   );
 
   typeBeforeInput(fakeDom, root, "insertText", "!");
@@ -393,8 +541,63 @@ test("E20 카운터: beforeinput historyUndo(OS 네이티브)는 세고, Ctrl+Z(
   );
   assert.equal(
     readRecentWeeks().thisWeek.undos,
+    2,
+    "OS 네이티브 historyUndo 도 같은 UNDO_COMMAND 경로를 거쳐 1만 더 올라야 한다(1+1=2, 중복 계수 0)",
+  );
+});
+
+test("실행취소 카운터: 다시 실행(Ctrl+Shift+Z)은 '실행취소'로 안 센다", async () => {
+  window.localStorage.clear();
+  const { editor, root } = makeProductEditor();
+  const fakeDom = makeFakeDom();
+  seedText(editor, "hello");
+  await settle();
+
+  typeBeforeInput(fakeDom, root, "insertText", "!");
+  await settle();
+  pressUndo(root);
+  await settle();
+  assert.equal(readRecentWeeks().thisWeek.undos, 1, "사전 조건: 실행취소 1회");
+
+  pressRedoShiftZ(root);
+  await settle();
+  assert.equal(
+    markdownOf(editor),
+    "hello!",
+    "사전 조건: 다시 실행이 실제로 적용됐어야 한다",
+  );
+  assert.equal(
+    readRecentWeeks().thisWeek.undos,
     1,
-    "실측: beforeinput historyUndo(OS 네이티브 실행취소)는 그대로 카운터에 잡혀야 한다",
+    "다시 실행(REDO_COMMAND)은 UNDO_COMMAND 가 아니므로 카운터가 그대로 1 이어야 한다",
+  );
+});
+
+// §1 ORCH 관찰 3질문 중 "되돌릴 것이 없는 실행취소의 계수 값" -- 고르지
+// 않고 값과 근거를 그대로 적는다(coder-task.md §1). UNDO_COMMAND 는
+// undo 스택이 비어 있어도 keydown/beforeinput 에서 "항상" 디스패치되고
+// (node_modules/lexical/src/LexicalEvents.ts:1725 prevent() 는 스택
+// 상태를 안 본다 -- registerHistory 의 undo() 쪽에서만 undoStack.length
+// 를 본다, @lexical/history/src/index.ts:480), 이 카운터 리스너도 스택
+// 상태를 안 보는 "관찰자"(옛 beforeinput 기반 계수도 마찬가지였다 --
+// 수리 전/후로 이 값은 바뀌지 않는다, 정의 무변).
+test("실행취소 카운터: 되돌릴 것이 없을 때도 Ctrl+Z 디스패치 자체는 카운터를 1 올린다(값 실측, 정의 무변)", async () => {
+  window.localStorage.clear();
+  const { editor, root } = makeProductEditor();
+  seedText(editor, "변하지 않아야 하는 본문");
+  await settle();
+
+  assert.doesNotThrow(() => pressUndo(root));
+  await settle();
+  assert.equal(
+    markdownOf(editor),
+    "변하지 않아야 하는 본문",
+    "사전 조건: 되돌릴 것이 없어 본문은 안 바뀌어야 한다",
+  );
+  assert.equal(
+    readRecentWeeks().thisWeek.undos,
+    1,
+    "실측: UNDO_COMMAND 디스패치는 undo 스택이 비어도 일어나고, 카운터는 '명령 디스패치' 를 세므로(옛 beforeinput 계수도 같았다) 1 이다",
   );
 });
 
